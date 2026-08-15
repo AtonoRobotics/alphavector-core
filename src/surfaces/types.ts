@@ -27,7 +27,10 @@ export interface FieldStartInput {
   pack: LoadedPack;
   journeyKind: string;
   objective: string;
-  /** Pack-local condition ids present for declared predicates. */
+  /**
+   * Request claims only. Allow/deny uses persisted tenant facts on disk.
+   * Passing a condition here does not write the fact store.
+   */
   conditions?: readonly string[];
 }
 
@@ -44,7 +47,10 @@ export interface FieldProgressInput {
   approvedCardId?: string;
   ask?: AskRequest;
   note?: string;
-  /** Pack-local condition ids present for declared predicates. */
+  /**
+   * Request claims only. Allow/deny uses persisted tenant facts on disk.
+   * Passing a condition here does not write the fact store.
+   */
   conditions?: readonly string[];
 }
 

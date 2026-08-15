@@ -4,6 +4,7 @@ import type { AuthorizationCard, FieldCardView } from "../auth/types.js";
 import type { DurableStore } from "../data/store.js";
 import type { Journey } from "../data/types.js";
 import type { EffectExecutor } from "../effects/executor.js";
+import { FactBook } from "../facts/book.js";
 import type { GrantBook } from "../grants/store.js";
 import { JourneyRuntime } from "../journeys/runtime.js";
 import { evaluateDeclaredPredicates } from "../packs/predicates.js";
@@ -35,6 +36,7 @@ export class FieldSurface {
     private readonly journeys: JourneyRuntime = new JourneyRuntime(store),
     private readonly effects?: EffectExecutor,
     private readonly askSurface: AskSurface = new AskSurface(store),
+    private readonly facts: FactBook = new FactBook(),
   ) {}
 
   home(tenantId: string, pack?: LoadedPack): FieldHome {
@@ -90,6 +92,7 @@ export class FieldSurface {
     this.assertFieldSafe(input.objective);
     this.assertPackJourneyKind(input.pack, input.journeyKind);
     this.assertDeclaredPredicates(
+      input.pack.tenantId,
       [this.journeyBinding(input.pack, input.journeyKind)],
       input.conditions,
     );
@@ -110,6 +113,7 @@ export class FieldSurface {
     }
     this.assertPackJourneyKind(input.pack, journey.journeyKind);
     const recordedPrefers = this.assertDeclaredPredicates(
+      input.pack.tenantId,
       [
         this.journeyBinding(input.pack, journey.journeyKind),
         ...(input.actionClass ? [this.actionBinding(input.pack, input.actionClass)] : []),
@@ -210,14 +214,19 @@ export class FieldSurface {
     return pack.binding.actionClassVerbs.find((v) => v.id === actionClass) ?? {};
   }
 
+  /**
+   * Present-set is on-disk tenant facts. Request conditions are claims only:
+   * they do not write the store and they do not satisfy REQUIRES or AVOIDS.
+   */
   private assertDeclaredPredicates(
+    tenantId: string,
     bindings: PredicateDeclaration[],
-    conditions: readonly string[] | undefined,
+    claimed: readonly string[] | undefined,
   ): string[] {
-    const present = conditions ?? [];
-    for (const condition of present) {
+    for (const condition of claimed ?? []) {
       this.assertFieldSafe(condition);
     }
+    const present = this.facts.presentIds(tenantId);
     const recordedPrefers: string[] = [];
     for (const binding of bindings) {
       const decision = evaluateDeclaredPredicates(binding, present);
