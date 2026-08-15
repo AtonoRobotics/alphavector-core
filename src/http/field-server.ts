@@ -24,8 +24,6 @@ export interface FieldHttpServerOptions {
   core: AlphaVectorCore;
   pack: LoadedPack;
   tenantId: string;
-  /** Issued field secret for the Linux page. Must already be stored on the token book. */
-  pageToken?: string;
   pagePath?: string;
 }
 
@@ -308,19 +306,7 @@ export class FieldHttpServer {
   private async servePage(res: ServerResponse): Promise<void> {
     const pagePath = this.opts.pagePath ?? fieldLinuxPagePath();
     const raw = await readFile(pagePath, "utf8");
-    const pageToken = this.opts.pageToken;
-    const issued =
-      pageToken && this.opts.core.fieldTokens.lookup(pageToken, this.opts.tenantId) === "field"
-        ? pageToken
-        : "";
-    const injected = raw.replace(
-      "<!-- FIELD_DEFAULTS -->",
-      `<script>window.FIELD_DEFAULTS=${JSON.stringify({
-        token: issued,
-        surface: "field",
-      })}</script>`,
-    );
-    this.write(res, 200, injected, { "content-type": "text/html; charset=utf-8", ...CORS });
+    this.write(res, 200, raw, { "content-type": "text/html; charset=utf-8", ...CORS });
   }
 
   private writeError(res: ServerResponse, err: unknown): void {

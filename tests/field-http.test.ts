@@ -25,7 +25,7 @@ async function liveField(tenantId = "t1") {
     actor: "bootstrap",
   });
   const tokens = { field: fieldIssued.token, architect: architectIssued.token };
-  const server = new FieldHttpServer({ core, pack, tenantId, pageToken: tokens.field });
+  const server = new FieldHttpServer({ core, pack, tenantId });
   servers.push(server);
   const { url } = await server.listen(0, "127.0.0.1");
   return {
@@ -167,7 +167,10 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/data-approve/);
     expect(html).toMatch(/\/field\/journeys/);
     expect(html).toMatch(/\/field\/cards/);
-    expect(html).toContain(tokens.field);
+    expect(html).not.toContain(tokens.field);
+    expect(html).not.toMatch(/window\.FIELD_DEFAULTS/);
+    expect(html).toMatch(/Issued field token/);
+    expect(html).toMatch(/Paste a token Architect issued/);
     expect(html).not.toContain("field-dev-token");
     expect(html).not.toContain(`field-${tenantId}`);
     expect(html).not.toMatch(/architectControls|pick a model|edit prompt|inspect temporal|configure tool/i);
@@ -197,10 +200,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(api).toMatch(/\/field\/cards/);
     expect(api).toMatch(/\/field\/ask/);
     expect(api).not.toMatch(/Desk|Shape|Director|Play|Plant|HIL|Thor|Mission Control|T0|T1|T2|T3/);
+    expect(api).not.toMatch(/OAuth|SSO|MLS/);
 
     const home = await readFile(path.join(root, "Field/HomeView.swift"), "utf8");
     expect(home).toMatch(/Start journey/);
     expect(home).toMatch(/approve/);
+    expect(home).toMatch(/Issued field token/);
   });
 
   it("keeps RE types out of core schema and migrations", async () => {

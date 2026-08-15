@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AV Dev Field</title>
-  <!-- FIELD_DEFAULTS -->
   <style>
     :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
     body { margin: 0; background: #f4f1ea; color: #1c1916; }
@@ -31,6 +30,13 @@
     <h1>AV Dev Field</h1>
     <p class="lead">Required field path. Start a pack journey, then approve or deny a card. Architect is not on this surface.</p>
     <div id="status"></div>
+
+    <section>
+      <h2>Session</h2>
+      <label for="token">Issued field token</label>
+      <input id="token" autocomplete="off" spellcheck="false" placeholder="Paste a token Architect issued" />
+      <button id="load" type="button" class="secondary">Load home</button>
+    </section>
 
     <section>
       <h2>Start a journey</h2>
@@ -66,15 +72,17 @@
     </section>
   </main>
   <script>
-    const defaults = window.FIELD_DEFAULTS || {};
-    const token = defaults.token || "";
     const statusEl = document.getElementById("status");
+
+    function token() {
+      return document.getElementById("token").value.trim();
+    }
 
     async function api(method, path, body) {
       const res = await fetch(path, {
         method,
         headers: {
-          authorization: "Bearer " + token,
+          authorization: "Bearer " + token(),
           ...(body ? { "content-type": "application/json" } : {}),
         },
         body: body ? JSON.stringify(body) : undefined,
@@ -185,7 +193,16 @@
       }
     });
 
-    refresh().catch((err) => setStatus(err.message, true));
+    document.getElementById("load").onclick = async () => {
+      try {
+        await refresh();
+        setStatus("Field home loaded.");
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    };
+
+    setStatus("Paste a field token Architect issued.");
   </script>
 </body>
 </html>
