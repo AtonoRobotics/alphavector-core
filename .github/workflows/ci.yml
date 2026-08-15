@@ -1,0 +1,22 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/cache@v4
+        with:
+          path: images
+          key: alpine-minirootfs-3.20.3
+      - run: npm install
+      - run: npm run prepare:image
+      - run: npm test
+      - run: npm run build

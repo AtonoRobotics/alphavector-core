@@ -1,0 +1,314 @@
+{
+  "identity": {
+    "packId": "av-fixture-generic",
+    "version": "0.1.0",
+    "displayName": "AV Dev generic fixture"
+  },
+  "roles": [
+    {
+      "name": "Orchestrator",
+      "persona": "Coordinates one goal at a time and dispatches packets.",
+      "skills": [
+        "dispatch",
+        "freeze"
+      ],
+      "specialties": [
+        "coordination"
+      ],
+      "isOrchestrator": true
+    },
+    {
+      "name": "Researcher",
+      "persona": "Gathers observations and proposes assertions.",
+      "skills": [
+        "retrieve",
+        "read"
+      ],
+      "specialties": [
+        "research"
+      ]
+    },
+    {
+      "name": "Writer",
+      "persona": "Drafts outbound communications for authorization.",
+      "skills": [
+        "draft"
+      ],
+      "specialties": [
+        "communications"
+      ]
+    },
+    {
+      "name": "Reviewer",
+      "persona": "Challenges unsupported claims. Does not execute external actions.",
+      "skills": [
+        "review"
+      ],
+      "specialties": [
+        "challenge"
+      ]
+    }
+  ],
+  "journeyKinds": [
+    {
+      "id": "inquiry",
+      "label": "Inquiry"
+    },
+    {
+      "id": "fulfillment",
+      "label": "Fulfillment"
+    }
+  ],
+  "actionClassVerbs": [
+    {
+      "id": "read",
+      "label": "Read",
+      "externalEffect": false,
+      "startRequiresAuthorization": false,
+      "mayGraduate": true,
+      "ceiling": "bounded_autonomy"
+    },
+    {
+      "id": "internal_write",
+      "label": "Internal write",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": true,
+      "ceiling": "bounded_autonomy"
+    },
+    {
+      "id": "communicate",
+      "label": "Communicate",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": true,
+      "ceiling": "bounded_autonomy"
+    },
+    {
+      "id": "material_state",
+      "label": "Material state",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": false,
+      "ceiling": "authorization_required"
+    },
+    {
+      "id": "licensed_judgment",
+      "label": "Licensed judgment",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": false,
+      "ceiling": "human_decision"
+    },
+    {
+      "id": "prohibited",
+      "label": "Prohibited",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": false,
+      "ceiling": "prohibited"
+    },
+    {
+      "id": "governance",
+      "label": "Governance",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": false,
+      "ceiling": "governance"
+    }
+  ],
+  "policy": {
+    "jurisdiction": [
+      {
+        "id": "j-allow-read",
+        "when": {
+          "actionClass": "read"
+        },
+        "decision": "allow",
+        "reason": "Reads are permitted"
+      },
+      {
+        "id": "j-allow-write",
+        "when": {
+          "actionClass": "internal_write"
+        },
+        "decision": "allow",
+        "reason": "Internal writes permitted when authorized"
+      },
+      {
+        "id": "j-allow-comm",
+        "when": {
+          "actionClass": "communicate",
+          "channel": "email"
+        },
+        "decision": "allow",
+        "reason": "Email permitted with consent"
+      },
+      {
+        "id": "j-deny-blocked",
+        "when": {
+          "jurisdiction": "blocked-region"
+        },
+        "decision": "deny",
+        "reason": "Jurisdiction blocked"
+      }
+    ],
+    "licensedAction": [
+      {
+        "id": "la-deny-prohibited",
+        "when": {
+          "actionClass": "prohibited"
+        },
+        "decision": "deny",
+        "reason": "Prohibited class"
+      },
+      {
+        "id": "la-deny-judgment",
+        "when": {
+          "actionClass": "licensed_judgment"
+        },
+        "decision": "deny",
+        "reason": "Licensed judgment remains human"
+      },
+      {
+        "id": "la-allow-gov-architect",
+        "when": {
+          "actionClass": "governance"
+        },
+        "decision": "deny",
+        "reason": "Governance is Architect control plane, not an agent effect"
+      }
+    ],
+    "consent": [
+      {
+        "id": "c-deny-dnc",
+        "when": {
+          "purpose": "dnc"
+        },
+        "decision": "deny",
+        "reason": "Do-not-contact"
+      },
+      {
+        "id": "c-allow-followup",
+        "when": {
+          "purpose": "follow-up",
+          "actionClass": "communicate"
+        },
+        "decision": "allow",
+        "reason": "Consented follow-up"
+      },
+      {
+        "id": "c-allow-write",
+        "when": {
+          "actionClass": "internal_write"
+        },
+        "decision": "allow",
+        "reason": "Internal write has no contact consent requirement"
+      }
+    ],
+    "adversarialFixtures": [
+      {
+        "id": "fx-dnc",
+        "description": "DNC must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "dnc",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-blocked",
+        "description": "Blocked jurisdiction must deny",
+        "input": {
+          "actionClass": "communicate",
+          "jurisdiction": "blocked-region",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-email-ok",
+        "description": "Consented email allow",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "follow-up",
+          "channel": "email"
+        },
+        "expect": "allow"
+      },
+      {
+        "id": "fx-prohibited",
+        "description": "Prohibited class deny",
+        "input": {
+          "actionClass": "prohibited"
+        },
+        "expect": "deny"
+      }
+    ]
+  },
+  "connectors": [
+    {
+      "id": "webhook",
+      "system": "outbound-webhook",
+      "tools": [
+        "post"
+      ]
+    }
+  ],
+  "recordPartyKnowledge": {
+    "partyKinds": [
+      "contact",
+      "organization"
+    ],
+    "recordKinds": [
+      "artifact",
+      "case"
+    ],
+    "predicates": [
+      "mentions",
+      "owns",
+      "relates_to"
+    ],
+    "corpora": [
+      "notes"
+    ],
+    "graphNodeKinds": [
+      "contact",
+      "artifact",
+      "case"
+    ],
+    "graphEdgeKinds": [
+      "RELATES_TO",
+      "SOURCED_FROM",
+      "RESULTED_IN"
+    ]
+  },
+  "evidenceEvalFixtures": [
+    {
+      "id": "ev-independent",
+      "description": "Counterpart confirmation",
+      "countsAsIndependentOutcome": true,
+      "kind": "counterpart_confirmation"
+    },
+    {
+      "id": "ev-self",
+      "description": "Self-declared success is not enough",
+      "countsAsIndependentOutcome": false,
+      "kind": "self_declared"
+    }
+  ],
+  "askCeilings": [
+    "licensed_judgment",
+    "prohibited",
+    "governance",
+    "material_state"
+  ],
+  "fieldLanguageMap": {
+    "purpose.follow-up": "Send this follow-up",
+    "subject.case": "This case",
+    "channel.email": "Email",
+    "approve": "Approve",
+    "deny": "Deny"
+  }
+}

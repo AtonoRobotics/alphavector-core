@@ -1,0 +1,96 @@
+import { describe, expect, it } from "vitest";
+import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
+import { signPack } from "../src/packs/signing.js";
+import { loadGenericUnsigned, makeAnchors, signedGenericPack } from "./helpers.js";
+
+describe("pack load DEC-019", () => {
+  it("refuses an unsigned pack", async () => {
+    const { anchors } = await signedGenericPack();
+    const loader = new PackLoader(new MemoryPackRegistry(), anchors);
+    const unsigned = await loadGenericUnsigned();
+    const result = loader.load({ tenantId: "t1", binding: unsigned, actor: "architect" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("PACK_UNSIGNED");
+  });
+
+  it("refuses a pack signed only by architect", async () => {
+    const keys = makeAnchors();
+    const unsigned = await loadGenericUnsigned();
+    const half = signPack(unsigned, keys.architectPrivate, keys.counselPrivate);
+    half.signatures = { architect: half.signatures!.architect, counselEval: "" };
+    const loader = new PackLoader(new MemoryPackRegistry(), keys.anchors);
+    const result = loader.load({ tenantId: "t1", binding: half, actor: "architect" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("PACK_UNSIGNED_OWNER");
+  });
+
+  it("refuses an incomplete pack", async () => {
+    const { anchors, binding } = await signedGenericPack();
+    const loader = new PackLoader(new MemoryPackRegistry(), anchors);
+    const { roles: _r, ...incomplete } = binding;
+    const result = loader.load({ tenantId: "t1", binding: incomplete, actor: "architect" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("PACK_INCOMPLETE");
+  });
+
+  it("refuses field-user load", async () => {
+    const { anchors, binding } = await signedGenericPack();
+    const loader = new PackLoader(new MemoryPackRegistry(), anchors);
+    const result = loader.load({ tenantId: "t1", binding, actor: "field" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("FIELD_CANNOT_LOAD_PACK");
+  });
+
+  it("loads a signed generic fixture pack", async () => {
+    const { anchors, binding } = await signedGenericPack();
+    const loader = new PackLoader(new MemoryPackRegistry(), anchors);
+    const result = loader.load({ tenantId: "t1", binding, actor: "architect" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.loaded.binding.identity.packId).toBe("av-fixture-generic");
+      expect(result.loaded.binding.roles).toHaveLength(4);
+    }
+  });
+
+  it("generic fixture has no Real Estate or Mission Control types", async () => {
+    const unsigned = await loadGenericUnsigned();
+    const kinds = [
+      ...unsigned.recordPartyKnowledge.partyKinds,
+      ...unsigned.recordPartyKnowledge.recordKinds,
+      ...unsigned.recordPartyKnowledge.graphNodeKinds,
+      ...unsigned.journeyKinds.map((j) => j.id),
+      ...unsigned.roles.map((r) => r.name),
+    ].map((s) => s.toLowerCase());
+    for (const word of [
+      "listing",
+      "household",
+      "person",
+      "buyer",
+      "seller",
+      "showing",
+      "mls",
+      "desk",
+      "shape",
+      "director",
+      "play",
+      "plant",
+      "hil",
+      "thor",
+    ]) {
+      expect(kinds).not.toContain(word);
+    }
+  });
+
+  it("rejects invented T0-T3 numbers on action-class verbs", async () => {
+    const { anchors } = makeAnchors();
+    const unsigned = await loadGenericUnsigned();
+    const poisoned = {
+      ...unsigned,
+      actionClassVerbs: unsigned.actionClassVerbs.map((v) => ({ ...v, tier: "T0" })),
+    };
+    const loader = new PackLoader(new MemoryPackRegistry(), anchors);
+    const result = loader.load({ tenantId: "t1", binding: poisoned, actor: "architect" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("PACK_INVALID");
+  });
+});

@@ -1,0 +1,28 @@
+{
+  "name": "alphavector-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AV Dev \u2014 domain-agnostic autonomous agent operating system. Package alphavector-core. Bundle llc.alphavector.dev. Not a consumer brand. Not the Real Estate pack (alphavector-re).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "av-core": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepare:image": "node scripts/prepare-image.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8",
+    "@types/node": "^20.17.10"
+  }
+}

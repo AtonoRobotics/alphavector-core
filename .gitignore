@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.av-data/
+.av-computers/
+images/*.tar.gz
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+bun.lock
+bun.lockb
