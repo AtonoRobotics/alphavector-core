@@ -1,5 +1,18 @@
+import type { Journey } from "../data/types.js";
+
 export type CardKind = "owner_instance" | "architect_admin";
 export type CardStatus = "pending" | "approved" | "denied";
+
+/** Approve-then-execute compose. Persisted with the card so restart can finish. */
+export interface PendingProgressRecord {
+  journeyId: string;
+  actionClass: string;
+  channel?: string;
+  purpose?: string;
+  subject?: string;
+  agentId: string;
+  journey: Journey;
+}
 
 export interface AuthorizationCard {
   cardId: string;

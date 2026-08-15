@@ -13,6 +13,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     secretOverlay: path.join(root, "secret-overlay"),
     imageIdFile: path.join(root, "image-id"),
     egressFile: path.join(root, "egress.json"),
+    // Cards are authorization state. Same reason as secrets: agents share disk/.
+    cardsFile: path.join(root, "cards.json"),
   };
 }
 

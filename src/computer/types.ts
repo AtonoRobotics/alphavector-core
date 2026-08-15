@@ -7,6 +7,8 @@ export interface ComputerPaths {
   secretOverlay: string;
   imageIdFile: string;
   egressFile: string;
+  /** Authorization cards. Beside the disk, never inside the bind-mounted /home. */
+  cardsFile: string;
 }
 
 export interface TenantComputer {
