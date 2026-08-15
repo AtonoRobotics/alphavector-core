@@ -1,4 +1,5 @@
 import type { Journey } from "../data/types.js";
+import type { PrincipalKind } from "../packs/types.js";
 
 export type CardKind = "owner_instance" | "architect_admin";
 export type CardStatus = "pending" | "approved" | "denied";
@@ -51,4 +52,26 @@ export interface ArchitectCardView extends AuthorizationCard {
     actionClass: string;
     policyDecision?: string;
   };
+}
+
+export type FieldTokenStatus = "active" | "revoked";
+export type FieldTokenIssuer = "architect" | "bootstrap";
+
+/** Hashed tenant-issued credential. Secret is returned once at issue and never stored. */
+export interface FieldTokenRecord {
+  tokenId: string;
+  tenantId: string;
+  principal: PrincipalKind;
+  hash: string;
+  status: FieldTokenStatus;
+  issuedAt: string;
+  issuedBy: FieldTokenIssuer;
+  revokedAt?: string;
+}
+
+export interface IssuedFieldToken {
+  tokenId: string;
+  tenantId: string;
+  principal: PrincipalKind;
+  token: string;
 }

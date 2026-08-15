@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { FieldClient } from "./http/field-client.js";
@@ -50,16 +49,16 @@ async function main(): Promise<void> {
   if (cmd === "field-serve") {
     const portFlag = rest.indexOf("--port");
     const port = portFlag >= 0 ? Number(rest[portFlag + 1]) : Number(process.env.AV_FIELD_PORT ?? 8787);
-    const { core, pack, tenantId } = await bootFieldCore(process.env.AV_TENANT ?? "t1");
-    const tokens = {
-      field: process.env.AV_FIELD_TOKEN ?? `field-${randomBytes(8).toString("hex")}`,
-      architect: process.env.AV_ARCHITECT_TOKEN ?? `architect-${randomBytes(8).toString("hex")}`,
-    };
-    const server = new FieldHttpServer({ core, pack, tenantId, tokens });
+    const computerBaseDir = process.env.AV_COMPUTER_DIR ?? path.join(process.cwd(), ".av-computers");
+    const { core, pack, tenantId } = await bootFieldCore(process.env.AV_TENANT ?? "t1", {
+      computerBaseDir,
+    });
+    const issued = core.fieldTokens.issue({ tenantId, principal: "field", actor: "bootstrap" });
+    const server = new FieldHttpServer({ core, pack, tenantId, pageToken: issued.token });
     const { url } = await server.listen(Number.isFinite(port) ? port : 8787, "127.0.0.1");
     console.log(`${PRODUCT.appDisplay} field surface`);
     console.log(`open ${url}`);
-    console.log(`field token: ${tokens.field}`);
+    console.log(`field token: ${issued.token}`);
     console.log("Architect/admin is not callable on /field. Field cannot configure models, prompts, Temporal, or tools.");
     return;
   }

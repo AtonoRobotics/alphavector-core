@@ -4,6 +4,7 @@ import Foundation
 /// Locked field OS is SwiftUI iOS (DEC-009).
 final class FieldAPI: ObservableObject {
     var baseURL: URL
+    /// Tenant-issued field bearer token. Same Authorization header as the Linux client.
     var token: String
 
     init(baseURL: URL = URL(string: "http://127.0.0.1:8787")!, token: String = "") {
