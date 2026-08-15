@@ -29,7 +29,17 @@ export interface RoleBinding {
   isOrchestrator?: boolean;
 }
 
-export interface JourneyKindBinding {
+/**
+ * Optional declared condition lists on a journey or action binding.
+ * Generic string ids from the loaded pack — not RE or Mission Control types.
+ */
+export interface PredicateDeclaration {
+  REQUIRES?: string[];
+  PREFERS?: string[];
+  AVOIDS?: string[];
+}
+
+export interface JourneyKindBinding extends PredicateDeclaration {
   id: string;
   label: string;
 }
@@ -41,7 +51,7 @@ export type ActionCeiling =
   | "prohibited"
   | "governance";
 
-export interface ActionClassVerb {
+export interface ActionClassVerb extends PredicateDeclaration {
   id: string;
   label: string;
   externalEffect: boolean;

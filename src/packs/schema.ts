@@ -9,6 +9,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function assertOptionalPredicateLists(raw: Record<string, unknown>, label: string): void {
+  for (const key of ["REQUIRES", "PREFERS", "AVOIDS"] as const) {
+    if (raw[key] === undefined) continue;
+    if (!Array.isArray(raw[key]) || raw[key].some((item) => typeof item !== "string")) {
+      throw new PackLoadError("PACK_INCOMPLETE", `${label}.${key} must be a string array when present`);
+    }
+  }
+}
+
 function missingSections(raw: Record<string, unknown>): PackSection[] {
   return REQUIRED_PACK_SECTIONS.filter((section) => raw[section] === undefined);
 }
@@ -49,6 +58,12 @@ export function assertCompletePack(raw: unknown): PackBinding {
   if (!Array.isArray(raw.journeyKinds) || raw.journeyKinds.length === 0) {
     throw new PackLoadError("PACK_INCOMPLETE", "journeyKinds must be a non-empty array");
   }
+  for (const journey of raw.journeyKinds) {
+    if (!isRecord(journey) || typeof journey.id !== "string") {
+      throw new PackLoadError("PACK_INCOMPLETE", "journeyKinds require id");
+    }
+    assertOptionalPredicateLists(journey, `journeyKinds.${journey.id}`);
+  }
   if (!Array.isArray(raw.actionClassVerbs) || raw.actionClassVerbs.length === 0) {
     throw new PackLoadError("PACK_INCOMPLETE", "actionClassVerbs must be a non-empty array");
   }
@@ -59,6 +74,7 @@ export function assertCompletePack(raw: unknown): PackBinding {
     if ("tier" in verb || "trustTier" in verb || "t0" in verb || "T0" in verb) {
       throw new PackLoadError("PACK_INVALID", "DEC-017 is not accepted; do not invent T0-T3 numbers");
     }
+    assertOptionalPredicateLists(verb, `actionClassVerbs.${verb.id}`);
   }
 
   const policy = raw.policy;

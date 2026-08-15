@@ -12,7 +12,7 @@ import { FieldHttpServer } from "../src/http/field-server.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { ALPHAVECTOR_RE_PIN_SHA, signedRePack } from "./helpers.js";
 
-const RE_PIN = "fc7e34e385743c7a6d0adcf9109bf5aa0c5a9230";
+const RE_PIN = "84f1410e9735882551f3ec3e77dea94aa096bdf2";
 const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
@@ -76,7 +76,7 @@ async function issueFollowUpCard(field: FieldClient): Promise<{ journeyId: strin
 }
 
 describe("durable pending cards on tenant computer disk", () => {
-  it("keeps the RE fixture pin at fc7e34e", () => {
+  it("keeps the RE fixture pin at 84f1410", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 

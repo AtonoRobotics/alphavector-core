@@ -6,7 +6,8 @@ import type { Journey } from "../data/types.js";
 import type { EffectExecutor } from "../effects/executor.js";
 import type { GrantBook } from "../grants/store.js";
 import { JourneyRuntime } from "../journeys/runtime.js";
-import type { LoadedPack, PrincipalKind } from "../packs/types.js";
+import { evaluateDeclaredPredicates } from "../packs/predicates.js";
+import type { LoadedPack, PredicateDeclaration, PrincipalKind } from "../packs/types.js";
 import { AskSurface } from "./ask.js";
 import type {
   FieldAskInput,
@@ -88,6 +89,10 @@ export class FieldSurface {
     this.assertFieldSafe(input.journeyKind);
     this.assertFieldSafe(input.objective);
     this.assertPackJourneyKind(input.pack, input.journeyKind);
+    this.assertDeclaredPredicates(
+      [this.journeyBinding(input.pack, input.journeyKind)],
+      input.conditions,
+    );
     return this.journeys.open(input.pack.tenantId, input.journeyKind, input.objective);
   }
 
@@ -104,6 +109,13 @@ export class FieldSurface {
       throw new AvError("JOURNEY_NOT_FOUND", `Unknown journey ${input.journeyId}`);
     }
     this.assertPackJourneyKind(input.pack, journey.journeyKind);
+    const recordedPrefers = this.assertDeclaredPredicates(
+      [
+        this.journeyBinding(input.pack, journey.journeyKind),
+        ...(input.actionClass ? [this.actionBinding(input.pack, input.actionClass)] : []),
+      ],
+      input.conditions,
+    );
 
     if (input.ask) {
       this.ask({ actor: input.actor, pack: input.pack, ...input.ask });
@@ -143,10 +155,11 @@ export class FieldSurface {
         journeyKind: journey.journeyKind,
         note: input.note,
         actionId: effect?.actionId,
+        recordedPrefers,
       },
       producedBy: input.agent?.agentId ?? "field",
     });
-    return { journey, effect };
+    return { journey, effect, recordedPrefers };
   }
 
   /** Optional sidecar. Cannot exceed pack Ask ceilings. A deny stays denied. */
@@ -187,5 +200,34 @@ export class FieldSurface {
         `Journey kind ${journeyKind} is not bound on the loaded pack`,
       );
     }
+  }
+
+  private journeyBinding(pack: LoadedPack, journeyKind: string): PredicateDeclaration {
+    return pack.binding.journeyKinds.find((k) => k.id === journeyKind) ?? {};
+  }
+
+  private actionBinding(pack: LoadedPack, actionClass: string): PredicateDeclaration {
+    return pack.binding.actionClassVerbs.find((v) => v.id === actionClass) ?? {};
+  }
+
+  private assertDeclaredPredicates(
+    bindings: PredicateDeclaration[],
+    conditions: readonly string[] | undefined,
+  ): string[] {
+    const present = conditions ?? [];
+    for (const condition of present) {
+      this.assertFieldSafe(condition);
+    }
+    const recordedPrefers: string[] = [];
+    for (const binding of bindings) {
+      const decision = evaluateDeclaredPredicates(binding, present);
+      if (!decision.allowed) {
+        throw new AvError("PREDICATE_CLOSED", decision.reason);
+      }
+      for (const prefer of decision.recordedPrefers) {
+        if (!recordedPrefers.includes(prefer)) recordedPrefers.push(prefer);
+      }
+    }
+    return recordedPrefers;
   }
 }

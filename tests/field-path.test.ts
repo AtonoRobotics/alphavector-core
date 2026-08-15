@@ -17,12 +17,16 @@ import {
   ALPHAVECTOR_RE_PIN_SHA,
   REPO_ROOT,
   signedRePack,
+  signedRePackMutated,
 } from "./helpers.js";
 
-const RE_PIN = "fc7e34e385743c7a6d0adcf9109bf5aa0c5a9230";
+const RE_PIN = "84f1410e9735882551f3ec3e77dea94aa096bdf2";
+const REQUIRED = "condition.required";
+const PREFERRED = "condition.preferred";
+const AVOIDED = "condition.avoided";
 
-async function reFieldStack() {
-  const { anchors, binding } = await signedRePack();
+async function reFieldStack(signed?: Awaited<ReturnType<typeof signedRePack>>) {
+  const { anchors, binding } = signed ?? (await signedRePack());
   const loader = new PackLoader(new MemoryPackRegistry(), anchors);
   const loaded = loader.load({ tenantId: "t1", binding, actor: "architect" });
   if (!loaded.ok) throw new Error(loaded.message);
@@ -38,7 +42,7 @@ async function reFieldStack() {
 }
 
 describe("required field path against pinned alphavector-re", () => {
-  it("keeps the RE fixture pin at fc7e34e", () => {
+  it("keeps the RE fixture pin at 84f1410", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
@@ -307,5 +311,182 @@ describe("required field path against pinned alphavector-re", () => {
     ).join("\n");
     const schemaAndMigrations = `${CORE_SCHEMA_SQL}\n${migrationSql}`;
     expect(schemaAndMigrations).not.toMatch(/listing_id|person_id|household_id|buyer_id/i);
+  });
+
+  it("authored journeys have no declarations so the five-journey field path stays open", async () => {
+    const { pack, field, agents } = await reFieldStack();
+    for (const kind of pack.binding.journeyKinds) {
+      expect(kind).toEqual({ id: kind.id, label: kind.label });
+      expect(kind.REQUIRES).toBeUndefined();
+      expect(kind.PREFERS).toBeUndefined();
+      expect(kind.AVOIDS).toBeUndefined();
+    }
+    const journey = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+    });
+    const agent = agents.find((a) => a.specialties.includes("buyer"))!;
+    const advanced = field.progress({
+      actor: "field",
+      pack,
+      journeyId: journey.id,
+      agent,
+      actionClass: "read",
+    });
+    expect(advanced.effect?.executed).toBe(true);
+    expect(advanced.recordedPrefers).toEqual([]);
+  });
+
+  it("fail-closes start and progress when a declared REQUIRES is missing", async () => {
+    const { pack, field, agents } = await reFieldStack(
+      await signedRePackMutated((unsigned) => {
+        const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
+        if (buyer) buyer.REQUIRES = [REQUIRED];
+        const read = unsigned.actionClassVerbs.find((v) => v.id === "read");
+        if (read) read.REQUIRES = [REQUIRED];
+      }),
+    );
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+      }),
+    ).toThrow(/REQUIRES missing/);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+      }),
+    ).toThrow(/fail closed/);
+
+    const journey = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+      conditions: [REQUIRED],
+    });
+    const agent = agents.find((a) => a.specialties.includes("buyer"))!;
+    expect(() =>
+      field.progress({
+        actor: "field",
+        pack,
+        journeyId: journey.id,
+        agent,
+        actionClass: "read",
+      }),
+    ).toThrow(/REQUIRES missing/);
+    const advanced = field.progress({
+      actor: "field",
+      pack,
+      journeyId: journey.id,
+      agent,
+      actionClass: "read",
+      conditions: [REQUIRED],
+    });
+    expect(advanced.effect?.executed).toBe(true);
+  });
+
+  it("fail-closes start and progress when a declared AVOIDS is present", async () => {
+    const { pack, field, agents } = await reFieldStack(
+      await signedRePackMutated((unsigned) => {
+        const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
+        if (buyer) buyer.AVOIDS = [AVOIDED];
+        const read = unsigned.actionClassVerbs.find((v) => v.id === "read");
+        if (read) read.AVOIDS = [AVOIDED];
+      }),
+    );
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        conditions: [AVOIDED],
+      }),
+    ).toThrow(/AVOIDS present/);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        conditions: [AVOIDED],
+      }),
+    ).toThrow(/fail closed/);
+
+    const journey = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+    });
+    const agent = agents.find((a) => a.specialties.includes("buyer"))!;
+    expect(() =>
+      field.progress({
+        actor: "field",
+        pack,
+        journeyId: journey.id,
+        agent,
+        actionClass: "read",
+        conditions: [AVOIDED],
+      }),
+    ).toThrow(/AVOIDS present/);
+    const advanced = field.progress({
+      actor: "field",
+      pack,
+      journeyId: journey.id,
+      agent,
+      actionClass: "read",
+    });
+    expect(advanced.effect?.executed).toBe(true);
+  });
+
+  it("records PREFERS on the field path and does not fail closed when unmet", async () => {
+    const { pack, field, agents, store } = await reFieldStack(
+      await signedRePackMutated((unsigned) => {
+        const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
+        if (buyer) buyer.PREFERS = [PREFERRED];
+        const read = unsigned.actionClassVerbs.find((v) => v.id === "read");
+        if (read) read.PREFERS = [PREFERRED];
+      }),
+    );
+    const journey = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+    });
+    expect(journey.status).toBe("open");
+    const agent = agents.find((a) => a.specialties.includes("buyer"))!;
+    const unmet = field.progress({
+      actor: "field",
+      pack,
+      journeyId: journey.id,
+      agent,
+      actionClass: "read",
+    });
+    expect(unmet.effect?.executed).toBe(true);
+    expect(unmet.recordedPrefers).toEqual([PREFERRED]);
+    expect(store.evidence.some((e) => e.kind === "journey_progress" && e.payload.recordedPrefers)).toBe(
+      true,
+    );
+
+    const met = field.progress({
+      actor: "field",
+      pack,
+      journeyId: journey.id,
+      agent,
+      actionClass: "read",
+      conditions: [PREFERRED],
+    });
+    expect(met.effect?.executed).toBe(true);
+    expect(met.recordedPrefers).toEqual([PREFERRED]);
   });
 });

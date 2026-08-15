@@ -137,6 +137,7 @@ export class FieldHttpServer {
         pack,
         journeyKind: String(body.journeyKind ?? ""),
         objective: String(body.objective ?? ""),
+        conditions: Array.isArray(body.conditions) ? body.conditions.map(String) : undefined,
       });
       this.json(res, 201, journey);
       return;
@@ -216,6 +217,7 @@ export class FieldHttpServer {
         ask: body.ask
           ? { tenantId, text: body.ask.text, actionClass: body.ask.actionClass }
           : undefined,
+        conditions: Array.isArray(body.conditions) ? body.conditions.map(String) : undefined,
       });
       this.json(res, 200, result);
     } catch (err) {
@@ -326,7 +328,9 @@ export class FieldHttpServer {
       const status =
         err.code === "JOURNEY_NOT_FOUND" || err.code === "CARD_NOT_FOUND" || err.code === "AGENT_NOT_FOUND"
           ? 404
-          : err.code === "POLICY_DENIED" || err.code === "DENY_IS_TERMINAL"
+          : err.code === "POLICY_DENIED" ||
+              err.code === "DENY_IS_TERMINAL" ||
+              err.code === "PREDICATE_CLOSED"
             ? 403
             : err.code === "CARD_STORE_CORRUPT" || err.code === "TOKEN_STORE_CORRUPT"
               ? 500

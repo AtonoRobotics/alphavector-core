@@ -9,6 +9,7 @@ export interface FieldProgressBody {
   purpose?: string;
   subject?: string;
   ask?: { text: string; actionClass: string };
+  conditions?: string[];
 }
 
 export interface FieldAskBody {
@@ -19,6 +20,7 @@ export interface FieldAskBody {
 export interface FieldStartBody {
   journeyKind: string;
   objective: string;
+  conditions?: string[];
 }
 
 export interface FieldApproveResult {

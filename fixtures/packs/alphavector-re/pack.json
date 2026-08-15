@@ -663,7 +663,10 @@
       "requires",
       "party_to",
       "represents",
-      "refers"
+      "refers",
+      "REQUIRES",
+      "PREFERS",
+      "AVOIDS"
     ],
     "corpora": [
       "listings",
@@ -688,7 +691,9 @@
       "REQUIRES",
       "PARTY_TO",
       "REPRESENTS",
-      "REFERS"
+      "REFERS",
+      "PREFERS",
+      "AVOIDS"
     ]
   },
   "evidenceEvalFixtures": [
