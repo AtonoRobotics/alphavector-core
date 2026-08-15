@@ -1,0 +1,711 @@
+{
+  "identity": {
+    "packId": "alphavector-re",
+    "version": "0.1.0",
+    "displayName": "AV Dev"
+  },
+  "roles": [
+    {
+      "name": "Orchestrator",
+      "persona": "Coordinates one journey goal at a time and dispatches work to specialists.",
+      "skills": [
+        "dispatch",
+        "freeze"
+      ],
+      "specialties": [
+        "coordination"
+      ],
+      "isOrchestrator": true
+    },
+    {
+      "name": "Follow-up",
+      "persona": "Drafts follow-up for authorization. Does not send without a card and policy allow.",
+      "skills": [
+        "draft"
+      ],
+      "specialties": [
+        "communications",
+        "hidden"
+      ]
+    },
+    {
+      "name": "Listing",
+      "persona": "Prepares listing journey work. Does not price or guarantee condition.",
+      "skills": [
+        "prepare",
+        "retrieve"
+      ],
+      "specialties": [
+        "listing",
+        "hidden"
+      ]
+    },
+    {
+      "name": "Transaction",
+      "persona": "Tracks dates and documents on a transaction. Does not interpret contracts.",
+      "skills": [
+        "track",
+        "retrieve"
+      ],
+      "specialties": [
+        "transaction",
+        "hidden"
+      ]
+    },
+    {
+      "name": "Buyer",
+      "persona": "Supports a buyer journey. Does not steer or rank by protected class.",
+      "skills": [
+        "retrieve",
+        "draft"
+      ],
+      "specialties": [
+        "buyer",
+        "hidden"
+      ]
+    },
+    {
+      "name": "Seller",
+      "persona": "Supports a seller journey. Does not give unlicensed price advice.",
+      "skills": [
+        "retrieve",
+        "draft"
+      ],
+      "specialties": [
+        "seller",
+        "hidden"
+      ]
+    },
+    {
+      "name": "Past-client",
+      "persona": "Keeps the sphere in view. Does not contact DNC or during quiet hours.",
+      "skills": [
+        "retrieve",
+        "draft"
+      ],
+      "specialties": [
+        "past-client",
+        "hidden"
+      ]
+    },
+    {
+      "name": "Review",
+      "persona": "Challenges unsupported claims. Does not execute external actions.",
+      "skills": [
+        "review"
+      ],
+      "specialties": [
+        "challenge",
+        "hidden"
+      ]
+    }
+  ],
+  "journeyKinds": [
+    {
+      "id": "buyer",
+      "label": "Buyer"
+    },
+    {
+      "id": "seller",
+      "label": "Seller"
+    },
+    {
+      "id": "listing",
+      "label": "Listing"
+    },
+    {
+      "id": "transaction",
+      "label": "Transaction"
+    },
+    {
+      "id": "past-client",
+      "label": "Past client"
+    }
+  ],
+  "actionClassVerbs": [
+    {
+      "id": "read",
+      "label": "Read",
+      "externalEffect": false,
+      "startRequiresAuthorization": false,
+      "mayGraduate": true,
+      "ceiling": "bounded_autonomy"
+    },
+    {
+      "id": "internal_write",
+      "label": "Internal write",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": true,
+      "ceiling": "bounded_autonomy"
+    },
+    {
+      "id": "communicate",
+      "label": "Communicate",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": true,
+      "ceiling": "bounded_autonomy"
+    },
+    {
+      "id": "material_state",
+      "label": "Material client state",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": true,
+      "ceiling": "authorization_required"
+    },
+    {
+      "id": "licensed_judgment",
+      "label": "Licensed judgment",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": false,
+      "ceiling": "human_decision"
+    },
+    {
+      "id": "prohibited",
+      "label": "Prohibited",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": false,
+      "ceiling": "prohibited"
+    },
+    {
+      "id": "governance",
+      "label": "Governance",
+      "externalEffect": true,
+      "startRequiresAuthorization": true,
+      "mayGraduate": false,
+      "ceiling": "governance"
+    }
+  ],
+  "policy": {
+    "jurisdiction": [
+      {
+        "id": "j-deny-unbound",
+        "when": {
+          "jurisdiction": "unbound"
+        },
+        "decision": "deny",
+        "reason": "Fail closed without a counsel-signed tenant instance"
+      },
+      {
+        "id": "j-deny-steering",
+        "when": {
+          "purpose": "steering"
+        },
+        "decision": "deny",
+        "reason": "Fair housing: steering is prohibited"
+      },
+      {
+        "id": "j-deny-protected",
+        "when": {
+          "purpose": "protected-class"
+        },
+        "decision": "deny",
+        "reason": "Fair housing: targeting or ranking by protected class is prohibited"
+      },
+      {
+        "id": "j-deny-respa",
+        "when": {
+          "purpose": "respa-kickback"
+        },
+        "decision": "deny",
+        "reason": "RESPA: kickbacks and unearned fees are prohibited"
+      },
+      {
+        "id": "j-deny-regb",
+        "when": {
+          "purpose": "reg-b"
+        },
+        "decision": "deny",
+        "reason": "Reg B: discriminatory credit treatment is prohibited"
+      },
+      {
+        "id": "j-allow-read",
+        "when": {
+          "actionClass": "read"
+        },
+        "decision": "allow",
+        "reason": "Reads are permitted"
+      },
+      {
+        "id": "j-allow-write",
+        "when": {
+          "actionClass": "internal_write"
+        },
+        "decision": "allow",
+        "reason": "Internal writes permitted when authorized"
+      },
+      {
+        "id": "j-allow-comm-email",
+        "when": {
+          "actionClass": "communicate",
+          "channel": "email"
+        },
+        "decision": "allow",
+        "reason": "Email permitted with consent"
+      },
+      {
+        "id": "j-allow-comm-sms",
+        "when": {
+          "actionClass": "communicate",
+          "channel": "sms"
+        },
+        "decision": "allow",
+        "reason": "Text permitted with consent"
+      },
+      {
+        "id": "j-allow-material",
+        "when": {
+          "actionClass": "material_state",
+          "purpose": "owner-authorized"
+        },
+        "decision": "allow",
+        "reason": "Material state change with owner authorization"
+      }
+    ],
+    "licensedAction": [
+      {
+        "id": "la-deny-prohibited",
+        "when": {
+          "actionClass": "prohibited"
+        },
+        "decision": "deny",
+        "reason": "Prohibited class: legal, tax, lending, negotiation advice"
+      },
+      {
+        "id": "la-deny-judgment",
+        "when": {
+          "actionClass": "licensed_judgment"
+        },
+        "decision": "deny",
+        "reason": "Licensed judgment remains a human decision"
+      },
+      {
+        "id": "la-deny-gov",
+        "when": {
+          "actionClass": "governance"
+        },
+        "decision": "deny",
+        "reason": "Governance is Architect control plane, not an agent effect"
+      },
+      {
+        "id": "la-deny-legal",
+        "when": {
+          "purpose": "legal-advice"
+        },
+        "decision": "deny",
+        "reason": "EXC-001: autonomous legal advice is excluded"
+      }
+    ],
+    "consent": [
+      {
+        "id": "c-deny-dnc",
+        "when": {
+          "purpose": "dnc"
+        },
+        "decision": "deny",
+        "reason": "Do-not-contact"
+      },
+      {
+        "id": "c-deny-quiet",
+        "when": {
+          "purpose": "quiet-hours"
+        },
+        "decision": "deny",
+        "reason": "Quiet hours"
+      },
+      {
+        "id": "c-deny-recovery",
+        "when": {
+          "purpose": "recovery"
+        },
+        "decision": "deny",
+        "reason": "EXC-008: assumed autonomy for routine recovery is excluded"
+      },
+      {
+        "id": "c-deny-crm",
+        "when": {
+          "purpose": "crm-update"
+        },
+        "decision": "deny",
+        "reason": "EXC-008: assumed autonomy for routine CRM updates is excluded"
+      },
+      {
+        "id": "c-deny-sched",
+        "when": {
+          "purpose": "scheduling"
+        },
+        "decision": "deny",
+        "reason": "EXC-008: assumed autonomy for routine scheduling is excluded"
+      },
+      {
+        "id": "c-deny-assumed",
+        "when": {
+          "purpose": "assumed-autonomy"
+        },
+        "decision": "deny",
+        "reason": "EXC-008: assumed autonomy for routine communications is excluded"
+      },
+      {
+        "id": "c-allow-followup",
+        "when": {
+          "purpose": "follow-up",
+          "actionClass": "communicate"
+        },
+        "decision": "allow",
+        "reason": "Consented follow-up"
+      },
+      {
+        "id": "c-allow-write",
+        "when": {
+          "actionClass": "internal_write"
+        },
+        "decision": "allow",
+        "reason": "Internal write has no contact consent requirement"
+      },
+      {
+        "id": "c-allow-read",
+        "when": {
+          "actionClass": "read"
+        },
+        "decision": "allow",
+        "reason": "Reads have no contact consent requirement"
+      },
+      {
+        "id": "c-allow-material",
+        "when": {
+          "actionClass": "material_state",
+          "purpose": "owner-authorized"
+        },
+        "decision": "allow",
+        "reason": "Owner-authorized material state"
+      }
+    ],
+    "adversarialFixtures": [
+      {
+        "id": "fx-dnc",
+        "description": "DNC must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "dnc",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-quiet",
+        "description": "Quiet hours must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "quiet-hours",
+          "channel": "sms"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-steering",
+        "description": "Fair housing steering must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "steering",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-protected",
+        "description": "Protected-class targeting must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "protected-class",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-judgment",
+        "description": "Licensed judgment must deny",
+        "input": {
+          "actionClass": "licensed_judgment"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-prohibited",
+        "description": "Prohibited class must deny",
+        "input": {
+          "actionClass": "prohibited"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-respa",
+        "description": "RESPA kickback must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "respa-kickback",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-regb",
+        "description": "Reg B discrimination must deny",
+        "input": {
+          "actionClass": "internal_write",
+          "purpose": "reg-b"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-exc-008-recovery",
+        "description": "Assumed recovery autonomy must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "recovery",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-exc-008-crm",
+        "description": "Assumed CRM autonomy must deny",
+        "input": {
+          "actionClass": "internal_write",
+          "purpose": "crm-update"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-exc-008-sched",
+        "description": "Assumed scheduling autonomy must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "scheduling",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-unbound",
+        "description": "Unbound jurisdiction must deny",
+        "input": {
+          "actionClass": "communicate",
+          "jurisdiction": "unbound",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-legal",
+        "description": "Legal advice must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "legal-advice",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-email-ok",
+        "description": "Consented email allow",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "follow-up",
+          "channel": "email"
+        },
+        "expect": "allow"
+      },
+      {
+        "id": "fx-read-ok",
+        "description": "Read allow",
+        "input": {
+          "actionClass": "read"
+        },
+        "expect": "allow"
+      },
+      {
+        "id": "fx-write-ok",
+        "description": "Authorized internal write allow",
+        "input": {
+          "actionClass": "internal_write"
+        },
+        "expect": "allow"
+      }
+    ]
+  },
+  "connectors": [
+    {
+      "id": "mls",
+      "system": "mls",
+      "tools": [
+        "search",
+        "pull"
+      ]
+    },
+    {
+      "id": "crm",
+      "system": "crm",
+      "tools": [
+        "read",
+        "sync"
+      ]
+    },
+    {
+      "id": "showing",
+      "system": "showing",
+      "tools": [
+        "propose"
+      ]
+    },
+    {
+      "id": "transaction",
+      "system": "transaction",
+      "tools": [
+        "status",
+        "documents"
+      ]
+    },
+    {
+      "id": "email",
+      "system": "email",
+      "tools": [
+        "draft",
+        "send"
+      ]
+    },
+    {
+      "id": "sms",
+      "system": "sms",
+      "tools": [
+        "draft",
+        "send"
+      ]
+    },
+    {
+      "id": "calendar",
+      "system": "calendar",
+      "tools": [
+        "read",
+        "propose"
+      ]
+    }
+  ],
+  "recordPartyKnowledge": {
+    "partyKinds": [
+      "Person",
+      "Household"
+    ],
+    "recordKinds": [
+      "Property",
+      "Listing",
+      "Requirement",
+      "Transaction",
+      "Recommendation"
+    ],
+    "predicates": [
+      "owns",
+      "lives_in",
+      "listed_as",
+      "requires",
+      "party_to",
+      "represents",
+      "refers"
+    ],
+    "corpora": [
+      "listings",
+      "mls",
+      "transaction_docs",
+      "consent_records",
+      "fair_housing"
+    ],
+    "graphNodeKinds": [
+      "Person",
+      "Household",
+      "Property",
+      "Listing",
+      "Requirement",
+      "Transaction",
+      "Recommendation"
+    ],
+    "graphEdgeKinds": [
+      "OWNS",
+      "LIVES_IN",
+      "LISTED_AS",
+      "REQUIRES",
+      "PARTY_TO",
+      "REPRESENTS",
+      "REFERS"
+    ]
+  },
+  "evidenceEvalFixtures": [
+    {
+      "id": "ev-showing-kept",
+      "description": "Counterpart confirmed a kept showing",
+      "countsAsIndependentOutcome": true,
+      "kind": "journey_outcome"
+    },
+    {
+      "id": "ev-listing-live",
+      "description": "Listing went live on the bound MLS",
+      "countsAsIndependentOutcome": true,
+      "kind": "journey_outcome"
+    },
+    {
+      "id": "ev-contract-executed",
+      "description": "Executed contract confirmed by counterpart",
+      "countsAsIndependentOutcome": true,
+      "kind": "journey_outcome"
+    },
+    {
+      "id": "ev-closing-confirmed",
+      "description": "Closing confirmed by independent record",
+      "countsAsIndependentOutcome": true,
+      "kind": "journey_outcome"
+    },
+    {
+      "id": "ev-past-client-touch",
+      "description": "Past-client touch confirmed by counterpart",
+      "countsAsIndependentOutcome": true,
+      "kind": "journey_outcome"
+    },
+    {
+      "id": "ev-self-declared",
+      "description": "Self-declared success is not enough",
+      "countsAsIndependentOutcome": false,
+      "kind": "self_declared"
+    }
+  ],
+  "askCeilings": [
+    "licensed_judgment",
+    "prohibited",
+    "governance",
+    "material_state"
+  ],
+  "fieldLanguageMap": {
+    "approve": "Approve",
+    "deny": "Deny",
+    "kill": "Stop everything",
+    "purpose.follow-up": "Send this follow-up",
+    "purpose.showing": "Confirm this showing",
+    "purpose.listing": "Update this listing",
+    "purpose.transaction": "Move this transaction",
+    "subject.buyer": "This buyer",
+    "subject.seller": "This seller",
+    "subject.listing": "This listing",
+    "subject.property": "This property",
+    "subject.transaction": "This transaction",
+    "subject.past-client": "This past client",
+    "channel.email": "Email",
+    "channel.sms": "Text",
+    "channel.phone": "Phone",
+    "journey.buyer": "Buyer",
+    "journey.seller": "Seller",
+    "journey.listing": "Listing",
+    "journey.transaction": "Transaction",
+    "journey.past-client": "Past client"
+  }
+}
