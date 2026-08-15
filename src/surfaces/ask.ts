@@ -6,35 +6,27 @@ import type { AskRequest } from "./types.js";
 /**
  * Optional tool path (DEC-024). Coordinator they can text, not an architecture console.
  * SHALL NOT exceed pack Ask ceilings. Not a side door around policy or cards.
- * A ceiling deny is persisted and stays denied on retry.
+ * A deny is persisted with its original reason (ceiling vs architecture console)
+ * and stays denied on retry with that same message.
  */
 export class AskSurface {
-  private readonly denied = new Set<string>();
+  private readonly denied = new Map<string, string>();
 
   constructor(private readonly store?: DurableStore) {}
 
   wasDenied(req: AskRequest): boolean {
-    if (this.denied.has(this.key(req))) return true;
-    if (!this.store) return false;
-    return this.store.evidence.some(
-      (e) =>
-        e.tenantId === req.tenantId &&
-        e.kind === "ask_denied" &&
-        e.payload.actionClass === req.actionClass &&
-        e.payload.text === req.text,
-    );
+    return this.denialReason(req) !== undefined;
   }
 
   assertAllowed(pack: LoadedPack, req: AskRequest): void {
-    if (this.wasDenied(req)) {
-      throw new SurfaceViolationError(
-        `Ask path cannot authorize action class ${req.actionClass} (pack Ask ceiling)`,
-      );
+    const prior = this.denialReason(req);
+    if (prior) {
+      throw new SurfaceViolationError(prior);
     }
     try {
       this.assertFresh(pack, req);
     } catch (err) {
-      this.recordDenial(req);
+      this.recordDenial(req, err instanceof Error ? err.message : String(err));
       throw err;
     }
   }
@@ -56,12 +48,29 @@ export class AskSurface {
     }
   }
 
-  private recordDenial(req: AskRequest): void {
-    this.denied.add(this.key(req));
+  private denialReason(req: AskRequest): string | undefined {
+    const cached = this.denied.get(this.key(req));
+    if (cached) return cached;
+    if (!this.store) return undefined;
+    const ev = this.store.evidence.find(
+      (e) =>
+        e.tenantId === req.tenantId &&
+        e.kind === "ask_denied" &&
+        e.payload.actionClass === req.actionClass &&
+        e.payload.text === req.text,
+    );
+    if (!ev) return undefined;
+    return typeof ev.payload.reason === "string"
+      ? ev.payload.reason
+      : `Ask path cannot authorize action class ${req.actionClass} (pack Ask ceiling)`;
+  }
+
+  private recordDenial(req: AskRequest, reason: string): void {
+    this.denied.set(this.key(req), reason);
     this.store?.addEvidence({
       tenantId: req.tenantId,
       kind: "ask_denied",
-      payload: { actionClass: req.actionClass, text: req.text },
+      payload: { actionClass: req.actionClass, text: req.text, reason },
       producedBy: "ask",
     });
   }

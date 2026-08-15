@@ -54,21 +54,25 @@ describe("three surfaces DEC-024", () => {
     const loader = new PackLoader(new MemoryPackRegistry(), anchors);
     const loaded = loader.load({ tenantId: "t1", binding, actor: "architect" });
     if (!loaded.ok) throw new Error(loaded.message);
-    const ask = new AskSurface();
-    expect(() =>
-      ask.assertAllowed(loaded.loaded, {
-        tenantId: "t1",
-        text: "please send this",
-        actionClass: "prohibited",
-      }),
-    ).toThrow(/Ask ceiling/);
-    expect(() =>
-      ask.assertAllowed(loaded.loaded, {
-        tenantId: "t1",
-        text: "pick a model for me",
-        actionClass: "read",
-      }),
-    ).toThrow(/architecture console/);
+    const store = new DurableStore();
+    const ask = new AskSurface(store);
+    const ceiling = {
+      tenantId: "t1",
+      text: "please send this",
+      actionClass: "prohibited",
+    };
+    const consoleReq = {
+      tenantId: "t1",
+      text: "pick a model for me",
+      actionClass: "read",
+    };
+    expect(() => ask.assertAllowed(loaded.loaded, ceiling)).toThrow(/Ask ceiling/);
+    expect(() => ask.assertAllowed(loaded.loaded, ceiling)).toThrow(/Ask ceiling/);
+    expect(() => ask.assertAllowed(loaded.loaded, consoleReq)).toThrow(/architecture console/);
+    expect(() => ask.assertAllowed(loaded.loaded, consoleReq)).toThrow(/architecture console/);
+    const again = new AskSurface(store);
+    expect(() => again.assertAllowed(loaded.loaded, consoleReq)).toThrow(/architecture console/);
+    expect(() => again.assertAllowed(loaded.loaded, ceiling)).toThrow(/Ask ceiling/);
   });
 
   it("Architect home is not owner-auth and is not the field home", () => {

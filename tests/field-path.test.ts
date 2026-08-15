@@ -155,6 +155,14 @@ describe("required field path against pinned alphavector-re", () => {
       actionClass: "read",
     });
     expect(progressed.effect?.executed).toBe(true);
+
+    const consoleReq = {
+      tenantId: "t1" as const,
+      text: "configure tool",
+      actionClass: "read",
+    };
+    expect(() => field.ask({ actor: "field", pack, ...consoleReq })).toThrow(/architecture console/);
+    expect(() => field.ask({ actor: "field", pack, ...consoleReq })).toThrow(/architecture console/);
   });
 
   it("makes a card deny terminal on the field path", async () => {
@@ -207,6 +215,63 @@ describe("required field path against pinned alphavector-re", () => {
     cards.resolve({ cardId, decision: "denied", actor: "field" });
     expect(() => field.progress(effect)).toThrow(/terminal/);
     expect(() => field.progress(effect)).toThrow(/terminal/);
+  });
+
+  it("approves an owner_instance card then executes communicate on the field path", async () => {
+    const { pack, field, cards, agents } = await reFieldStack();
+    const journey = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+    });
+    const followUp = agents.find((a) => a.name === "Follow-up")!;
+    const effect = {
+      actor: "field" as const,
+      pack,
+      journeyId: journey.id,
+      agent: followUp,
+      actionClass: "communicate",
+      channel: "email",
+      purpose: "follow-up",
+      subject: "buyer",
+    };
+
+    let cardId = "";
+    try {
+      field.progress(effect);
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+      cardId = (err as AuthorizationRequiredError).cardId;
+    }
+
+    expect(cards.get(cardId)?.kind).toBe("owner_instance");
+    const home = field.home("t1");
+    expect(home.inbox).toHaveLength(1);
+    expect(home.inbox[0]!.cardId).toBe(cardId);
+    expect(JSON.stringify(home.inbox)).not.toMatch(/architect_admin|T0|T1|T2|T3/i);
+    expect(home.architectControls).toEqual([]);
+
+    cards.issue({
+      tenantId: "t1",
+      kind: "architect_admin",
+      actionClass: "governance",
+      agentId: followUp.agentId,
+      purpose: "inspect",
+      subject: "runtime",
+      channel: "system",
+      pack,
+    });
+    expect(field.home("t1").inbox).toHaveLength(1);
+
+    cards.resolve({ cardId, decision: "approved", actor: "field" });
+    const progressed = field.progress({ ...effect, approvedCardId: cardId });
+    expect(progressed.effect?.executed).toBe(true);
+    expect(field.home("t1").inbox).toHaveLength(0);
+    expect(field.home("t1").outboundLog.some((row) => row.actionId === progressed.effect?.actionId)).toBe(
+      true,
+    );
   });
 
   it("keeps field home free of architect controls and config verbs", async () => {
