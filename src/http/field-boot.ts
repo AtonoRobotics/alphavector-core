@@ -7,8 +7,16 @@ import { generateEd25519, signPack } from "../packs/signing.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
+export interface BootFieldCoreOptions {
+  /** Tenant computer root core owns. Cards persist beside disk/, not in a pack. */
+  computerBaseDir?: string;
+}
+
 /** Boot a core with the pinned alphavector-re fixture. Architect load is internal, not a field route. */
-export async function bootFieldCore(tenantId = "t1"): Promise<{
+export async function bootFieldCore(
+  tenantId = "t1",
+  opts: BootFieldCoreOptions = {},
+): Promise<{
   core: AlphaVectorCore;
   pack: LoadedPack;
   tenantId: string;
@@ -19,15 +27,22 @@ export async function bootFieldCore(tenantId = "t1"): Promise<{
   const architect = generateEd25519();
   const counsel = generateEd25519();
   const binding = signPack(unsigned, architect.privateKeyPem, counsel.privateKeyPem);
-  const core = new AlphaVectorCore({
-    architectPublicKeyPem: architect.publicKeyPem,
-    counselEvalPublicKeyPem: counsel.publicKeyPem,
-  });
+  const stateDir = opts.computerBaseDir ? path.join(opts.computerBaseDir, "state") : undefined;
+  const core = new AlphaVectorCore(
+    {
+      architectPublicKeyPem: architect.publicKeyPem,
+      counselEvalPublicKeyPem: counsel.publicKeyPem,
+    },
+    stateDir,
+    opts.computerBaseDir,
+  );
   const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
   if (!loaded.ok) {
     throw new Error(`Field boot failed to load pack: ${loaded.message}`);
   }
-  core.agents.instantiateFromPack(loaded.loaded, "architect");
+  if (core.agents.list(tenantId).length === 0) {
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+  }
   return { core, pack: loaded.loaded, tenantId };
 }
 

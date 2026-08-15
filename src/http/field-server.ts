@@ -3,6 +3,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentRecord } from "../agents/types.js";
+import type { PendingProgressRecord } from "../auth/types.js";
 import { AuthorizationRequiredError, AvError, SurfaceViolationError } from "../errors.js";
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
@@ -17,14 +18,7 @@ const CORS = {
 
 const CONFIG_PATH = /model|prompt|temporal|tool/i;
 
-interface PendingProgress {
-  journeyId: string;
-  actionClass: string;
-  channel?: string;
-  purpose?: string;
-  subject?: string;
-  agentId: string;
-}
+type PendingProgress = PendingProgressRecord;
 
 export interface FieldHttpServerOptions {
   core: AlphaVectorCore;
@@ -41,6 +35,7 @@ export interface FieldHttpServerOptions {
 export class FieldHttpServer {
   private server?: http.Server;
   private readonly pending = new Map<string, PendingProgress>();
+  private restored = false;
 
   constructor(private readonly opts: FieldHttpServerOptions) {}
 
@@ -110,6 +105,7 @@ export class FieldHttpServer {
         return;
       }
 
+      this.restorePending();
       await this.routeField(req, res, path, principal);
     } catch (err) {
       this.writeError(res, err);
@@ -168,7 +164,7 @@ export class FieldHttpServer {
         cardId: decodeURIComponent(deny[1]!),
         decision: "denied",
       });
-      this.pending.delete(card.cardId);
+      this.forgetPending(card.cardId);
       this.json(res, 200, { cardId: card.cardId, status: card.status });
       return;
     }
@@ -224,15 +220,18 @@ export class FieldHttpServer {
       });
       this.json(res, 200, result);
     } catch (err) {
-      if (err instanceof AuthorizationRequiredError && agent && body.actionClass) {
-        this.pending.set(err.cardId, {
+      if (err instanceof AuthorizationRequiredError && agent && body.actionClass && journey) {
+        const record: PendingProgress = {
           journeyId,
           actionClass: body.actionClass,
           channel: body.channel,
           purpose: body.purpose,
           subject: body.subject,
           agentId: agent.agentId,
-        });
+          journey,
+        };
+        this.pending.set(err.cardId, record);
+        core.cards.setPending(tenantId, err.cardId, record);
       }
       throw err;
     }
@@ -258,12 +257,28 @@ export class FieldHttpServer {
       subject: pending.subject,
       approvedCardId: cardId,
     });
-    this.pending.delete(cardId);
+    this.forgetPending(cardId);
     this.json(res, 200, {
       card: { cardId: card.cardId, status: card.status },
       journey: result.journey,
       effect: result.effect,
     });
+  }
+
+  private restorePending(): void {
+    if (this.restored) return;
+    this.restored = true;
+    const { core, tenantId } = this.opts;
+    core.cards.hydrateTenant(tenantId);
+    for (const { cardId, record } of core.cards.listPending(tenantId)) {
+      this.pending.set(cardId, record);
+      core.store.restoreJourney(record.journey);
+    }
+  }
+
+  private forgetPending(cardId: string): void {
+    this.pending.delete(cardId);
+    this.opts.core.cards.clearPending(this.opts.tenantId, cardId);
   }
 
   private pickAgent(journeyKind: string, actionClass: string): AgentRecord {
@@ -324,7 +339,9 @@ export class FieldHttpServer {
           ? 404
           : err.code === "POLICY_DENIED" || err.code === "DENY_IS_TERMINAL"
             ? 403
-            : 400;
+            : err.code === "CARD_STORE_CORRUPT"
+              ? 500
+              : 400;
       this.json(res, status, { error: err.code, message: err.message });
       return;
     }

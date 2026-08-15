@@ -15,3 +15,18 @@ export function readJsonFile<T>(file: string): T | undefined {
     return undefined;
   }
 }
+
+/**
+ * Missing file → undefined. Unreadable or unparseable JSON throws.
+ * Callers that must fail closed (cards) use this; silent empty is not safe there.
+ */
+export function readJsonFileStrict<T>(file: string): T | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw err;
+  }
+  return JSON.parse(raw) as T;
+}

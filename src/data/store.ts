@@ -71,6 +71,14 @@ export class DurableStore {
     return journey;
   }
 
+  /** Rehydrate a persisted journey after process restart. Does not invent fields. */
+  restoreJourney(journey: Journey): Journey {
+    const existing = this.journeys.find((j) => j.id === journey.id);
+    if (existing) return existing;
+    this.journeys.push(journey);
+    return journey;
+  }
+
   assert(input: {
     tenantId: string;
     subjectType: string;
