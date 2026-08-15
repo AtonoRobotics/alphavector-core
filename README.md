@@ -52,8 +52,10 @@ Required field path over HTTP. Architect/admin is not callable on `/field`. Fiel
 
 ```bash
 npm run build
+# First Architect credential (once). Shell is not Architect.
+node dist/cli.js architect issue-field-token --principal architect
 # Architect issues a tenant-bound field token (off the field home screen). Serve does not.
-node dist/cli.js architect issue-field-token
+AV_ARCHITECT_TOKEN=<architect-token> node dist/cli.js architect issue-field-token
 npm run field:serve
 # Open the printed URL, paste the token, and complete one journey + one card.
 # Same API: clients/field-ios (SwiftUI, DEC-009). This host cannot compile iOS.

@@ -29,6 +29,23 @@ async function listenServe(tenantId: string, computerBaseDir: string) {
   return started;
 }
 
+function bootstrapArchitect(dir: string, tenantId: string) {
+  return architectIssueFieldToken({
+    tenantId,
+    principal: "architect",
+    computerBaseDir: dir,
+  });
+}
+
+function issueFieldAsArchitect(dir: string, tenantId: string, architectToken: string) {
+  return architectIssueFieldToken({
+    tenantId,
+    principal: "field",
+    computerBaseDir: dir,
+    architectToken,
+  });
+}
+
 describe("tenant-issued field tokens on computer disk", () => {
   it("keeps the RE fixture pin at fc7e34e", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
@@ -107,11 +124,8 @@ describe("tenant-issued field tokens on computer disk", () => {
 
   it("accepts the same issued token for field start and card approve after restart", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-ftok-http-"));
-    const issued = architectIssueFieldToken({
-      tenantId: "restart",
-      principal: "field",
-      computerBaseDir: dir,
-    });
+    const architect = bootstrapArchitect(dir, "restart");
+    const issued = issueFieldAsArchitect(dir, "restart", architect.token);
     const first = await listenServe("restart", dir);
     const field = new FieldClient(first.url, issued.token);
     const journey = await field.start("buyer", "Work this buyer journey");
@@ -170,11 +184,8 @@ describe("tenant-issued field tokens on computer disk", () => {
 
   it("leaves an existing token book unchanged when serve starts", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-ftok-unchanged-"));
-    const issued = architectIssueFieldToken({
-      tenantId: "kept",
-      principal: "field",
-      computerBaseDir: dir,
-    });
+    const architect = bootstrapArchitect(dir, "kept");
+    const issued = issueFieldAsArchitect(dir, "kept", architect.token);
     const file = computerRoot(dir, "kept").fieldTokensFile;
     const before = readFileSync(file, "utf8");
     const issue = vi.spyOn(FieldTokenBook.prototype, "issue");
@@ -188,11 +199,8 @@ describe("tenant-issued field tokens on computer disk", () => {
 
   it("accepts a token Architect issued and returns 401 after Architect revokes", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-ftok-arch-"));
-    const issued = architectIssueFieldToken({
-      tenantId: "issued",
-      principal: "field",
-      computerBaseDir: dir,
-    });
+    const architect = bootstrapArchitect(dir, "issued");
+    const issued = issueFieldAsArchitect(dir, "issued", architect.token);
     expect(issued.principal).toBe("field");
     expect(issued.tenantId).toBe("issued");
 
@@ -206,6 +214,7 @@ describe("tenant-issued field tokens on computer disk", () => {
       tenantId: "issued",
       tokenId: issued.tokenId,
       computerBaseDir: dir,
+      architectToken: architect.token,
     });
     const second = await listenServe("issued", dir);
     await expect(
@@ -219,6 +228,8 @@ describe("tenant-issued field tokens on computer disk", () => {
     expect(cli).not.toMatch(/pageToken/);
     expect(cli).toMatch(/architectIssueFieldToken/);
     expect(cli).toMatch(/architectRevokeFieldToken/);
+    expect(cli).toMatch(/--architect-token/);
+    expect(cli).toMatch(/AV_ARCHITECT_TOKEN/);
     expect(cli).toMatch(/startFieldServe/);
     expect(cli).toMatch(/field-client requires --token or AV_FIELD_TOKEN/);
 
@@ -228,5 +239,128 @@ describe("tenant-issued field tokens on computer disk", () => {
 
     const ios = await readFile(path.join(REPO_ROOT, "clients/field-ios/Field/FieldAPI.swift"), "utf8");
     expect(ios).not.toMatch(/OAuth|SSO|MLS/);
+  });
+});
+
+describe("Architect credential required to issue and revoke", () => {
+  it("binary alone cannot issue or revoke", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-arch-binary-"));
+    expect(() =>
+      architectIssueFieldToken({ tenantId: "t1", principal: "field", computerBaseDir: dir }),
+    ).toThrow(SurfaceViolationError);
+    expect(() =>
+      architectIssueFieldToken({ tenantId: "t1", principal: "field", computerBaseDir: dir }),
+    ).toThrow(/Shell is not Architect/);
+    expect(() =>
+      architectRevokeFieldToken({ tenantId: "t1", tokenId: "ftok_none", computerBaseDir: dir }),
+    ).toThrow(/Shell is not Architect/);
+    expect(existsSync(computerRoot(dir, "t1").fieldTokensFile)).toBe(false);
+  });
+
+  it("a field token cannot issue or revoke", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-arch-field-"));
+    const architect = bootstrapArchitect(dir, "t1");
+    const field = issueFieldAsArchitect(dir, "t1", architect.token);
+    expect(() =>
+      architectIssueFieldToken({
+        tenantId: "t1",
+        principal: "field",
+        computerBaseDir: dir,
+        architectToken: field.token,
+      }),
+    ).toThrow(/field token cannot issue or revoke/);
+    expect(() =>
+      architectRevokeFieldToken({
+        tenantId: "t1",
+        tokenId: field.tokenId,
+        computerBaseDir: dir,
+        architectToken: field.token,
+      }),
+    ).toThrow(/field token cannot issue or revoke/);
+    const book = new FieldTokenBook(dir);
+    expect(book.lookup(field.token, "t1")).toBe("field");
+  });
+
+  it("an Architect credential can issue and revoke", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-arch-can-"));
+    const architect = bootstrapArchitect(dir, "t1");
+    expect(architect.principal).toBe("architect");
+    const paths = computerRoot(dir, "t1");
+    const raw = readFileSync(paths.fieldTokensFile, "utf8");
+    expect(raw).not.toContain(architect.token);
+    expect(existsSync(path.join(paths.disk, "field-tokens.json"))).toBe(false);
+
+    const field = issueFieldAsArchitect(dir, "t1", architect.token);
+    const book = new FieldTokenBook(dir);
+    expect(book.lookup(architect.token, "t1")).toBe("architect");
+    expect(book.lookup(field.token, "t1")).toBe("field");
+
+    architectRevokeFieldToken({
+      tenantId: "t1",
+      tokenId: field.tokenId,
+      computerBaseDir: dir,
+      architectToken: architect.token,
+    });
+    expect(new FieldTokenBook(dir).lookup(field.token, "t1")).toBeUndefined();
+  });
+
+  it("bootstraps the first Architect credential once", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-arch-once-"));
+    const first = bootstrapArchitect(dir, "t1");
+    expect(first.principal).toBe("architect");
+    expect(new FieldTokenBook(dir).hasActiveArchitect("t1")).toBe(true);
+
+    expect(() => bootstrapArchitect(dir, "t1")).toThrow(SurfaceViolationError);
+    expect(() => bootstrapArchitect(dir, "t1")).toThrow(/Shell is not Architect/);
+
+    const second = architectIssueFieldToken({
+      tenantId: "t1",
+      principal: "architect",
+      computerBaseDir: dir,
+      architectToken: first.token,
+    });
+    expect(second.principal).toBe("architect");
+    expect(second.token).not.toBe(first.token);
+  });
+
+  it("missing, unknown, or revoked Architect credential fails closed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-arch-closed-"));
+    expect(() =>
+      architectIssueFieldToken({
+        tenantId: "t1",
+        principal: "architect",
+        computerBaseDir: dir,
+        architectToken: "not-issued",
+      }),
+    ).toThrow(AvError);
+    expect(() =>
+      architectIssueFieldToken({
+        tenantId: "t1",
+        principal: "architect",
+        computerBaseDir: dir,
+        architectToken: "not-issued",
+      }),
+    ).toThrow(/Unknown or revoked Architect credential/);
+
+    const first = bootstrapArchitect(dir, "t1");
+    architectRevokeFieldToken({
+      tenantId: "t1",
+      tokenId: first.tokenId,
+      computerBaseDir: dir,
+      architectToken: first.token,
+    });
+    expect(() =>
+      architectIssueFieldToken({
+        tenantId: "t1",
+        principal: "field",
+        computerBaseDir: dir,
+        architectToken: first.token,
+      }),
+    ).toThrow(/Unknown or revoked Architect credential/);
+    expect(new FieldTokenBook(dir).hasActiveArchitect("t1")).toBe(false);
+
+    const recovered = bootstrapArchitect(dir, "t1");
+    expect(recovered.principal).toBe("architect");
+    expect(recovered.token).not.toBe(first.token);
   });
 });

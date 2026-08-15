@@ -7,8 +7,9 @@ import { loadTokenStore, saveTokenStore } from "./field-token-store.js";
 import type { FieldTokenIssuer, FieldTokenRecord, IssuedFieldToken } from "./types.js";
 
 /**
- * Tenant-issued field tokens. Optional computerBaseDir persists on the tenant
- * computer core owns — beside secrets/ and cards.json, never inside disk/ and never in a pack.
+ * Tenant-issued field and Architect credentials. Optional computerBaseDir persists
+ * on the tenant computer core owns — beside secrets/ and cards.json, never inside
+ * disk/ and never in a pack.
  */
 export class FieldTokenBook {
   private readonly records = new Map<string, FieldTokenRecord>();
@@ -64,6 +65,17 @@ export class FieldTokenBook {
     const record = this.match(secret, tenantId);
     if (!record || record.status !== "active") return undefined;
     return record.principal;
+  }
+
+  /** True when this tenant has at least one active Architect credential. */
+  hasActiveArchitect(tenantId: string): boolean {
+    this.ensure(tenantId);
+    for (const record of this.records.values()) {
+      if (record.tenantId === tenantId && record.principal === "architect" && record.status === "active") {
+        return true;
+      }
+    }
+    return false;
   }
 
   private match(secret: string, tenantId: string): FieldTokenRecord | undefined {
