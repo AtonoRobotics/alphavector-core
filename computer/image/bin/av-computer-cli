@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  health)
+    test -d /tenant/home
+    echo ok
+    ;;
+  desktop-start)
+    exec /opt/av-computer/bin/desktop-start "$@"
+    ;;
+  screenshot)
+    exec /opt/av-computer/bin/desktop-screenshot "$@"
+    ;;
+  files-read)
+    exec /opt/av-computer/bin/files-read "$@"
+    ;;
+  files-write)
+    exec /opt/av-computer/bin/files-write "$@"
+    ;;
+  shell)
+    cwd="${1:-/tenant/home}"
+    shift
+    command="$*"
+    exec /opt/av-computer/bin/agent-shell "$cwd" "$command"
+    ;;
+  *)
+    echo "unknown command: ${cmd}" >&2
+    exit 2
+    ;;
+esac

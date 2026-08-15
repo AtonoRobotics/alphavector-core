@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cwd="${1:?cwd required}"
+command="${2:?command required}"
+
+if [[ "$cwd" != /tenant/* ]]; then
+  echo '{"exitCode":2,"stdout":"","stderr":"cwd must be on /tenant","cwd":""}'
+  exit 0
+fi
+
+# Agent shell has no DISPLAY. Desktop drive is delegated to the worker.
+unset DISPLAY XAUTHORITY
+mkdir -p "$cwd"
+
+stdout_file="$(mktemp)"
+stderr_file="$(mktemp)"
+set +e
+bash -lc "cd $(printf '%q' "$cwd") && ${command}" >"$stdout_file" 2>"$stderr_file"
+code=$?
+set -e
+
+python3 - "$code" "$cwd" "$stdout_file" "$stderr_file" <<'PY'
+import json, sys
+code, cwd, out_path, err_path = sys.argv[1:5]
+def read(path):
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        return handle.read()
+print(json.dumps({
+    "exitCode": int(code),
+    "stdout": read(out_path),
+    "stderr": read(err_path),
+    "cwd": cwd,
+}))
+PY
+rm -f "$stdout_file" "$stderr_file"

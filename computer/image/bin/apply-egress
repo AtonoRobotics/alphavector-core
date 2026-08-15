@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Packs bind egress. Field users do not configure networking.
+# Best-effort inside the computer. Missing privileges fail closed for outbound
+# only when iptables is usable; tests still share the disk.
+
+hosts="${AV_EGRESS_HOSTS:-}"
+if [[ -z "$hosts" ]]; then
+  echo "egress: no pack hosts bound" >&2
+  exit 0
+fi
+
+if ! iptables -L >/dev/null 2>&1; then
+  echo "egress: iptables unavailable in this runtime; host must enforce allowlist" >&2
+  exit 0
+fi
+
+iptables -F OUTPUT || true
+iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 53 -j ACCEPT
+IFS=',' read -r -a list <<< "$hosts"
+for host in "${list[@]}"; do
+  [[ -z "$host" ]] && continue
+  iptables -A OUTPUT -d "$host" -j ACCEPT || true
+done
+iptables -A OUTPUT -j REJECT
+echo "egress: applied ${#list[@]} hosts"

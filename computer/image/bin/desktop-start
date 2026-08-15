@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+agent_id="${1:?agent id required}"
+display="${2:?display required}"
+width="${3:-1280}"
+height="${4:-720}"
+
+mkdir -p /tmp/av-desktops "/tenant/state/desktops/${agent_id}"
+auth="/tmp/av-desktops/Xauthority-${display}"
+log="/tmp/av-desktops/x-${display}.log"
+touch "$auth"
+chmod 600 "$auth"
+
+if [[ -S "/tmp/.X11-unix/X${display}" ]]; then
+  echo "{\"display\":${display},\"agentId\":\"${agent_id}\",\"status\":\"already-running\"}"
+  exit 0
+fi
+
+# Distinct root color per display so screenshots differ across agent desktops.
+r=$((16 + (display * 37) % 200))
+g=$((32 + (display * 53) % 180))
+b=$((64 + (display * 19) % 160))
+
+Xvfb ":${display}" -screen 0 "${width}x${height}x24" -ac -nolisten tcp >"$log" 2>&1 &
+for _ in $(seq 1 50); do
+  if [[ -S "/tmp/.X11-unix/X${display}" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+
+DISPLAY=":${display}" XAUTHORITY="$auth" xsetroot -solid "rgb:${r}/${g}/${b}"
+DISPLAY=":${display}" XAUTHORITY="$auth" fluxbox >/tmp/av-desktops/flux-${display}.log 2>&1 &
+DISPLAY=":${display}" XAUTHORITY="$auth" x11vnc -display ":${display}" -rfbport $((5900 + display)) -forever -shared -nopw -localhost >/tmp/av-desktops/vnc-${display}.log 2>&1 &
+
+printf '%s\n' "$display" > "/tenant/state/desktops/${agent_id}/display"
+echo "{\"display\":${display},\"agentId\":\"${agent_id}\",\"status\":\"started\"}"

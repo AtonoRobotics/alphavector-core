@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.tmp/
+.av-dev/
+*.log
+.env
+.env.local
+.DS_Store
+computer/image/.cache/
