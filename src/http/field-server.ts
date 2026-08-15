@@ -8,7 +8,7 @@ import { AuthorizationRequiredError, AvError, SurfaceViolationError } from "../e
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
 import { fieldLinuxPagePath } from "./field-boot.js";
-import type { FieldAskBody, FieldProgressBody, FieldStartBody } from "./types.js";
+import type { FieldAskBody, FieldFactBody, FieldProgressBody, FieldStartBody } from "./types.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -170,6 +170,18 @@ export class FieldHttpServer {
       return;
     }
 
+    if (method === "POST" && path === "/field/facts") {
+      const body = (await readJson(req)) as FieldFactBody;
+      core.field.record({ actor, pack, id: String(body.id ?? "") });
+      return;
+    }
+
+    if (method === "POST" && path === "/field/facts/retract") {
+      const body = (await readJson(req)) as FieldFactBody;
+      core.field.retract({ actor, pack, id: String(body.id ?? "") });
+      return;
+    }
+
     if (method === "POST" && path === "/field/ask") {
       const body = (await readJson(req)) as FieldAskBody;
       core.field.ask({
@@ -243,6 +255,11 @@ export class FieldHttpServer {
   private approve(res: ServerResponse, actor: PrincipalKind, cardId: string): void {
     const { core, pack } = this.opts;
     const card = core.field.resolveCard({ actor, cardId, decision: "approved" });
+    const fact = core.field.commitApprovedFact(cardId);
+    if (fact) {
+      this.json(res, 200, { card: { cardId: card.cardId, status: card.status }, fact });
+      return;
+    }
     const pending = this.pending.get(cardId);
     if (!pending) {
       this.json(res, 200, { card: { cardId: card.cardId, status: card.status } });

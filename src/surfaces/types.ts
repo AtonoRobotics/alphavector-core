@@ -65,6 +65,22 @@ export interface FieldAskInput extends AskRequest {
   pack: LoadedPack;
 }
 
+/**
+ * Field-only fact write/retract. `id` is a generic pack-local string
+ * (e.g. condition.required), not an RE or Mission Control type.
+ * Persist happens only after the owner_instance card is approved.
+ */
+export interface FieldFactInput {
+  actor: PrincipalKind;
+  pack: LoadedPack;
+  id: string;
+}
+
+export interface FieldFactResult {
+  id: string;
+  present: boolean;
+}
+
 export interface ArchitectHome {
   grants: true;
   packLoad: true;

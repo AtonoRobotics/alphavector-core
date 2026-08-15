@@ -1,6 +1,6 @@
 import type { FieldCardView } from "../auth/types.js";
 import type { Journey } from "../data/types.js";
-import type { FieldHome, FieldProgressResult } from "../surfaces/types.js";
+import type { FieldFactResult, FieldHome, FieldProgressResult } from "../surfaces/types.js";
 
 export interface FieldProgressBody {
   note?: string;
@@ -25,10 +25,16 @@ export interface FieldStartBody {
   conditions?: string[];
 }
 
+/** Generic fact id. Pack-local string; not an RE type. */
+export interface FieldFactBody {
+  id: string;
+}
+
 export interface FieldApproveResult {
   card: { cardId: string; status: string };
   journey?: Journey;
   effect?: FieldProgressResult["effect"];
+  fact?: FieldFactResult;
 }
 
 export interface FieldHttpErrorBody {

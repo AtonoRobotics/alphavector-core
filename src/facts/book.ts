@@ -24,7 +24,10 @@ export class FactBook {
     return [...(this.facts.get(tenantId) ?? [])];
   }
 
-  /** Persist a generic fact id on this tenant's disk. Not a field HTTP write. */
+  /**
+   * Ungated persist of a generic fact id. Field path must not call this
+   * until the owner_instance card is approved.
+   */
   put(tenantId: string, id: string): TenantFact {
     if (!id) {
       throw new AvError("FACT_ID_REQUIRED", "Fact id is required");
@@ -32,6 +35,22 @@ export class FactBook {
     this.ensure(tenantId);
     const set = this.facts.get(tenantId) ?? new Set<string>();
     set.add(id);
+    this.facts.set(tenantId, set);
+    this.persist(tenantId);
+    return { id };
+  }
+
+  /**
+   * Ungated retract of a generic fact id. Field path must not call this
+   * until the owner_instance card is approved. Missing id is a no-op persist.
+   */
+  retract(tenantId: string, id: string): TenantFact {
+    if (!id) {
+      throw new AvError("FACT_ID_REQUIRED", "Fact id is required");
+    }
+    this.ensure(tenantId);
+    const set = this.facts.get(tenantId) ?? new Set<string>();
+    set.delete(id);
     this.facts.set(tenantId, set);
     this.persist(tenantId);
     return { id };

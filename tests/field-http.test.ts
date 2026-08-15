@@ -1,13 +1,20 @@
-import { readFile, readdir } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { computerRoot } from "../src/computer/paths.js";
+import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
+import { FactBook } from "../src/facts/book.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
-import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
-import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT } from "./helpers.js";
+import { AlphaVectorCore } from "../src/kernel.js";
+import type { PackBinding } from "../src/packs/types.js";
+import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, signedRePackMutated } from "./helpers.js";
 
 const RE_PIN = "84f1410e9735882551f3ec3e77dea94aa096bdf2";
+const REQUIRED = "condition.required";
 const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
@@ -38,6 +45,56 @@ async function liveField(tenantId = "t1") {
     core,
     pack,
   };
+}
+
+async function liveMutatedField(
+  tenantId: string,
+  computerBaseDir: string,
+  mutate: (unsigned: Omit<PackBinding, "signatures">) => void,
+) {
+  const { anchors, binding } = await signedRePackMutated(mutate);
+  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir);
+  const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
+  if (!loaded.ok) throw new Error(loaded.message);
+  if (core.agents.list(tenantId).length === 0) {
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+  }
+  const architectIssued = core.fieldTokens.issue({ tenantId, principal: "architect" });
+  const fieldIssued = core.fieldTokens.issue({
+    tenantId,
+    principal: "field",
+    presented: architectIssued.token,
+  });
+  const tokens = { field: fieldIssued.token, architect: architectIssued.token };
+  const server = new FieldHttpServer({ core, pack: loaded.loaded, tenantId });
+  servers.push(server);
+  const { url } = await server.listen(0, "127.0.0.1");
+  return {
+    url,
+    tenantId,
+    tokens,
+    field: new FieldClient(url, tokens.field),
+    architect: new FieldClient(url, tokens.architect),
+    core,
+    pack: loaded.loaded,
+  };
+}
+
+async function issueFactCard(
+  field: FieldClient,
+  id: string,
+  op: "record" | "retract" = "record",
+): Promise<string> {
+  try {
+    if (op === "record") await field.record(id);
+    else await field.retract(id);
+    throw new Error("expected authorization card before fact write");
+  } catch (err) {
+    if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
+      throw err;
+    }
+    return err.cardId;
+  }
 }
 
 describe("field HTTP surface against pinned alphavector-re", () => {
@@ -210,6 +267,100 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(home).toMatch(/Start journey/);
     expect(home).toMatch(/approve/);
     expect(home).toMatch(/Issued field token/);
+  });
+
+  it("denies missing and bad tokens on fact write and keeps Architect off the path", async () => {
+    const { url, tenantId, field, architect } = await liveField("fact-auth");
+    const body = JSON.stringify({ id: REQUIRED });
+    for (const headers of [
+      {},
+      { authorization: "Bearer " },
+      { authorization: "Bearer field-dev-token" },
+      { authorization: `Bearer field-${tenantId}` },
+      { authorization: "Bearer not-issued" },
+    ]) {
+      const res = await fetch(`${url}/field/facts`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body,
+      });
+      expect(res.status).toBe(401);
+      const denied = (await res.json()) as { error: string };
+      expect(denied.error).toBe("UNAUTHORIZED");
+    }
+    await expect(architect.record(REQUIRED)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+      message: expect.stringMatching(/field user/),
+    });
+    const cardId = await issueFactCard(field, REQUIRED);
+    expect(cardId).toMatch(/^card_/);
+  });
+
+  it("persists a fact only after approve and lets REQUIRES pass then fail after retract", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-http-"));
+    const { field, tenantId } = await liveMutatedField("fact-write", dir, (unsigned) => {
+      const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
+      if (buyer) buyer.REQUIRES = [REQUIRED];
+    });
+    const paths = computerRoot(dir, tenantId);
+
+    await expect(field.start("buyer", "Work this buyer journey")).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/REQUIRES missing/),
+    });
+
+    const cardId = await issueFactCard(field, REQUIRED);
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    await expect(field.start("buyer", "Work this buyer journey")).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+    });
+
+    const approved = await field.approve(cardId);
+    expect(approved.card.status).toBe("approved");
+    expect(approved.fact).toEqual({ id: REQUIRED, present: true });
+    expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
+    expect(existsSync(paths.factsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    expect(JSON.parse(readFileSync(paths.factsFile, "utf8"))).toEqual({
+      facts: [{ id: REQUIRED }],
+    });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([REQUIRED]);
+
+    const journey = await field.start("buyer", "Work this buyer journey");
+    expect(journey.journeyKind).toBe("buyer");
+    expect(journey.status).toBe("open");
+
+    const retractId = await issueFactCard(field, REQUIRED, "retract");
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([REQUIRED]);
+    const retracted = await field.approve(retractId);
+    expect(retracted.fact).toEqual({ id: REQUIRED, present: false });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    await expect(field.start("buyer", "Work this buyer journey")).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/fail closed/),
+    });
+  });
+
+  it("keeps a denied HTTP fact write off disk and terminal", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-http-deny-"));
+    const { field, tenantId } = await liveMutatedField("fact-deny", dir, () => undefined);
+    const paths = computerRoot(dir, tenantId);
+    const cardId = await issueFactCard(field, REQUIRED);
+    const denied = await field.deny(cardId);
+    expect(denied.status).toBe("denied");
+    expect(existsSync(paths.factsFile)).toBe(false);
+    await expect(field.record(REQUIRED)).rejects.toMatchObject({
+      status: 403,
+      code: "DENY_IS_TERMINAL",
+    });
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
   });
 
   it("keeps RE types out of core schema and migrations", async () => {
