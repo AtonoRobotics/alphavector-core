@@ -49,3 +49,5 @@ One persistent Linux computer per tenant. Agents share the disk. Desktops are pe
 ## Development
 
 Run install, then test, then build. Node 20. Vitest. Actions workflow under .github/workflows.
+
+Host packages the real desktop needs (GitHub-hosted runners install these in CI): `xvfb`, `x11-xserver-utils` (`xsetroot`), `x11-utils` (`xmessage`), `x11vnc`, `scrot`. `npm run prepare:image` only fetches the Alpine minirootfs.
