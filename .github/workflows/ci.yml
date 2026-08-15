@@ -16,6 +16,7 @@ jobs:
         with:
           path: images
           key: alpine-minirootfs-3.20.3
+      - run: sudo apt-get update && sudo apt-get install -y xvfb x11-apps x11vnc scrot
       - run: npm install
       - run: npm run prepare:image
       - run: npm test

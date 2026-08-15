@@ -71,9 +71,14 @@ describe("computer primitive", () => {
 
     const shotA = await host.screenshot("tenant-a", "researcher");
     const shotB = await host.screenshot("tenant-a", "writer");
-    expect(shotA.bytes.toString("utf8")).toContain("researcher");
-    expect(shotB.bytes.toString("utf8")).toContain("writer");
+    expect(shotA.mime).toBe("image/png");
+    expect(shotB.mime).toBe("image/png");
+    expect(shotA.bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(shotB.bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
     expect(shotA.bytes.equals(shotB.bytes)).toBe(false);
+    expect(deskA.viewerPath).toContain("viewer.html");
+    expect(deskB.viewerPath).toContain("viewer.html");
+    expect(deskA.vncPort).not.toBe(deskB.vncPort);
   });
 
   it("image update keeps files on disk", async () => {
@@ -129,5 +134,10 @@ describe("computer primitive", () => {
     const session = await host.architectAttach("tenant-a", "writer");
     expect(session.agentId).toBe("writer");
     expect(session.desktopPath).toContain("writer");
+    expect(session.viewerPath).toContain("viewer.html");
+    expect(session.vncPort).toBeGreaterThan(0);
+    const html = await (await import("node:fs/promises")).readFile(session.viewerPath, "utf8");
+    expect(html).toContain("Architect attach");
+    expect(html).toContain("writer");
   });
 });

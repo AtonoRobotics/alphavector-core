@@ -20,7 +20,9 @@ import {
   readImageId,
   stampImage,
 } from "./image.js";
+import { captureDesktopPng, ensureRealDesktop, stopDesktop } from "./desktop.js";
 import { assertSafeRelPath, computerRoot } from "./paths.js";
+import { readJsonFile, writeJsonAtomic } from "../persist/json-file.js";
 import type {
   ComputerDriver,
   ComputerImage,
@@ -80,15 +82,21 @@ export class NamespaceComputerDriver implements ComputerDriver {
     }
     await writeFile(path.join(paths.disk, ".tenant"), tenantId, "utf8");
     this.running.add(tenantId);
+    this.writeRuntime(tenantId, "running");
     return this.snapshot(tenantId);
   }
 
   async stop(tenantId: string): Promise<void> {
+    await this.stopDesktops(tenantId);
     this.running.delete(tenantId);
+    this.writeRuntime(tenantId, "stopped");
   }
 
   async status(tenantId: string): Promise<TenantComputer | undefined> {
-    if (!this.running.has(tenantId)) return undefined;
+    if (!(await this.isRunning(tenantId))) {
+      const persisted = this.readRuntime(tenantId);
+      if (!persisted) return undefined;
+    }
     return this.snapshot(tenantId);
   }
 
@@ -107,7 +115,10 @@ export class NamespaceComputerDriver implements ComputerDriver {
     await rm(paths.rootfs, { recursive: true, force: true });
     await rename(next, paths.rootfs);
     await writeFile(paths.imageIdFile, image.imageId, "utf8");
-    if (wasRunning) this.running.add(tenantId);
+    if (wasRunning) {
+      this.running.add(tenantId);
+      this.writeRuntime(tenantId, "running");
+    }
     return this.snapshot(tenantId);
   }
 
@@ -123,13 +134,8 @@ export class NamespaceComputerDriver implements ComputerDriver {
   async ensureDesktop(tenantId: string, agentId: string): Promise<DesktopSession> {
     await this.requireRunning(tenantId);
     const paths = computerRoot(this.baseDir, tenantId);
-    const display = this.displayFor(agentId);
     const desktopPath = path.join(paths.desktops, agentId);
-    await mkdir(desktopPath, { recursive: true });
-    const screen = `AV desktop agent=${agentId} display=:${display} tenant=${tenantId}\n`;
-    await writeFile(path.join(desktopPath, "screen.txt"), screen, "utf8");
-    await writeFile(path.join(desktopPath, "display"), `:${display}\n`, "utf8");
-    return { tenantId, agentId, display, desktopPath };
+    return ensureRealDesktop({ tenantId, agentId, desktopPath });
   }
 
   async shell(req: ShellRequest): Promise<ShellResult> {
@@ -202,8 +208,8 @@ export class NamespaceComputerDriver implements ComputerDriver {
 
   async screenshot(tenantId: string, agentId: string): Promise<Screenshot> {
     const desktop = await this.ensureDesktop(tenantId, agentId);
-    const bytes = await readFile(path.join(desktop.desktopPath, "screen.txt"));
-    return { agentId, display: desktop.display, mime: "text/plain", bytes };
+    const bytes = await captureDesktopPng(desktop.display, desktop.desktopPath);
+    return { agentId, display: desktop.display, mime: "image/png", bytes };
   }
 
   async writeSecret(tenantId: string, name: string, value: string): Promise<void> {
@@ -233,7 +239,7 @@ export class NamespaceComputerDriver implements ComputerDriver {
     }
     return {
       tenantId,
-      status: this.running.has(tenantId) ? "running" : "stopped",
+      status: this.readRuntime(tenantId)?.status === "running" || this.running.has(tenantId) ? "running" : "stopped",
       imageId,
       diskPath: paths.disk,
       sharedFilesystem: true,
@@ -241,8 +247,36 @@ export class NamespaceComputerDriver implements ComputerDriver {
   }
 
   private async requireRunning(tenantId: string): Promise<void> {
-    if (!this.running.has(tenantId)) {
+    if (!(await this.isRunning(tenantId))) {
       throw new ComputerError("COMPUTER_NOT_RUNNING", `Computer for tenant ${tenantId} is not running`);
+    }
+  }
+
+  private async isRunning(tenantId: string): Promise<boolean> {
+    if (this.running.has(tenantId)) return true;
+    const persisted = this.readRuntime(tenantId);
+    if (persisted?.status === "running") {
+      this.running.add(tenantId);
+      return true;
+    }
+    return false;
+  }
+
+  private writeRuntime(tenantId: string, status: "running" | "stopped"): void {
+    const paths = computerRoot(this.baseDir, tenantId);
+    writeJsonAtomic(path.join(paths.root, "runtime.json"), { tenantId, status, updatedAt: new Date().toISOString() });
+  }
+
+  private readRuntime(tenantId: string): { status: "running" | "stopped" } | undefined {
+    const paths = computerRoot(this.baseDir, tenantId);
+    return readJsonFile<{ status: "running" | "stopped" }>(path.join(paths.root, "runtime.json"));
+  }
+
+  private async stopDesktops(tenantId: string): Promise<void> {
+    const paths = computerRoot(this.baseDir, tenantId);
+    const agents = await listDesktopAgents(this.baseDir, tenantId);
+    for (const agentId of agents) {
+      await stopDesktop(path.join(paths.desktops, agentId));
     }
   }
 

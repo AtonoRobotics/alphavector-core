@@ -20,6 +20,8 @@ export interface DesktopSession {
   agentId: string;
   display: number;
   desktopPath: string;
+  viewerPath: string;
+  vncPort: number;
 }
 
 export interface ShellRequest {

@@ -3,7 +3,9 @@ import { promisify } from "node:util";
 import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import path from "node:path";
 import { ComputerError } from "../errors.js";
+import { captureDesktopPng, ensureRealDesktop, stopDesktop } from "./desktop.js";
 import { assertSafeRelPath, computerRoot } from "./paths.js";
+import { writeJsonAtomic } from "../persist/json-file.js";
 import type {
   ComputerDriver,
   ComputerImage,
@@ -52,11 +54,31 @@ export class DockerComputerDriver implements ComputerDriver {
       "infinity",
     ]);
     await writeFile(path.join(paths.disk, ".tenant"), tenantId, "utf8");
+    writeJsonAtomic(path.join(paths.root, "runtime.json"), {
+      tenantId,
+      status: "running",
+      updatedAt: new Date().toISOString(),
+    });
     return this.snapshot(tenantId, "running");
   }
 
   async stop(tenantId: string): Promise<void> {
+    const paths = computerRoot(this.baseDir, tenantId);
+    try {
+      const { readdir } = await import("node:fs/promises");
+      const agents = await readdir(paths.desktops);
+      for (const agentId of agents) {
+        await stopDesktop(path.join(paths.desktops, agentId));
+      }
+    } catch {
+      // no desktops
+    }
     await this.removeIfExists(this.containerName(tenantId));
+    writeJsonAtomic(path.join(paths.root, "runtime.json"), {
+      tenantId,
+      status: "stopped",
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   async status(tenantId: string): Promise<TenantComputer | undefined> {
@@ -100,18 +122,8 @@ export class DockerComputerDriver implements ComputerDriver {
   }
 
   async ensureDesktop(tenantId: string, agentId: string): Promise<DesktopSession> {
-    const display = 10 + (agentId.length % 90);
-    await this.exec(tenantId, [
-      "sh",
-      "-c",
-      `mkdir -p /home/desktops/${agentId} && printf 'AV desktop agent=%s display=:%s\\n' '${agentId}' '${display}' > /home/desktops/${agentId}/screen.txt`,
-    ]);
-    return {
-      tenantId,
-      agentId,
-      display,
-      desktopPath: `/home/desktops/${agentId}`,
-    };
+    const desktopPath = path.join(computerRoot(this.baseDir, tenantId).desktops, agentId);
+    return ensureRealDesktop({ tenantId, agentId, desktopPath });
   }
 
   async shell(req: ShellRequest): Promise<ShellResult> {
@@ -142,13 +154,8 @@ export class DockerComputerDriver implements ComputerDriver {
 
   async screenshot(tenantId: string, agentId: string): Promise<Screenshot> {
     const desktop = await this.ensureDesktop(tenantId, agentId);
-    const file = await this.readFile(tenantId, `desktops/${agentId}/screen.txt`);
-    return {
-      agentId,
-      display: desktop.display,
-      mime: "text/plain",
-      bytes: Buffer.from(file.content ?? "", "utf8"),
-    };
+    const bytes = await captureDesktopPng(desktop.display, desktop.desktopPath);
+    return { agentId, display: desktop.display, mime: "image/png", bytes };
   }
 
   async writeSecret(tenantId: string, name: string, value: string): Promise<void> {

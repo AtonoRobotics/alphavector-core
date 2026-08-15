@@ -44,7 +44,7 @@ Assumed autonomy for routine communications or recovery is excluded (EXC-008). S
 
 ## Computer
 
-One persistent Linux computer per tenant. Agents share the disk. Desktops are per-agent. Image update keeps files.
+One persistent Linux computer per tenant. Agents share the disk. Desktops are per-agent X sessions (viewable, Architect can attach, PNG screenshot). Image update keeps files. Pack registry and running-state are durable.
 
 ## Development
 
