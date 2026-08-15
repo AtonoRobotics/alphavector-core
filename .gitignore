@@ -6,6 +6,8 @@ coverage/
 images/*.tar.gz
 *.log
 .DS_Store
+xcuserdata/
+*.xcuserstate
 .env
 .env.*
 !.env.example

@@ -17,7 +17,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "prepare:image": "node scripts/prepare-image.mjs",
-    "lint": "tsc -p tsconfig.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "field:serve": "node dist/cli.js field-serve",
+    "field:client": "node dist/cli.js field-client"
   },
   "license": "UNLICENSED",
   "devDependencies": {

@@ -46,6 +46,18 @@ Assumed autonomy for routine communications or recovery is excluded (EXC-008). S
 
 One persistent Linux computer per tenant. Agents share the disk. Desktops are per-agent X sessions (viewable, Architect can attach, PNG screenshot). Image update keeps files. Pack registry and running-state are durable. Host secrets are not on the bind-mounted disk; leftover `.secrets` is covered so `cat` from the agent shell fails. Pack egress is a network namespace / filter, not a JSON file. Graduation needs independent evidence and eval. EXC-008 assumed autonomy is denied.
 
+## Field surface
+
+Required field path over HTTP. Architect/admin is not callable on `/field`. Field users cannot configure models, prompts, Temporal, or tools.
+
+```bash
+npm run build
+npm run field:serve
+# Open the printed URL (Linux field client) and complete one journey + one card.
+# Same API: clients/field-ios (SwiftUI, DEC-009). This host cannot compile iOS.
+AV_FIELD_TOKEN=<printed-token> npm run field:client -- --complete-demo
+```
+
 ## Development
 
 Run install, then test, then build. Node 20. Vitest. Actions workflow under .github/workflows.
