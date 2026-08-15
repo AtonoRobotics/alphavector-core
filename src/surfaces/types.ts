@@ -1,4 +1,5 @@
 import type { AgentRecord } from "../agents/types.js";
+import type { FieldCardView } from "../auth/types.js";
 import type { Journey } from "../data/types.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
 
@@ -6,10 +7,11 @@ export type SurfaceName = "field" | "ask" | "architect";
 
 export interface FieldHome {
   journeys: Array<{ id: string; kind: string; objective: string }>;
-  inbox: Array<{ cardId: string; purpose: string; subject: string; channel: string }>;
+  inbox: FieldCardView[];
   outboundLog: Array<{ actionId: string; summary: string }>;
   killSwitch: { available: true };
   architectControls: never[];
+  journeyKinds: Array<{ id: string; label: string }>;
 }
 
 export interface AskRequest {

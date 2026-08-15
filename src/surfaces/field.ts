@@ -1,5 +1,6 @@
 import { AvError, SurfaceViolationError } from "../errors.js";
 import type { CardBook } from "../auth/cards.js";
+import type { AuthorizationCard, FieldCardView } from "../auth/types.js";
 import type { DurableStore } from "../data/store.js";
 import type { Journey } from "../data/types.js";
 import type { EffectExecutor } from "../effects/executor.js";
@@ -35,23 +36,47 @@ export class FieldSurface {
     private readonly askSurface: AskSurface = new AskSurface(store),
   ) {}
 
-  home(tenantId: string): FieldHome {
+  home(tenantId: string, pack?: LoadedPack): FieldHome {
     return {
       journeys: this.store.journeys
         .filter((j) => j.tenantId === tenantId)
         .map((j) => ({ id: j.id, kind: j.journeyKind, objective: j.objective })),
-      inbox: this.cards.fieldInbox(tenantId).map((c) => ({
-        cardId: c.cardId,
-        purpose: c.purpose,
-        subject: c.subject,
-        channel: c.channel,
-      })),
+      inbox: this.cards.fieldInbox(tenantId),
       outboundLog: this.store.actions
         .filter((a) => a.tenantId === tenantId && a.status === "executed")
         .map((a) => ({ actionId: a.id, summary: `${a.actionClass} ${a.channel ?? ""}`.trim() })),
       killSwitch: { available: true },
       architectControls: [],
+      journeyKinds: pack
+        ? pack.binding.journeyKinds.map((k) => ({ id: k.id, label: k.label }))
+        : [],
     };
+  }
+
+  listCards(tenantId: string): FieldCardView[] {
+    return this.cards.fieldInbox(tenantId);
+  }
+
+  /**
+   * Field-only card resolve. Architect/admin cards cannot be touched here.
+   * Approve-then-execute is composed by the caller (progress with approvedCardId).
+   */
+  resolveCard(input: {
+    actor: PrincipalKind;
+    cardId: string;
+    decision: "approved" | "denied";
+  }): AuthorizationCard {
+    this.assertActorIsField(input.actor);
+    const card = this.cards.get(input.cardId);
+    if (!card) throw new AvError("CARD_NOT_FOUND", `Unknown card ${input.cardId}`);
+    if (card.kind !== "owner_instance") {
+      throw new SurfaceViolationError("Architect/admin cards SHALL NOT appear on the field surface");
+    }
+    return this.cards.resolve({
+      cardId: input.cardId,
+      decision: input.decision,
+      actor: "field",
+    });
   }
 
   /**

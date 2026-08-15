@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AV Dev Field</title>
+  <!-- FIELD_DEFAULTS -->
+  <style>
+    :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; background: #f4f1ea; color: #1c1916; }
+    main { max-width: 42rem; margin: 0 auto; padding: 1.5rem; }
+    h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
+    p.lead { margin: 0 0 1.25rem; color: #5c564e; }
+    section { background: #fff; border: 1px solid #d9d2c5; border-radius: 12px; padding: 1rem; margin-bottom: 1rem; }
+    h2 { font-size: 1rem; margin: 0 0 0.75rem; }
+    label { display: block; font-size: 0.8rem; margin: 0.5rem 0 0.2rem; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #c9c1b3; border-radius: 8px; }
+    button { margin: 0.4rem 0.4rem 0 0; padding: 0.45rem 0.8rem; border: 0; border-radius: 8px; background: #1c1916; color: #fff; cursor: pointer; }
+    button.secondary { background: #6b645b; }
+    button.deny { background: #8a2b2b; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li { border-top: 1px solid #eee; padding: 0.6rem 0; }
+    li:first-child { border-top: 0; }
+    .meta { color: #5c564e; font-size: 0.85rem; }
+    #status { min-height: 1.2rem; font-size: 0.9rem; margin-bottom: 1rem; }
+    #status.err { color: #8a2b2b; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>AV Dev Field</h1>
+    <p class="lead">Required field path. Start a pack journey, then approve or deny a card. Architect is not on this surface.</p>
+    <div id="status"></div>
+
+    <section>
+      <h2>Start a journey</h2>
+      <label for="kind">Journey</label>
+      <select id="kind"></select>
+      <label for="objective">Objective</label>
+      <input id="objective" value="Work this buyer journey" />
+      <button id="start" type="button">Start journey</button>
+    </section>
+
+    <section>
+      <h2>Open journeys</h2>
+      <ul id="journeys"></ul>
+    </section>
+
+    <section>
+      <h2>Cards</h2>
+      <ul id="cards"></ul>
+    </section>
+
+    <section>
+      <h2>Ask (optional)</h2>
+      <label for="ask-text">Text</label>
+      <input id="ask-text" value="please read the file" />
+      <label for="ask-class">Action class</label>
+      <input id="ask-class" value="read" />
+      <button id="ask" type="button" class="secondary">Send Ask</button>
+    </section>
+
+    <section>
+      <h2>Outbound</h2>
+      <ul id="outbound"></ul>
+    </section>
+  </main>
+  <script>
+    const defaults = window.FIELD_DEFAULTS || {};
+    const token = defaults.token || "";
+    const statusEl = document.getElementById("status");
+
+    async function api(method, path, body) {
+      const res = await fetch(path, {
+        method,
+        headers: {
+          authorization: "Bearer " + token,
+          ...(body ? { "content-type": "application/json" } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(data.message || res.statusText);
+        err.code = data.error;
+        err.cardId = data.cardId;
+        throw err;
+      }
+      return data;
+    }
+
+    function setStatus(text, err) {
+      statusEl.textContent = text;
+      statusEl.className = err ? "err" : "";
+    }
+
+    function renderList(id, rows, html) {
+      const el = document.getElementById(id);
+      el.innerHTML = rows.length ? rows.map(html).join("") : "<li class='meta'>None</li>";
+    }
+
+    async function refresh() {
+      const home = await api("GET", "/field/home");
+      const kind = document.getElementById("kind");
+      if (!kind.options.length) {
+        for (const k of home.journeyKinds) {
+          const opt = document.createElement("option");
+          opt.value = k.id;
+          opt.textContent = k.label;
+          if (k.id === "buyer") opt.selected = true;
+          kind.appendChild(opt);
+        }
+      }
+      renderList("journeys", home.journeys, (j) =>
+        `<li><strong>${j.kind}</strong> — ${j.objective}<div class="meta">${j.id}</div>
+         <button type="button" data-progress="${j.id}" data-kind="${j.kind}">Request follow-up</button></li>`
+      );
+      renderList("cards", home.inbox, (c) =>
+        `<li><strong>${c.purpose}</strong> · ${c.subject} · ${c.channel}
+         <div class="meta">${c.cardId}</div>
+         <button type="button" data-approve="${c.cardId}">${c.approve}</button>
+         <button type="button" class="deny" data-deny="${c.cardId}">${c.deny}</button></li>`
+      );
+      renderList("outbound", home.outboundLog, (o) =>
+        `<li>${o.summary}<div class="meta">${o.actionId}</div></li>`
+      );
+    }
+
+    document.getElementById("start").onclick = async () => {
+      try {
+        const journey = await api("POST", "/field/journeys", {
+          journeyKind: document.getElementById("kind").value,
+          objective: document.getElementById("objective").value,
+        });
+        setStatus("Started " + journey.journeyKind + " " + journey.id);
+        await refresh();
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    };
+
+    document.getElementById("ask").onclick = async () => {
+      try {
+        await api("POST", "/field/ask", {
+          text: document.getElementById("ask-text").value,
+          actionClass: document.getElementById("ask-class").value,
+        });
+        setStatus("Ask accepted");
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    };
+
+    document.body.addEventListener("click", async (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      try {
+        if (t.dataset.progress) {
+          try {
+            await api("POST", "/field/journeys/" + t.dataset.progress + "/progress", {
+              actionClass: "communicate",
+              channel: "email",
+              purpose: "follow-up",
+              subject: t.dataset.kind,
+            });
+            setStatus("Progressed without a card");
+          } catch (err) {
+            if (err.cardId) setStatus("Card required: " + err.cardId);
+            else throw err;
+          }
+          await refresh();
+        }
+        if (t.dataset.approve) {
+          const out = await api("POST", "/field/cards/" + t.dataset.approve + "/approve");
+          setStatus(out.effect && out.effect.executed ? "Approved and executed" : "Approved");
+          await refresh();
+        }
+        if (t.dataset.deny) {
+          await api("POST", "/field/cards/" + t.dataset.deny + "/deny");
+          setStatus("Denied (terminal)");
+          await refresh();
+        }
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    });
+
+    refresh().catch((err) => setStatus(err.message, true));
+  </script>
+</body>
+</html>

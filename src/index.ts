@@ -10,3 +10,4 @@ export * from "./computer/index.js";
 export * from "./data/index.js";
 export * from "./surfaces/index.js";
 export * from "./effects/index.js";
+export * from "./http/index.js";
