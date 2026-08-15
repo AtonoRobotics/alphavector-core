@@ -41,6 +41,12 @@ export class GrantBook {
       throw new SurfaceViolationError("Only Architect plus counsel/eval may write grants");
     }
     if (input.state === "authorized") {
+      if (input.evidenceIds.length === 0 || input.evalIds.length === 0) {
+        throw new AvError(
+          "SURPRISE_GRADUATION",
+          "Surprise graduation is a product failure: independent outcome evidence and eval are required",
+        );
+      }
       if (!input.fieldNotice || !input.fieldNotice.trim()) {
         throw new AvError(
           "SURPRISE_GRADUATION",

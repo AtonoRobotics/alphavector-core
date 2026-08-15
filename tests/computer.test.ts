@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ComputerHost } from "../src/computer/host.js";
+import { ComputerUseWorker } from "../src/computer/worker.js";
 import { extractRootfs, stampImage } from "../src/computer/image.js";
 import { REPO_ROOT } from "./helpers.js";
 
@@ -121,6 +122,28 @@ describe("computer primitive", () => {
     await host.start("tenant-a");
     await host.writeSecret("tenant-a", "password", "hunter2");
     await expect(host.readFile("tenant-a", ".secrets/password")).rejects.toThrow(/never sees passwords/);
+  });
+
+  it("agent shell does not receive a DISPLAY; desktop drive is delegated", async () => {
+    const host = await boot();
+    await host.start("tenant-a");
+    const env = await host.shell({
+      tenantId: "tenant-a",
+      agentId: "researcher",
+      argv: ["sh", "-c", "printenv DISPLAY || echo unset"],
+    });
+    expect(env.exitCode).toBe(0);
+    expect(env.stdout.trim()).toBe("unset");
+    const worker = new ComputerUseWorker(host);
+    const job = await worker.enqueue({
+      tenantId: "tenant-a",
+      agentId: "researcher",
+      goal: "open the login page",
+    });
+    expect(job.status).toBe("running");
+    const paused = await worker.pauseForArchitect(job.id);
+    expect(paused.status).toBe("paused_for_architect");
+    expect(paused.note).toMatch(/Architect takeover/);
   });
 
   it("architect can attach to an agent desktop", async () => {

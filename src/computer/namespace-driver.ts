@@ -265,7 +265,7 @@ export class NamespaceComputerDriver implements ComputerDriver {
       `set -euo pipefail`,
       `mount --bind ${shQuote(paths.disk)} ${shQuote(path.join(paths.rootfs, "home"))}`,
       `hostname ${shQuote(`av-${req.tenantId.slice(0, 12)}`)}`,
-      `export DISPLAY=:${this.displayFor(req.agentId)}`,
+      `unset DISPLAY XAUTHORITY`,
       `export AV_AGENT=${shQuote(req.agentId)}`,
       `unshare --root ${shQuote(paths.rootfs)} --wd ${cwd} /bin/sh -c ${shQuote(quoted)}`,
     ].join("\n");

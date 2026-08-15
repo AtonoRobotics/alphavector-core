@@ -88,6 +88,13 @@ export class ComputerHost {
   setEgress(tenantId: string, egress: EgressBinding): Promise<void> {
     return this.driver.setEgress(tenantId, egress);
   }
+
+  /**
+   * Packs may bind egress. Packs do not own the computer primitive.
+   */
+  bindPackEgress(tenantId: string, allowHosts: string[]): Promise<void> {
+    return this.setEgress(tenantId, { allowHosts });
+  }
 }
 
 async function dockerAvailable(): Promise<boolean> {

@@ -1,7 +1,10 @@
 import { AvError, SurfaceViolationError } from "../errors.js";
+import { EvalRunner } from "../eval/runner.js";
 import { newId, nowIso } from "../ids.js";
 import type { LoadedPack, PrincipalKind, RoleBinding } from "../packs/types.js";
 import type { AgentEnvelope, AgentRecord } from "./types.js";
+
+const evalRunner = new EvalRunner();
 
 /**
  * Unbounded agent runtime (DEC-027). No product-constant N.
@@ -14,6 +17,10 @@ export class AgentRuntime {
   instantiateFromPack(pack: LoadedPack, actor: PrincipalKind): AgentRecord[] {
     if (actor === "field") {
       throw new SurfaceViolationError("Field user cannot spawn agents or author the org chart");
+    }
+    const evalResult = evalRunner.run(pack);
+    if (!evalResult.passed) {
+      throw new AvError("AGENT_EVAL_FAILED", `Every agent still passes eval: ${evalResult.failed.join("; ")}`);
     }
     const created = pack.binding.roles.map((role) => this.fromRole(pack.tenantId, role));
     this.agents.set(pack.tenantId, created);

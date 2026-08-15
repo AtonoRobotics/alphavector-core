@@ -4,6 +4,7 @@ import { Orchestrator } from "./agents/orchestrator.js";
 import { AgentRuntime } from "./agents/runtime.js";
 import { CardBook } from "./auth/cards.js";
 import { ComputerHost, type ComputerHostOptions } from "./computer/host.js";
+import { ComputerUseWorker } from "./computer/worker.js";
 import { ConnectorBook } from "./connectors/primitive.js";
 import { DurableStore } from "./data/store.js";
 import { EffectExecutor } from "./effects/executor.js";
@@ -40,6 +41,7 @@ export class AlphaVectorCore {
   readonly eval = new EvalRunner();
   readonly connectors = new ConnectorBook();
   computer!: ComputerHost;
+  worker!: ComputerUseWorker;
 
   constructor(anchors: TrustAnchors) {
     this.packs = new PackLoader(new MemoryPackRegistry(), anchors);
@@ -51,6 +53,7 @@ export class AlphaVectorCore {
   static async boot(opts: KernelOptions): Promise<AlphaVectorCore> {
     const core = new AlphaVectorCore(opts.anchors);
     core.computer = await ComputerHost.create(opts.computer);
+    core.worker = new ComputerUseWorker(core.computer);
     return core;
   }
 }

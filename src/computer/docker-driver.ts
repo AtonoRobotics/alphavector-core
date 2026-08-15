@@ -100,7 +100,7 @@ export class DockerComputerDriver implements ComputerDriver {
   }
 
   async ensureDesktop(tenantId: string, agentId: string): Promise<DesktopSession> {
-    const display = 10 + (agentId.length % 90);
+    const display = displayFor(agentId);
     await this.exec(tenantId, [
       "sh",
       "-c",
@@ -212,4 +212,10 @@ export class DockerComputerDriver implements ComputerDriver {
       sharedFilesystem: true,
     };
   }
+}
+
+function displayFor(agentId: string): number {
+  let n = 10;
+  for (let i = 0; i < agentId.length; i += 1) n = (n + agentId.charCodeAt(i) * (i + 1)) % 90;
+  return 10 + n;
 }
