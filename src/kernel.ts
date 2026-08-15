@@ -3,6 +3,7 @@ import { MemoryTiers } from "./agents/memory.js";
 import { Orchestrator } from "./agents/orchestrator.js";
 import { AgentRuntime } from "./agents/runtime.js";
 import { CardBook } from "./auth/cards.js";
+import { FieldTokenBook } from "./auth/field-tokens.js";
 import { ComputerHost, type ComputerHostOptions } from "./computer/host.js";
 import { ConnectorBook } from "./connectors/primitive.js";
 import { DurableStore } from "./data/store.js";
@@ -33,6 +34,7 @@ export class AlphaVectorCore {
   readonly orchestrator = new Orchestrator();
   readonly grants = new GrantBook();
   readonly cards: CardBook;
+  readonly fieldTokens: FieldTokenBook;
   readonly store = new DurableStore();
   readonly gateway = new PolicyGateway();
   readonly effects: EffectExecutor;
@@ -51,6 +53,7 @@ export class AlphaVectorCore {
     );
     this.agents = new AgentRuntime(stateDir);
     this.cards = new CardBook(computerBaseDir);
+    this.fieldTokens = new FieldTokenBook(computerBaseDir);
     this.effects = new EffectExecutor(this.gateway, this.grants, this.cards, this.store);
     this.journeys = new JourneyRuntime(this.store);
     this.ask = new AskSurface(this.store);

@@ -8,7 +8,7 @@ import { AuthorizationRequiredError, AvError, SurfaceViolationError } from "../e
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
 import { fieldLinuxPagePath } from "./field-boot.js";
-import type { FieldAskBody, FieldProgressBody, FieldStartBody, FieldTokens } from "./types.js";
+import type { FieldAskBody, FieldProgressBody, FieldStartBody } from "./types.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -24,7 +24,8 @@ export interface FieldHttpServerOptions {
   core: AlphaVectorCore;
   pack: LoadedPack;
   tenantId: string;
-  tokens: FieldTokens;
+  /** Issued field secret for the Linux page. Must already be stored on the token book. */
+  pageToken?: string;
   pagePath?: string;
 }
 
@@ -300,20 +301,22 @@ export class FieldHttpServer {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) return undefined;
     const token = header.slice("Bearer ".length).trim();
-    const { tokens } = this.opts;
-    if (token === tokens.field) return "field";
-    if (token === tokens.architect) return "architect";
-    if (tokens.counselEval && token === tokens.counselEval) return "counsel_eval";
-    return undefined;
+    if (!token) return undefined;
+    return this.opts.core.fieldTokens.lookup(token, this.opts.tenantId);
   }
 
   private async servePage(res: ServerResponse): Promise<void> {
     const pagePath = this.opts.pagePath ?? fieldLinuxPagePath();
     const raw = await readFile(pagePath, "utf8");
+    const pageToken = this.opts.pageToken;
+    const issued =
+      pageToken && this.opts.core.fieldTokens.lookup(pageToken, this.opts.tenantId) === "field"
+        ? pageToken
+        : "";
     const injected = raw.replace(
       "<!-- FIELD_DEFAULTS -->",
       `<script>window.FIELD_DEFAULTS=${JSON.stringify({
-        token: this.opts.tokens.field,
+        token: issued,
         surface: "field",
       })}</script>`,
     );
@@ -339,7 +342,7 @@ export class FieldHttpServer {
           ? 404
           : err.code === "POLICY_DENIED" || err.code === "DENY_IS_TERMINAL"
             ? 403
-            : err.code === "CARD_STORE_CORRUPT"
+            : err.code === "CARD_STORE_CORRUPT" || err.code === "TOKEN_STORE_CORRUPT"
               ? 500
               : 400;
       this.json(res, status, { error: err.code, message: err.message });

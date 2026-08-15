@@ -29,19 +29,22 @@ async function rePack(tenantId = "t1") {
   return loaded.loaded;
 }
 
-async function liveDurable(tenantId: string, computerBaseDir: string) {
+async function liveDurable(
+  tenantId: string,
+  computerBaseDir: string,
+  issued?: { field: string },
+) {
   const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir });
-  const tokens = {
-    field: `field-${tenantId}`,
-    architect: `architect-${tenantId}`,
-  };
-  const server = new FieldHttpServer({ core, pack, tenantId, tokens });
+  const fieldToken =
+    issued?.field ?? core.fieldTokens.issue({ tenantId, principal: "field", actor: "architect" }).token;
+  const server = new FieldHttpServer({ core, pack, tenantId, pageToken: fieldToken });
   servers.push(server);
   const { url } = await server.listen(0, "127.0.0.1");
   return {
     server,
     url,
-    field: new FieldClient(url, tokens.field),
+    fieldToken,
+    field: new FieldClient(url, fieldToken),
     core,
     pack,
   };
@@ -107,7 +110,7 @@ describe("durable pending cards on tenant computer disk", () => {
     expect(inbox[0]!.cardId).toBe(cardId);
     await first.server.close();
 
-    const second = await liveDurable("restart", dir);
+    const second = await liveDurable("restart", dir, { field: first.fieldToken });
     const again = await second.field.cards();
     expect(again).toHaveLength(1);
     expect(again[0]!.cardId).toBe(cardId);

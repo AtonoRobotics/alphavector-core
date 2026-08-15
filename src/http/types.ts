@@ -2,12 +2,6 @@ import type { FieldCardView } from "../auth/types.js";
 import type { Journey } from "../data/types.js";
 import type { FieldHome, FieldProgressResult } from "../surfaces/types.js";
 
-export interface FieldTokens {
-  field: string;
-  architect: string;
-  counselEval?: string;
-}
-
 export interface FieldProgressBody {
   note?: string;
   actionClass?: string;

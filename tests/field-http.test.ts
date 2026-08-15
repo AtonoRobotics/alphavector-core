@@ -18,17 +18,21 @@ afterEach(async () => {
 
 async function liveField(tenantId = "t1") {
   const { core, pack } = await bootFieldCore(tenantId);
-  const tokens = {
-    field: `field-${tenantId}`,
-    architect: `architect-${tenantId}`,
-    counselEval: `counsel-${tenantId}`,
-  };
-  const server = new FieldHttpServer({ core, pack, tenantId, tokens });
+  const fieldIssued = core.fieldTokens.issue({ tenantId, principal: "field", actor: "architect" });
+  const architectIssued = core.fieldTokens.issue({
+    tenantId,
+    principal: "architect",
+    actor: "bootstrap",
+  });
+  const tokens = { field: fieldIssued.token, architect: architectIssued.token };
+  const server = new FieldHttpServer({ core, pack, tenantId, pageToken: tokens.field });
   servers.push(server);
   const { url } = await server.listen(0, "127.0.0.1");
   return {
     url,
+    tenantId,
     tokens,
+    fieldIssued,
     field: new FieldClient(url, tokens.field),
     architect: new FieldClient(url, tokens.architect),
     core,
@@ -82,6 +86,49 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     });
   });
 
+  it("denies missing, unknown, and demo field tokens", async () => {
+    const { url, tenantId, field } = await liveField("deny");
+    const start = { journeyKind: "buyer", objective: "Work this buyer journey" };
+    for (const headers of [
+      {},
+      { authorization: "Bearer " },
+      { authorization: "Bearer field-dev-token" },
+      { authorization: `Bearer field-${tenantId}` },
+      { authorization: "Bearer not-issued" },
+    ]) {
+      const res = await fetch(`${url}/field/journeys`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(start),
+      });
+      expect(res.status).toBe(401);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBe("UNAUTHORIZED");
+    }
+    const journey = await field.start("buyer", "Work this buyer journey");
+    expect(journey.journeyKind).toBe("buyer");
+  });
+
+  it("denies a revoked issued token and does not invent a session", async () => {
+    const { url, tenantId, fieldIssued, core, field } = await liveField("revoke");
+    const journey = await field.start("buyer", "Work this buyer journey");
+    expect(journey.status).toBe("open");
+    core.fieldTokens.revoke({ tenantId, tokenId: fieldIssued.tokenId, actor: "architect" });
+    const res = await fetch(`${url}/field/journeys`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${fieldIssued.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ journeyKind: "buyer", objective: "Revoked must not start" }),
+    });
+    expect(res.status).toBe(401);
+    await expect(field.start("buyer", "Revoked must not start")).rejects.toMatchObject({
+      status: 401,
+      code: "UNAUTHORIZED",
+    });
+  });
+
   it("rejects Architect credentials on field start", async () => {
     const { architect, field } = await liveField("authz");
     await expect(architect.start("buyer", "Architect must not use this path")).rejects.toBeInstanceOf(
@@ -112,7 +159,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
   });
 
   it("serves a Linux-openable field client that can complete a journey and a card", async () => {
-    const { url, field } = await liveField("linux");
+    const { url, field, tokens, tenantId } = await liveField("linux");
     const page = await fetch(url);
     expect(page.headers.get("content-type")).toMatch(/text\/html/);
     const html = await page.text();
@@ -120,6 +167,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/data-approve/);
     expect(html).toMatch(/\/field\/journeys/);
     expect(html).toMatch(/\/field\/cards/);
+    expect(html).toContain(tokens.field);
+    expect(html).not.toContain("field-dev-token");
+    expect(html).not.toContain(`field-${tenantId}`);
     expect(html).not.toMatch(/architectControls|pick a model|edit prompt|inspect temporal|configure tool/i);
     expect(html).not.toMatch(/Desk|Shape|Director|Play|Plant|HIL|Thor|Mission Control/);
 

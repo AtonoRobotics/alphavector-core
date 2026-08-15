@@ -15,7 +15,7 @@ struct HomeView: View {
         NavigationStack {
             List {
                 Section("Session") {
-                    TextField("Field token", text: $token)
+                    TextField("Issued field token", text: $token)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Button("Load home") { Task { await refresh() } }
