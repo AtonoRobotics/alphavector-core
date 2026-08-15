@@ -7,7 +7,7 @@ import type { PackBinding } from "../src/packs/types.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Pinned AtonoRobotics/alphavector-re commit for the first RE slice fixture. */
-export const ALPHAVECTOR_RE_PIN_SHA = "9acf9ce47976b9bbd74a189f6fdc8cbb8940e841";
+export const ALPHAVECTOR_RE_PIN_SHA = "fc7e34e385743c7a6d0adcf9109bf5aa0c5a9230";
 
 export async function loadGenericUnsigned(): Promise<Omit<PackBinding, "signatures">> {
   const raw = JSON.parse(

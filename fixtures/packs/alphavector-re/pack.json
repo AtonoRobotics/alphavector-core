@@ -242,7 +242,8 @@
         "id": "j-allow-comm-email",
         "when": {
           "actionClass": "communicate",
-          "channel": "email"
+          "channel": "email",
+          "purpose": "follow-up"
         },
         "decision": "allow",
         "reason": "Email permitted with consent"
@@ -251,7 +252,8 @@
         "id": "j-allow-comm-sms",
         "when": {
           "actionClass": "communicate",
-          "channel": "sms"
+          "channel": "sms",
+          "purpose": "follow-up"
         },
         "decision": "allow",
         "reason": "Text permitted with consent"
@@ -518,6 +520,54 @@
           "channel": "email"
         },
         "expect": "allow"
+      },
+      {
+        "id": "fx-sms-ok",
+        "description": "Consented SMS allow",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "follow-up",
+          "channel": "sms"
+        },
+        "expect": "allow"
+      },
+      {
+        "id": "fx-email-unknown-purpose",
+        "description": "Channel-only email with unknown purpose must fail closed",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "unknown-purpose",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-sms-unknown-purpose",
+        "description": "Channel-only SMS with unknown purpose must fail closed",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "unknown-purpose",
+          "channel": "sms"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-email-missing-purpose",
+        "description": "Channel-only email with missing purpose must fail closed",
+        "input": {
+          "actionClass": "communicate",
+          "channel": "email"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-sms-missing-purpose",
+        "description": "Channel-only SMS with missing purpose must fail closed",
+        "input": {
+          "actionClass": "communicate",
+          "channel": "sms"
+        },
+        "expect": "deny"
       },
       {
         "id": "fx-read-ok",
