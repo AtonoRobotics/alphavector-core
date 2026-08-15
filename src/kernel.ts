@@ -37,7 +37,7 @@ export class AlphaVectorCore {
   readonly gateway = new PolicyGateway();
   readonly effects: EffectExecutor;
   readonly field: FieldSurface;
-  readonly ask = new AskSurface();
+  readonly ask: AskSurface;
   readonly architect = new ArchitectSurface();
   readonly journeys: JourneyRuntime;
   readonly eval = new EvalRunner();
@@ -51,8 +51,16 @@ export class AlphaVectorCore {
     );
     this.agents = new AgentRuntime(stateDir);
     this.effects = new EffectExecutor(this.gateway, this.grants, this.cards, this.store);
-    this.field = new FieldSurface(this.cards, this.store, this.grants);
     this.journeys = new JourneyRuntime(this.store);
+    this.ask = new AskSurface(this.store);
+    this.field = new FieldSurface(
+      this.cards,
+      this.store,
+      this.grants,
+      this.journeys,
+      this.effects,
+      this.ask,
+    );
   }
 
   static async boot(opts: KernelOptions): Promise<AlphaVectorCore> {
