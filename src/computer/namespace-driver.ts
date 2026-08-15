@@ -21,6 +21,7 @@ import {
   stampImage,
 } from "./image.js";
 import { captureDesktopPng, ensureRealDesktop, stopDesktop } from "./desktop.js";
+import { applyTenantNet, netnsExists, planTenantNet, teardownTenantNet } from "./egress.js";
 import { assertSafeRelPath, computerRoot } from "./paths.js";
 import { readJsonFile, writeJsonAtomic } from "../persist/json-file.js";
 import type {
@@ -72,7 +73,9 @@ export class NamespaceComputerDriver implements ComputerDriver {
     await mkdir(paths.disk, { recursive: true });
     await mkdir(paths.desktops, { recursive: true });
     await mkdir(paths.secrets, { recursive: true });
+    await mkdir(paths.secretOverlay, { recursive: true });
     await chmod(paths.secrets, 0o700);
+    await this.hydrateEgress(tenantId);
     const template = await this.prepareTemplate();
     try {
       await readFile(paths.imageIdFile, "utf8");
@@ -88,6 +91,7 @@ export class NamespaceComputerDriver implements ComputerDriver {
 
   async stop(tenantId: string): Promise<void> {
     await this.stopDesktops(tenantId);
+    await teardownTenantNet(planTenantNet(this.baseDir, tenantId));
     this.running.delete(tenantId);
     this.writeRuntime(tenantId, "stopped");
   }
@@ -118,6 +122,7 @@ export class NamespaceComputerDriver implements ComputerDriver {
     if (wasRunning) {
       this.running.add(tenantId);
       this.writeRuntime(tenantId, "running");
+      await this.hydrateEgress(tenantId);
     }
     return this.snapshot(tenantId);
   }
@@ -128,6 +133,7 @@ export class NamespaceComputerDriver implements ComputerDriver {
     await cp(snapshotDir, paths.disk, { recursive: true });
     await mkdir(paths.desktops, { recursive: true });
     await mkdir(paths.secrets, { recursive: true });
+    await mkdir(paths.secretOverlay, { recursive: true });
     return this.snapshot(tenantId);
   }
 
@@ -143,32 +149,43 @@ export class NamespaceComputerDriver implements ComputerDriver {
     const paths = computerRoot(this.baseDir, req.tenantId);
     await this.ensureDesktop(req.tenantId, req.agentId);
     const script = this.wrapCommand(req);
+    const netns = await this.ensureEgressNet(req.tenantId);
+    const unshareArgs = [
+      "--map-root-user",
+      "--mount",
+      "--uts",
+      "--pid",
+      "--fork",
+      "--kill-child",
+      ...(netns ? [] : ["--net"]),
+      "/bin/bash",
+      "-c",
+      script,
+    ];
     try {
-      const { stdout, stderr } = await execFileAsync(
-        "unshare",
-        [
-          "--map-root-user",
-          "--mount",
-          "--uts",
-          "--pid",
-          "--fork",
-          "--kill-child",
-          "/bin/bash",
-          "-c",
-          script,
-        ],
-        {
-          cwd: paths.disk,
-          timeout: 30_000,
-          maxBuffer: 2_000_000,
-          env: {
-            PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
-            HOME: "/home",
-            AV_TENANT: req.tenantId,
-            AV_AGENT: req.agentId,
-          },
-        },
-      );
+      const { stdout, stderr } = netns
+        ? await execFileAsync("sudo", ["-n", "ip", "netns", "exec", netns, "unshare", ...unshareArgs], {
+            cwd: paths.disk,
+            timeout: 30_000,
+            maxBuffer: 2_000_000,
+            env: {
+              PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
+              HOME: "/home",
+              AV_TENANT: req.tenantId,
+              AV_AGENT: req.agentId,
+            },
+          })
+        : await execFileAsync("unshare", unshareArgs, {
+            cwd: paths.disk,
+            timeout: 30_000,
+            maxBuffer: 2_000_000,
+            env: {
+              PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
+              HOME: "/home",
+              AV_TENANT: req.tenantId,
+              AV_AGENT: req.agentId,
+            },
+          });
       return { exitCode: 0, stdout, stderr };
     } catch (err) {
       const e = err as { code?: number; stdout?: string; stderr?: string; message?: string };
@@ -215,6 +232,7 @@ export class NamespaceComputerDriver implements ComputerDriver {
   async writeSecret(tenantId: string, name: string, value: string): Promise<void> {
     const paths = computerRoot(this.baseDir, tenantId);
     await mkdir(paths.secrets, { recursive: true });
+    await chmod(paths.secrets, 0o700);
     const dest = path.join(paths.secrets, path.basename(name));
     await writeFile(dest, value, { mode: 0o600 });
   }
@@ -226,7 +244,13 @@ export class NamespaceComputerDriver implements ComputerDriver {
   async setEgress(tenantId: string, egress: EgressBinding): Promise<void> {
     this.egress.set(tenantId, egress);
     const paths = computerRoot(this.baseDir, tenantId);
-    await writeFile(path.join(paths.disk, ".egress.json"), JSON.stringify(egress), "utf8");
+    writeJsonAtomic(paths.egressFile, egress);
+    const plan = planTenantNet(this.baseDir, tenantId);
+    if (egress.allowHosts.length === 0) {
+      await teardownTenantNet(plan);
+      return;
+    }
+    await applyTenantNet(plan, egress.allowHosts);
   }
 
   private async snapshot(tenantId: string): Promise<TenantComputer> {
@@ -295,14 +319,44 @@ export class NamespaceComputerDriver implements ComputerDriver {
     const paths = computerRoot(this.baseDir, req.tenantId);
     const quoted = req.argv.map(shQuote).join(" ");
     const cwd = req.cwd ? shQuote(req.cwd) : "/home";
+    const homeInRoot = path.join(paths.rootfs, "home");
+    const secretsInRoot = path.join(homeInRoot, ".secrets");
     return [
       `set -euo pipefail`,
-      `mount --bind ${shQuote(paths.disk)} ${shQuote(path.join(paths.rootfs, "home"))}`,
+      `mkdir -p ${shQuote(homeInRoot)} ${shQuote(paths.secretOverlay)}`,
+      `mount --bind ${shQuote(paths.disk)} ${shQuote(homeInRoot)}`,
+      `mkdir -p ${shQuote(secretsInRoot)}`,
+      `mount --bind ${shQuote(paths.secretOverlay)} ${shQuote(secretsInRoot)}`,
       `hostname ${shQuote(`av-${req.tenantId.slice(0, 12)}`)}`,
       `export DISPLAY=:${this.displayFor(req.agentId)}`,
       `export AV_AGENT=${shQuote(req.agentId)}`,
       `unshare --root ${shQuote(paths.rootfs)} --wd ${cwd} /bin/sh -c ${shQuote(quoted)}`,
     ].join("\n");
+  }
+
+  private lookupEgress(tenantId: string): EgressBinding | undefined {
+    const cached = this.egress.get(tenantId);
+    if (cached) return cached;
+    const paths = computerRoot(this.baseDir, tenantId);
+    const persisted = readJsonFile<EgressBinding>(paths.egressFile);
+    if (persisted) this.egress.set(tenantId, persisted);
+    return persisted;
+  }
+
+  private async hydrateEgress(tenantId: string): Promise<void> {
+    const binding = this.lookupEgress(tenantId);
+    if (!binding || binding.allowHosts.length === 0) return;
+    await applyTenantNet(planTenantNet(this.baseDir, tenantId), binding.allowHosts);
+  }
+
+  private async ensureEgressNet(tenantId: string): Promise<string | undefined> {
+    const binding = this.lookupEgress(tenantId);
+    if (!binding || binding.allowHosts.length === 0) return undefined;
+    const plan = planTenantNet(this.baseDir, tenantId);
+    if (!(await netnsExists(plan.netns))) {
+      await applyTenantNet(plan, binding.allowHosts);
+    }
+    return plan.netns;
   }
 }
 

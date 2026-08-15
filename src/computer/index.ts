@@ -4,3 +4,4 @@ export * from "./namespace-driver.js";
 export * from "./docker-driver.js";
 export * from "./image.js";
 export * from "./desktop.js";
+export * from "./egress.js";

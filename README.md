@@ -44,7 +44,7 @@ Assumed autonomy for routine communications or recovery is excluded (EXC-008). S
 
 ## Computer
 
-One persistent Linux computer per tenant. Agents share the disk. Desktops are per-agent X sessions (viewable, Architect can attach, PNG screenshot). Image update keeps files. Pack registry and running-state are durable.
+One persistent Linux computer per tenant. Agents share the disk. Desktops are per-agent X sessions (viewable, Architect can attach, PNG screenshot). Image update keeps files. Pack registry and running-state are durable. Host secrets are not on the bind-mounted disk and are not readable from the agent shell. Pack egress bindings are enforced in the computer network namespace; a JSON file is not the wall.
 
 ## Development
 

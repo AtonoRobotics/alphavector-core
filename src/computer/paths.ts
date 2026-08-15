@@ -8,8 +8,11 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     disk: path.join(root, "disk"),
     rootfs: path.join(root, "rootfs"),
     desktops: path.join(root, "disk", "desktops"),
-    secrets: path.join(root, "disk", ".secrets"),
+    // Secrets live beside the disk, never inside the bind-mounted /home.
+    secrets: path.join(root, "secrets"),
+    secretOverlay: path.join(root, "secret-overlay"),
     imageIdFile: path.join(root, "image-id"),
+    egressFile: path.join(root, "egress.json"),
   };
 }
 

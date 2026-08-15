@@ -4,7 +4,9 @@ export interface ComputerPaths {
   rootfs: string;
   desktops: string;
   secrets: string;
+  secretOverlay: string;
   imageIdFile: string;
+  egressFile: string;
 }
 
 export interface TenantComputer {
