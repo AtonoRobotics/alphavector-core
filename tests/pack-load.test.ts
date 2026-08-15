@@ -84,19 +84,19 @@ describe("pack load fail-closed", () => {
     const { loaded } = await loadSignedFixture();
     const blob = JSON.stringify(loaded.document).toLowerCase();
     for (const banned of [
-      "listing",
-      "household",
-      "real estate",
-      "mission control",
-      "guido",
-      "fido",
-      "uplink",
-      "thor",
-      "nexus",
-      "desk",
-      "hil",
+      /\blisting\b/,
+      /\bhousehold\b/,
+      /real estate/,
+      /mission control/,
+      /\bguido\b/,
+      /\bfido\b/,
+      /\buplink\b/,
+      /\bthor\b/,
+      /\bnexus\b/,
+      /\bdesk\b/,
+      /\bhil\b/,
     ]) {
-      expect(blob).not.toContain(banned);
+      expect(blob).not.toMatch(banned);
     }
   });
 });

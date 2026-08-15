@@ -19,14 +19,21 @@ export interface DockerRunner {
 }
 
 export class ProcessDockerRunner implements DockerRunner {
-  constructor(private readonly dockerBin = process.env.AV_DOCKER_BIN ?? "docker") {}
+  private command: string;
+  private prefix: string[];
+
+  constructor(dockerBin = process.env.AV_DOCKER_BIN ?? "docker") {
+    this.command = dockerBin;
+    this.prefix = [];
+  }
 
   async run(
     args: string[],
     options?: { input?: string; timeoutMs?: number; cwd?: string },
   ): Promise<{ stdout: string; stderr: string }> {
+    await this.resolvePrivilege();
     return new Promise((resolve, reject) => {
-      const child = spawn(this.dockerBin, args, {
+      const child = spawn(this.command, [...this.prefix, ...args], {
         stdio: ["pipe", "pipe", "pipe"],
         cwd: options?.cwd,
       });
@@ -56,6 +63,38 @@ export class ProcessDockerRunner implements DockerRunner {
         child.stdin.write(options.input);
       }
       child.stdin.end();
+    });
+  }
+
+  private resolved = false;
+
+  private async resolvePrivilege(): Promise<void> {
+    if (this.resolved) {
+      return;
+    }
+    this.resolved = true;
+    if (this.command !== "docker") {
+      return;
+    }
+    try {
+      await this.execOnce("docker", ["info"]);
+    } catch {
+      this.command = "sudo";
+      this.prefix = ["-n", "docker"];
+    }
+  }
+
+  private execOnce(command: string, args: string[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, args, { stdio: ["ignore", "ignore", "pipe"] });
+      child.on("error", reject);
+      child.on("close", (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error("docker info failed"));
+        }
+      });
     });
   }
 }

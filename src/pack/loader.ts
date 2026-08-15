@@ -35,17 +35,21 @@ export class PackLoader {
       );
     }
 
+    const signatures = (request.document as { signatures?: { pack?: { signature?: string }; owner?: { signature?: string } } })
+      .signatures;
+    if (!signatures || typeof signatures !== "object" || !signatures.pack?.signature) {
+      throw new PackLoadError("PACK_UNSIGNED", "Unsigned pack refused.");
+    }
+    if (!signatures.owner?.signature) {
+      throw new PackLoadError("PACK_OWNER_UNSIGNED", "Owner signature is missing.");
+    }
+
     const parsed = packDocumentSchema.safeParse(request.document);
     if (!parsed.success) {
       throw new PackLoadError("PACK_INCOMPLETE", `Pack failed schema validation: ${parsed.error.message}`);
     }
 
     const document: PackDocument = parsed.data;
-    const signatures = (request.document as { signatures?: unknown }).signatures;
-    if (!signatures || typeof signatures !== "object") {
-      throw new PackLoadError("PACK_UNSIGNED", "Unsigned pack refused.");
-    }
-
     verifyPackSignatures(document);
 
     const loaded: LoadedPack = {

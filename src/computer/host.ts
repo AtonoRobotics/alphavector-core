@@ -210,12 +210,12 @@ export class ComputerHost {
   async updateImage(tenantId: string, nextVersion: string, egress: EgressBinding): Promise<ImageUpdateResult> {
     const previous = this.requireComputer(tenantId);
     const samplePath = "/tenant/home/.av-persist-check";
-    let sample = "";
-    try {
-      const existing = await this.readFile(tenantId, samplePath);
-      sample = existing.content ?? "";
-    } catch {
-      sample = `persist-${tenantId}-${Date.now()}`;
+    const existing = await this.readFile(tenantId, samplePath);
+    const sample =
+      existing.exists && existing.content
+        ? existing.content
+        : `persist-${tenantId}-${Date.now()}`;
+    if (!existing.exists || existing.content !== sample) {
       await this.writeTenantFile(tenantId, samplePath, sample);
     }
     const nextImage = await this.ensureImage(nextVersion);

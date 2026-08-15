@@ -17,10 +17,11 @@ if [[ -S "/tmp/.X11-unix/X${display}" ]]; then
   exit 0
 fi
 
-# Distinct root color per display so screenshots differ across agent desktops.
+# Distinct solid color per display. Fluxbox is told not to overwrite it.
 r=$((16 + (display * 37) % 200))
 g=$((32 + (display * 53) % 180))
 b=$((64 + (display * 19) % 160))
+color=$(printf '#%02x%02x%02x' "$r" "$g" "$b")
 
 Xvfb ":${display}" -screen 0 "${width}x${height}x24" -ac -nolisten tcp >"$log" 2>&1 &
 for _ in $(seq 1 50); do
@@ -30,9 +31,21 @@ for _ in $(seq 1 50); do
   sleep 0.1
 done
 
-DISPLAY=":${display}" XAUTHORITY="$auth" xsetroot -solid "rgb:${r}/${g}/${b}"
-DISPLAY=":${display}" XAUTHORITY="$auth" fluxbox >/tmp/av-desktops/flux-${display}.log 2>&1 &
+export DISPLAY=":${display}"
+export XAUTHORITY="$auth"
+xsetroot -solid "$color"
+
+fb_dir="/tmp/av-desktops/fb-${display}"
+mkdir -p "$fb_dir"
+cat > "${fb_dir}/init" <<EOF
+session.screen0.rootCommand: xsetroot -solid ${color}
+session.screen0.toolbar.visible: false
+EOF
+fluxbox -display ":${display}" -rc "${fb_dir}/init" >/tmp/av-desktops/flux-${display}.log 2>&1 &
+sleep 0.2
+xsetroot -solid "$color"
 DISPLAY=":${display}" XAUTHORITY="$auth" x11vnc -display ":${display}" -rfbport $((5900 + display)) -forever -shared -nopw -localhost >/tmp/av-desktops/vnc-${display}.log 2>&1 &
 
 printf '%s\n' "$display" > "/tenant/state/desktops/${agent_id}/display"
-echo "{\"display\":${display},\"agentId\":\"${agent_id}\",\"status\":\"started\"}"
+printf '%s\n' "$color" > "/tenant/state/desktops/${agent_id}/color"
+echo "{\"display\":${display},\"agentId\":\"${agent_id}\",\"status\":\"started\",\"color\":\"${color}\"}"
