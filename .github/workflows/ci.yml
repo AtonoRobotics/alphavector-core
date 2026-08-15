@@ -16,7 +16,9 @@ jobs:
         with:
           path: images
           key: alpine-minirootfs-3.20.3
-      - run: sudo apt-get update && sudo apt-get install -y xvfb x11-apps x11vnc scrot iptables iproute2
+      # Host X tools the per-agent desktop already assumes (not the Alpine image).
+      # xsetroot is x11-xserver-utils; xmessage is x11-utils on ubuntu-latest.
+      - run: sudo apt-get update && sudo apt-get install -y xvfb x11-xserver-utils x11-utils x11-apps x11vnc scrot iptables iproute2
       - run: npm install
       - run: npm run prepare:image
       - run: npm test
