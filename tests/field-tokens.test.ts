@@ -54,7 +54,12 @@ describe("tenant-issued field tokens on computer disk", () => {
   it("stores a hashed token beside secrets and cards, not inside disk/", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-ftok-"));
     const book = new FieldTokenBook(dir);
-    const issued = book.issue({ tenantId: "t1", principal: "field", actor: "architect" });
+    const architect = book.issue({ tenantId: "t1", principal: "architect" });
+    const issued = book.issue({
+      tenantId: "t1",
+      principal: "field",
+      presented: architect.token,
+    });
     const paths = computerRoot(dir, "t1");
     expect(paths.fieldTokensFile).toBe(path.join(dir, "tenants", "t1", "field-tokens.json"));
     expect(existsSync(paths.fieldTokensFile)).toBe(true);
@@ -73,9 +78,8 @@ describe("tenant-issued field tokens on computer disk", () => {
   it("refuses field users issuing tokens and missing store invents no session", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-ftok-miss-"));
     const book = new FieldTokenBook(dir);
-    expect(() => book.issue({ tenantId: "t1", principal: "field", actor: "field" })).toThrow(
-      SurfaceViolationError,
-    );
+    expect(() => book.issue({ tenantId: "t1", principal: "field" })).toThrow(SurfaceViolationError);
+    expect(() => book.issue({ tenantId: "t1", principal: "field" })).toThrow(/Shell is not Architect/);
     expect(book.lookup("field-dev-token", "t1")).toBeUndefined();
     expect(existsSync(computerRoot(dir, "t1").fieldTokensFile)).toBe(false);
 
@@ -228,6 +232,7 @@ describe("tenant-issued field tokens on computer disk", () => {
     expect(cli).not.toMatch(/pageToken/);
     expect(cli).toMatch(/architectIssueFieldToken/);
     expect(cli).toMatch(/architectRevokeFieldToken/);
+    expect(cli).toMatch(/last Architect credential cannot be revoked/);
     expect(cli).toMatch(/--architect-token/);
     expect(cli).toMatch(/AV_ARCHITECT_TOKEN/);
     expect(cli).toMatch(/startFieldServe/);
@@ -343,9 +348,15 @@ describe("Architect credential required to issue and revoke", () => {
     ).toThrow(/Unknown or revoked Architect credential/);
 
     const first = bootstrapArchitect(dir, "t1");
+    const second = architectIssueFieldToken({
+      tenantId: "t1",
+      principal: "architect",
+      computerBaseDir: dir,
+      architectToken: first.token,
+    });
     architectRevokeFieldToken({
       tenantId: "t1",
-      tokenId: first.tokenId,
+      tokenId: second.tokenId,
       computerBaseDir: dir,
       architectToken: first.token,
     });
@@ -354,13 +365,63 @@ describe("Architect credential required to issue and revoke", () => {
         tenantId: "t1",
         principal: "field",
         computerBaseDir: dir,
-        architectToken: first.token,
+        architectToken: second.token,
       }),
     ).toThrow(/Unknown or revoked Architect credential/);
-    expect(new FieldTokenBook(dir).hasActiveArchitect("t1")).toBe(false);
+    expect(new FieldTokenBook(dir).hasActiveArchitect("t1")).toBe(true);
+    expect(new FieldTokenBook(dir).lookup(first.token, "t1")).toBe("architect");
+    expect(() => bootstrapArchitect(dir, "t1")).toThrow(/Shell is not Architect/);
+  });
 
-    const recovered = bootstrapArchitect(dir, "t1");
-    expect(recovered.principal).toBe("architect");
-    expect(recovered.token).not.toBe(first.token);
+  it("does not treat a caller-supplied actor string as a principal", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-arch-spoof-"));
+    const book = new FieldTokenBook(dir);
+    const spoofArchitect = { tenantId: "t1", principal: "field" as const, actor: "architect" };
+    const spoofBootstrap = { tenantId: "t1", principal: "architect" as const, actor: "bootstrap" };
+
+    expect(() => book.issue(spoofArchitect)).toThrow(SurfaceViolationError);
+    expect(() => book.issue(spoofArchitect)).toThrow(/Shell is not Architect/);
+    expect(existsSync(computerRoot(dir, "t1").fieldTokensFile)).toBe(false);
+
+    const first = book.issue({ tenantId: "t1", principal: "architect" });
+    expect(() => book.issue(spoofArchitect)).toThrow(SurfaceViolationError);
+    expect(() => book.issue(spoofBootstrap)).toThrow(SurfaceViolationError);
+    expect(() => book.issue(spoofBootstrap)).toThrow(/Shell is not Architect/);
+    expect(() => book.issue({ tenantId: "t1", principal: "architect" })).toThrow(/Shell is not Architect/);
+    expect(book.lookup(first.token, "t1")).toBe("architect");
+    expect(book.hasActiveArchitect("t1")).toBe(true);
+  });
+
+  it("denies revoking the last Architect and does not reopen bootstrap", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-arch-last-"));
+    const first = bootstrapArchitect(dir, "t1");
+    expect(() =>
+      architectRevokeFieldToken({
+        tenantId: "t1",
+        tokenId: first.tokenId,
+        computerBaseDir: dir,
+        architectToken: first.token,
+      }),
+    ).toThrow(SurfaceViolationError);
+    expect(() =>
+      architectRevokeFieldToken({
+        tenantId: "t1",
+        tokenId: first.tokenId,
+        computerBaseDir: dir,
+        architectToken: first.token,
+      }),
+    ).toThrow(/last Architect credential cannot be revoked/);
+
+    const book = new FieldTokenBook(dir);
+    expect(() =>
+      book.revoke({ tenantId: "t1", tokenId: first.tokenId, presented: first.token }),
+    ).toThrow(/last Architect credential cannot be revoked/);
+    expect(book.hasActiveArchitect("t1")).toBe(true);
+    expect(book.lookup(first.token, "t1")).toBe("architect");
+    expect(() => bootstrapArchitect(dir, "t1")).toThrow(/Shell is not Architect/);
+    expect(() => book.issue({ tenantId: "t1", principal: "architect" })).toThrow(/Shell is not Architect/);
+
+    const field = issueFieldAsArchitect(dir, "t1", first.token);
+    expect(new FieldTokenBook(dir).lookup(field.token, "t1")).toBe("field");
   });
 });

@@ -55,6 +55,7 @@ export interface ArchitectCardView extends AuthorizationCard {
 }
 
 export type FieldTokenStatus = "active" | "revoked";
+/** Derived from a presented credential or bootstrap-once. Not a trusted caller string. */
 export type FieldTokenIssuer = "architect" | "bootstrap";
 
 /** Hashed tenant-issued credential. Secret is returned once at issue and never stored. */

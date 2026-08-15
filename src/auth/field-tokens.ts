@@ -10,6 +10,10 @@ import type { FieldTokenIssuer, FieldTokenRecord, IssuedFieldToken } from "./typ
  * Tenant-issued field and Architect credentials. Optional computerBaseDir persists
  * on the tenant computer core owns — beside secrets/ and cards.json, never inside
  * disk/ and never in a pack.
+ *
+ * Issue and revoke derive the issuer from a presented credential (lookup), not
+ * from a caller-supplied actor string. Empty presented is bootstrap-once of the
+ * first Architect only. The last Architect credential cannot be revoked.
  */
 export class FieldTokenBook {
   private readonly records = new Map<string, FieldTokenRecord>();
@@ -18,13 +22,19 @@ export class FieldTokenBook {
 
   constructor(private readonly computerBaseDir?: string) {}
 
+  /**
+   * Issue a credential. `presented` is a secret looked up on this tenant.
+   * Omit or leave empty only to bootstrap the first Architect. A caller-supplied
+   * actor string is not a principal and cannot authorize issue.
+   */
   issue(input: {
     tenantId: string;
     principal: PrincipalKind;
-    actor: string;
+    presented?: string;
   }): IssuedFieldToken {
-    this.assertIssuer(input.actor);
-    this.ensure(input.tenantId);
+    const issuedBy = this.requireIssuer(input.tenantId, input.presented, {
+      bootstrap: input.principal === "architect",
+    });
     const token = randomBytes(32).toString("base64url");
     const record: FieldTokenRecord = {
       tokenId: newId("ftok"),
@@ -33,7 +43,7 @@ export class FieldTokenBook {
       hash: hashSecret(token),
       status: "active",
       issuedAt: nowIso(),
-      issuedBy: input.actor,
+      issuedBy,
     };
     this.records.set(record.tokenId, record);
     this.persist(input.tenantId);
@@ -45,14 +55,20 @@ export class FieldTokenBook {
     };
   }
 
-  revoke(input: { tenantId: string; tokenId: string; actor: string }): void {
-    this.assertIssuer(input.actor);
-    this.ensure(input.tenantId);
+  /**
+   * Revoke a credential. Requires a presented active Architect secret.
+   * Refuses if the target is the last active Architect. No recovery bootstrap.
+   */
+  revoke(input: { tenantId: string; tokenId: string; presented?: string }): void {
+    this.requireIssuer(input.tenantId, input.presented, { bootstrap: false });
     const record = this.records.get(input.tokenId);
     if (!record || record.tenantId !== input.tenantId) {
       throw new AvError("TOKEN_NOT_FOUND", `Unknown field token ${input.tokenId}`);
     }
     if (record.status === "revoked") return;
+    if (record.principal === "architect" && this.activeArchitectCount(input.tenantId) <= 1) {
+      throw new SurfaceViolationError("The last Architect credential cannot be revoked");
+    }
     this.records.set(record.tokenId, { ...record, status: "revoked", revokedAt: nowIso() });
     this.persist(input.tenantId);
   }
@@ -69,13 +85,41 @@ export class FieldTokenBook {
 
   /** True when this tenant has at least one active Architect credential. */
   hasActiveArchitect(tenantId: string): boolean {
+    return this.activeArchitectCount(tenantId) > 0;
+  }
+
+  private requireIssuer(
+    tenantId: string,
+    presented: string | undefined,
+    opts: { bootstrap: boolean },
+  ): FieldTokenIssuer {
+    const secret = presented?.trim() ? presented.trim() : undefined;
+    if (secret) {
+      const principal = this.lookup(secret, tenantId);
+      if (principal === "architect") return "architect";
+      if (principal === "field") {
+        throw new SurfaceViolationError("A field token cannot issue or revoke");
+      }
+      if (principal) {
+        throw new SurfaceViolationError("Only an Architect credential may issue or revoke");
+      }
+      throw new AvError("UNAUTHORIZED", "Unknown or revoked Architect credential");
+    }
+    if (opts.bootstrap && !this.hasActiveArchitect(tenantId)) {
+      return "bootstrap";
+    }
+    throw new SurfaceViolationError("Shell is not Architect. Present an Architect credential.");
+  }
+
+  private activeArchitectCount(tenantId: string): number {
     this.ensure(tenantId);
+    let count = 0;
     for (const record of this.records.values()) {
       if (record.tenantId === tenantId && record.principal === "architect" && record.status === "active") {
-        return true;
+        count += 1;
       }
     }
-    return false;
+    return count;
   }
 
   private match(secret: string, tenantId: string): FieldTokenRecord | undefined {
@@ -87,12 +131,6 @@ export class FieldTokenBook {
       if (hashesEqual(record.hash, presented)) return record;
     }
     return undefined;
-  }
-
-  private assertIssuer(actor: string): asserts actor is FieldTokenIssuer {
-    if (actor !== "architect" && actor !== "bootstrap") {
-      throw new SurfaceViolationError("Only architect or tenant bootstrap may issue or revoke a field token");
-    }
   }
 
   private ensure(tenantId: string): void {
