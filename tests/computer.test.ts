@@ -67,7 +67,7 @@ describe("computer primitive", () => {
       agentId: "agent-one",
       argv: ["cat", "/etc/os-release"],
     });
-    expect(shell.exitCode).toBe(0);
+    expect(shell.exitCode, shell.stderr).toBe(0);
     expect(shell.stdout.toLowerCase()).toContain("alpine");
   });
 
