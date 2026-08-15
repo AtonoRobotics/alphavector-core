@@ -1,7 +1,7 @@
-Pinned from AtonoRobotics/alphavector-re @ fc7e34e385743c7a6d0adcf9109bf5aa0c5a9230
+Pinned from AtonoRobotics/alphavector-re @ 84f1410e9735882551f3ec3e77dea94aa096bdf2
 
 Source file: fixtures/packs/re/pack.json
-Their PR 1 (purpose bypass closed on communicate channel allows).
+Their PR 2 (REQUIRES / PREFERS / AVOIDS on recordPartyKnowledge; journey and action bindings MAY declare them).
 
 This JSON is pack data (kind strings on generic slots). It is not core schema.
 Person, Household, and Listing are pack kinds, not OS columns or tables.

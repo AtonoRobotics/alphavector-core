@@ -7,7 +7,7 @@ import type { PackBinding } from "../src/packs/types.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** Pinned AtonoRobotics/alphavector-re commit for the first RE slice fixture. */
-export const ALPHAVECTOR_RE_PIN_SHA = "fc7e34e385743c7a6d0adcf9109bf5aa0c5a9230";
+export const ALPHAVECTOR_RE_PIN_SHA = "84f1410e9735882551f3ec3e77dea94aa096bdf2";
 
 export async function loadGenericUnsigned(): Promise<Omit<PackBinding, "signatures">> {
   const raw = JSON.parse(
@@ -57,6 +57,22 @@ export async function signedRePack(): Promise<{
   anchors: TrustAnchors;
 }> {
   const unsigned = await loadReUnsigned();
+  const keys = makeAnchors();
+  return {
+    binding: signPack(unsigned, keys.architectPrivate, keys.counselPrivate),
+    anchors: keys.anchors,
+  };
+}
+
+/** Sign a copy of the pinned RE fixture after attaching generic declarations. */
+export async function signedRePackMutated(
+  mutate: (unsigned: Omit<PackBinding, "signatures">) => void,
+): Promise<{
+  binding: PackBinding;
+  anchors: TrustAnchors;
+}> {
+  const unsigned = await loadReUnsigned();
+  mutate(unsigned);
   const keys = makeAnchors();
   return {
     binding: signPack(unsigned, keys.architectPrivate, keys.counselPrivate),

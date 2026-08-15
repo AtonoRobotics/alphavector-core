@@ -27,6 +27,8 @@ export interface FieldStartInput {
   pack: LoadedPack;
   journeyKind: string;
   objective: string;
+  /** Pack-local condition ids present for declared predicates. */
+  conditions?: readonly string[];
 }
 
 /** Field-only progress. Ask is an optional sidecar; effects go through EffectExecutor. */
@@ -42,11 +44,14 @@ export interface FieldProgressInput {
   approvedCardId?: string;
   ask?: AskRequest;
   note?: string;
+  /** Pack-local condition ids present for declared predicates. */
+  conditions?: readonly string[];
 }
 
 export interface FieldProgressResult {
   journey: Journey;
   effect?: { actionId: string; executed: boolean; policyDecision: string };
+  recordedPrefers: string[];
 }
 
 export interface FieldAskInput extends AskRequest {

@@ -71,6 +71,19 @@ describe("alphavector-re pack load (pinned first slice)", () => {
     expect(active.binding.roles).toHaveLength(binding.roles.length);
   });
 
+  it("binds written REQUIRES PREFERS AVOIDS on generic slots; authored journeys stay id/label", async () => {
+    const unsigned = await loadReUnsigned();
+    expect(unsigned.recordPartyKnowledge.predicates).toEqual(
+      expect.arrayContaining(["REQUIRES", "PREFERS", "AVOIDS"]),
+    );
+    expect(unsigned.recordPartyKnowledge.graphEdgeKinds).toEqual(
+      expect.arrayContaining(["REQUIRES", "PREFERS", "AVOIDS"]),
+    );
+    for (const journey of unsigned.journeyKinds) {
+      expect(Object.keys(journey).sort()).toEqual(["id", "label"]);
+    }
+  });
+
   it("keeps Person/Household/Listing as pack kinds, not core schema columns", async () => {
     const unsigned = await loadReUnsigned();
     expect(unsigned.recordPartyKnowledge.partyKinds).toEqual(

@@ -7,7 +7,7 @@ import { FieldHttpServer } from "../src/http/field-server.js";
 import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
 import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT } from "./helpers.js";
 
-const RE_PIN = "fc7e34e385743c7a6d0adcf9109bf5aa0c5a9230";
+const RE_PIN = "84f1410e9735882551f3ec3e77dea94aa096bdf2";
 const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
@@ -41,7 +41,7 @@ async function liveField(tenantId = "t1") {
 }
 
 describe("field HTTP surface against pinned alphavector-re", () => {
-  it("keeps the RE fixture pin at fc7e34e", () => {
+  it("keeps the RE fixture pin at 84f1410", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
