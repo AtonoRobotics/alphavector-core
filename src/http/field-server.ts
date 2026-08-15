@@ -137,6 +137,7 @@ export class FieldHttpServer {
         pack,
         journeyKind: String(body.journeyKind ?? ""),
         objective: String(body.objective ?? ""),
+        // Claims only — never a write to the tenant fact store.
         conditions: Array.isArray(body.conditions) ? body.conditions.map(String) : undefined,
       });
       this.json(res, 201, journey);
@@ -217,6 +218,7 @@ export class FieldHttpServer {
         ask: body.ask
           ? { tenantId, text: body.ask.text, actionClass: body.ask.actionClass }
           : undefined,
+        // Claims only — never a write to the tenant fact store.
         conditions: Array.isArray(body.conditions) ? body.conditions.map(String) : undefined,
       });
       this.json(res, 200, result);
@@ -332,7 +334,9 @@ export class FieldHttpServer {
               err.code === "DENY_IS_TERMINAL" ||
               err.code === "PREDICATE_CLOSED"
             ? 403
-            : err.code === "CARD_STORE_CORRUPT" || err.code === "TOKEN_STORE_CORRUPT"
+            : err.code === "CARD_STORE_CORRUPT" ||
+                err.code === "TOKEN_STORE_CORRUPT" ||
+                err.code === "FACT_STORE_CORRUPT"
               ? 500
               : 400;
       this.json(res, status, { error: err.code, message: err.message });

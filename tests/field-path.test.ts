@@ -1,12 +1,16 @@
-import { readdir, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentRuntime } from "../src/agents/runtime.js";
 import { CardBook } from "../src/auth/cards.js";
+import { computerRoot } from "../src/computer/paths.js";
 import { DurableStore } from "../src/data/store.js";
 import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
 import { EffectExecutor } from "../src/effects/executor.js";
-import { AuthorizationRequiredError, PolicyDeniedError, SurfaceViolationError } from "../src/errors.js";
+import { AvError, AuthorizationRequiredError, PolicyDeniedError, SurfaceViolationError } from "../src/errors.js";
+import { FactBook } from "../src/facts/book.js";
 import { GrantBook } from "../src/grants/store.js";
 import { JourneyRuntime } from "../src/journeys/runtime.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
@@ -25,7 +29,10 @@ const REQUIRED = "condition.required";
 const PREFERRED = "condition.preferred";
 const AVOIDED = "condition.avoided";
 
-async function reFieldStack(signed?: Awaited<ReturnType<typeof signedRePack>>) {
+async function reFieldStack(
+  signed?: Awaited<ReturnType<typeof signedRePack>>,
+  opts?: { computerBaseDir?: string },
+) {
   const { anchors, binding } = signed ?? (await signedRePack());
   const loader = new PackLoader(new MemoryPackRegistry(), anchors);
   const loaded = loader.load({ tenantId: "t1", binding, actor: "architect" });
@@ -36,9 +43,10 @@ async function reFieldStack(signed?: Awaited<ReturnType<typeof signedRePack>>) {
   const journeys = new JourneyRuntime(store);
   const effects = new EffectExecutor(new PolicyGateway(), grants, cards, store);
   const ask = new AskSurface(store);
-  const field = new FieldSurface(cards, store, grants, journeys, effects, ask);
+  const facts = new FactBook(opts?.computerBaseDir);
+  const field = new FieldSurface(cards, store, grants, journeys, effects, ask, facts);
   const agents = new AgentRuntime().instantiateFromPack(loaded.loaded, "architect");
-  return { pack: loaded.loaded, field, cards, store, grants, agents, ask };
+  return { pack: loaded.loaded, field, cards, store, grants, agents, ask, facts };
 }
 
 describe("required field path against pinned alphavector-re", () => {
@@ -339,14 +347,16 @@ describe("required field path against pinned alphavector-re", () => {
     expect(advanced.recordedPrefers).toEqual([]);
   });
 
-  it("fail-closes start and progress when a declared REQUIRES is missing", async () => {
-    const { pack, field, agents } = await reFieldStack(
+  it("denies a request-only REQUIRES claim and allows only an on-disk fact", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-req-"));
+    const { pack, field, agents, facts } = await reFieldStack(
       await signedRePackMutated((unsigned) => {
         const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
         if (buyer) buyer.REQUIRES = [REQUIRED];
         const read = unsigned.actionClassVerbs.find((v) => v.id === "read");
         if (read) read.REQUIRES = [REQUIRED];
       }),
+      { computerBaseDir: dir },
     );
     expect(() =>
       field.start({
@@ -362,53 +372,73 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        conditions: [REQUIRED],
+      }),
+    ).toThrow(/REQUIRES missing/);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        conditions: [REQUIRED],
       }),
     ).toThrow(/fail closed/);
+
+    const paths = computerRoot(dir, "t1");
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+
+    facts.put("t1", REQUIRED);
+    expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
+    expect(existsSync(paths.factsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    expect(new FactBook(dir).presentIds("t1")).toEqual([REQUIRED]);
 
     const journey = field.start({
       actor: "field",
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
-      conditions: [REQUIRED],
     });
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
-    expect(() =>
-      field.progress({
-        actor: "field",
-        pack,
-        journeyId: journey.id,
-        agent,
-        actionClass: "read",
-      }),
-    ).toThrow(/REQUIRES missing/);
     const advanced = field.progress({
       actor: "field",
       pack,
       journeyId: journey.id,
       agent,
       actionClass: "read",
-      conditions: [REQUIRED],
     });
     expect(advanced.effect?.executed).toBe(true);
   });
 
-  it("fail-closes start and progress when a declared AVOIDS is present", async () => {
-    const { pack, field, agents } = await reFieldStack(
+  it("fail-closes start and progress when an on-disk AVOIDS fact is present", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-avoid-"));
+    const { pack, field, agents, facts } = await reFieldStack(
       await signedRePackMutated((unsigned) => {
         const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
         if (buyer) buyer.AVOIDS = [AVOIDED];
         const read = unsigned.actionClassVerbs.find((v) => v.id === "read");
         if (read) read.AVOIDS = [AVOIDED];
       }),
+      { computerBaseDir: dir },
     );
+    const open = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+      conditions: [AVOIDED],
+    });
+    expect(open.status).toBe("open");
+
+    facts.put("t1", AVOIDED);
     expect(() =>
       field.start({
         actor: "field",
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
-        conditions: [AVOIDED],
       }),
     ).toThrow(/AVOIDS present/);
     expect(() =>
@@ -417,45 +447,31 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
-        conditions: [AVOIDED],
       }),
     ).toThrow(/fail closed/);
 
-    const journey = field.start({
-      actor: "field",
-      pack,
-      journeyKind: "buyer",
-      objective: "Work this buyer journey",
-    });
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
     expect(() =>
       field.progress({
         actor: "field",
         pack,
-        journeyId: journey.id,
+        journeyId: open.id,
         agent,
         actionClass: "read",
-        conditions: [AVOIDED],
       }),
     ).toThrow(/AVOIDS present/);
-    const advanced = field.progress({
-      actor: "field",
-      pack,
-      journeyId: journey.id,
-      agent,
-      actionClass: "read",
-    });
-    expect(advanced.effect?.executed).toBe(true);
   });
 
   it("records PREFERS on the field path and does not fail closed when unmet", async () => {
-    const { pack, field, agents, store } = await reFieldStack(
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-pref-"));
+    const { pack, field, agents, store, facts } = await reFieldStack(
       await signedRePackMutated((unsigned) => {
         const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
         if (buyer) buyer.PREFERS = [PREFERRED];
         const read = unsigned.actionClassVerbs.find((v) => v.id === "read");
         if (read) read.PREFERS = [PREFERRED];
       }),
+      { computerBaseDir: dir },
     );
     const journey = field.start({
       actor: "field",
@@ -478,6 +494,7 @@ describe("required field path against pinned alphavector-re", () => {
       true,
     );
 
+    facts.put("t1", PREFERRED);
     const met = field.progress({
       actor: "field",
       pack,
@@ -488,5 +505,53 @@ describe("required field path against pinned alphavector-re", () => {
     });
     expect(met.effect?.executed).toBe(true);
     expect(met.recordedPrefers).toEqual([PREFERRED]);
+  });
+
+  it("fail-closes on a corrupt fact store and does not invent a fact", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-bad-"));
+    const paths = computerRoot(dir, "t1");
+    await mkdir(path.dirname(paths.factsFile), { recursive: true });
+    await writeFile(paths.factsFile, "{not-json", "utf8");
+    const signed = await signedRePackMutated((unsigned) => {
+      const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
+      if (buyer) buyer.REQUIRES = [REQUIRED];
+    });
+    const { pack, field } = await reFieldStack(signed, { computerBaseDir: dir });
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+      }),
+    ).toThrow(AvError);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        conditions: [REQUIRED],
+      }),
+    ).toThrow(/corrupt/i);
+
+    const guessed = await mkdtemp(path.join(os.tmpdir(), "av-facts-guess-"));
+    const guessPath = computerRoot(guessed, "t1");
+    await mkdir(path.dirname(guessPath.factsFile), { recursive: true });
+    await writeFile(
+      guessPath.factsFile,
+      JSON.stringify({ facts: [{ required: true }] }),
+      "utf8",
+    );
+    const guessedStack = await reFieldStack(signed, { computerBaseDir: guessed });
+    expect(() =>
+      guessedStack.field.start({
+        actor: "field",
+        pack: guessedStack.pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        conditions: [REQUIRED],
+      }),
+    ).toThrow(/corrupt/i);
   });
 });

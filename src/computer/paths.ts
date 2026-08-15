@@ -17,6 +17,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     cardsFile: path.join(root, "cards.json"),
     // Field and Architect credentials. Same reason as secrets and cards.
     fieldTokensFile: path.join(root, "field-tokens.json"),
+    // Predicate facts. Same reason as secrets, cards, and tokens.
+    factsFile: path.join(root, "facts.json"),
   };
 }
 

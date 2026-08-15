@@ -8,7 +8,7 @@ import { generateEd25519, signPack } from "../packs/signing.js";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 export interface BootFieldCoreOptions {
-  /** Tenant computer root core owns. Cards persist beside disk/, not in a pack. */
+  /** Tenant computer root core owns. Cards and facts persist beside disk/, not in a pack. */
   computerBaseDir?: string;
 }
 

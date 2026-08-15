@@ -13,6 +13,7 @@ function listed(values: string[] | undefined): string[] {
 
 /**
  * Honor declared condition lists on a loaded pack binding.
+ * presentConditions is the on-disk tenant fact set, not a request body.
  * REQUIRES fails closed when the required condition is missing.
  * AVOIDS fails closed when the avoided condition is present.
  * PREFERS is recorded, not forced — unmet prefers do not fail closed.

@@ -9,6 +9,7 @@ export interface FieldProgressBody {
   purpose?: string;
   subject?: string;
   ask?: { text: string; actionClass: string };
+  /** Claims only. Does not write the tenant fact store. */
   conditions?: string[];
 }
 
@@ -20,6 +21,7 @@ export interface FieldAskBody {
 export interface FieldStartBody {
   journeyKind: string;
   objective: string;
+  /** Claims only. Does not write the tenant fact store. */
   conditions?: string[];
 }
 

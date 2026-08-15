@@ -11,6 +11,8 @@ export interface ComputerPaths {
   cardsFile: string;
   /** Tenant-issued field and Architect credentials. Beside secrets and cards, never inside disk/. */
   fieldTokensFile: string;
+  /** Generic tenant facts for pack predicates. Beside cards and tokens, never inside disk/. */
+  factsFile: string;
 }
 
 export interface TenantComputer {
