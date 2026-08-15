@@ -1,18 +1,39 @@
 #!/usr/bin/env node
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
 import { FieldClient } from "./http/field-client.js";
-import { bootFieldCore } from "./http/field-boot.js";
-import { FieldHttpServer } from "./http/field-server.js";
+import { startFieldServe } from "./http/field-listen.js";
 import { PRODUCT } from "./identity.js";
 import { AlphaVectorCore } from "./kernel.js";
+import type { PrincipalKind } from "./packs/types.js";
+
+function flag(args: string[], name: string): string | undefined {
+  const i = args.indexOf(name);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+function computerBaseDir(env: NodeJS.ProcessEnv = process.env): string {
+  return env.AV_COMPUTER_DIR ?? path.join(process.cwd(), ".av-computers");
+}
+
+function tenantIdOf(args: string[], env: NodeJS.ProcessEnv = process.env): string {
+  return flag(args, "--tenant") ?? env.AV_TENANT ?? "t1";
+}
+
+function asPrincipal(value: string | undefined): PrincipalKind {
+  if (!value || value === "field" || value === "architect" || value === "counsel_eval") {
+    return (value ?? "field") as PrincipalKind;
+  }
+  throw new Error("principal must be field, architect, or counsel_eval");
+}
 
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd || cmd === "help" || cmd === "--help") {
     console.log(`${PRODUCT.appDisplay} (${PRODUCT.package})`);
     console.log(
-      "Commands: identity | pack-check <file> | computer-start <tenant> | field-serve | field-client",
+      "Commands: identity | pack-check <file> | computer-start <tenant> | architect | field-serve | field-client",
     );
     return;
   }
@@ -46,27 +67,50 @@ async function main(): Promise<void> {
     console.log(JSON.stringify(computer, null, 2));
     return;
   }
+  if (cmd === "architect") {
+    const [sub, ...flags] = rest;
+    if (!sub || sub === "help" || sub === "--help") {
+      console.log("Architect (off the field home screen). Commands: issue-field-token | revoke-field-token");
+      return;
+    }
+    const dir = computerBaseDir();
+    const tenantId = tenantIdOf(flags);
+    if (sub === "issue-field-token") {
+      const issued = architectIssueFieldToken({
+        tenantId,
+        principal: asPrincipal(flag(flags, "--principal")),
+        computerBaseDir: dir,
+      });
+      console.log(JSON.stringify(issued, null, 2));
+      console.log("Present this token to field-serve. Serve does not issue tokens. Secret is shown once.");
+      return;
+    }
+    if (sub === "revoke-field-token") {
+      const tokenId = flag(flags, "--token-id");
+      if (!tokenId) throw new Error("architect revoke-field-token requires --token-id");
+      architectRevokeFieldToken({ tenantId, tokenId, computerBaseDir: dir });
+      console.log(JSON.stringify({ ok: true, tenantId, tokenId }, null, 2));
+      return;
+    }
+    throw new Error("architect commands: issue-field-token | revoke-field-token");
+  }
   if (cmd === "field-serve") {
-    const portFlag = rest.indexOf("--port");
-    const port = portFlag >= 0 ? Number(rest[portFlag + 1]) : Number(process.env.AV_FIELD_PORT ?? 8787);
-    const computerBaseDir = process.env.AV_COMPUTER_DIR ?? path.join(process.cwd(), ".av-computers");
-    const { core, pack, tenantId } = await bootFieldCore(process.env.AV_TENANT ?? "t1", {
-      computerBaseDir,
+    const port = Number(flag(rest, "--port") ?? process.env.AV_FIELD_PORT ?? 8787);
+    const { url } = await startFieldServe({
+      tenantId: tenantIdOf(rest),
+      computerBaseDir: computerBaseDir(),
+      port: Number.isFinite(port) ? port : 8787,
+      host: "127.0.0.1",
     });
-    const issued = core.fieldTokens.issue({ tenantId, principal: "field", actor: "bootstrap" });
-    const server = new FieldHttpServer({ core, pack, tenantId, pageToken: issued.token });
-    const { url } = await server.listen(Number.isFinite(port) ? port : 8787, "127.0.0.1");
     console.log(`${PRODUCT.appDisplay} field surface`);
     console.log(`open ${url}`);
-    console.log(`field token: ${issued.token}`);
+    console.log("Present a field token Architect issued (Authorization, --token, or AV_FIELD_TOKEN). Serve does not issue tokens.");
     console.log("Architect/admin is not callable on /field. Field cannot configure models, prompts, Temporal, or tools.");
     return;
   }
   if (cmd === "field-client") {
-    const baseFlag = rest.indexOf("--base");
-    const tokenFlag = rest.indexOf("--token");
-    const base = (baseFlag >= 0 ? rest[baseFlag + 1] : process.env.AV_FIELD_URL) ?? "http://127.0.0.1:8787";
-    const token = (tokenFlag >= 0 ? rest[tokenFlag + 1] : process.env.AV_FIELD_TOKEN) ?? "";
+    const base = flag(rest, "--base") ?? process.env.AV_FIELD_URL ?? "http://127.0.0.1:8787";
+    const token = flag(rest, "--token") ?? process.env.AV_FIELD_TOKEN ?? "";
     if (!token) throw new Error("field-client requires --token or AV_FIELD_TOKEN");
     const client = new FieldClient(base, token);
     if (rest.includes("--complete-demo")) {

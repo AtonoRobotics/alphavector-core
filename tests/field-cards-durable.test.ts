@@ -37,7 +37,7 @@ async function liveDurable(
   const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir });
   const fieldToken =
     issued?.field ?? core.fieldTokens.issue({ tenantId, principal: "field", actor: "architect" }).token;
-  const server = new FieldHttpServer({ core, pack, tenantId, pageToken: fieldToken });
+  const server = new FieldHttpServer({ core, pack, tenantId });
   servers.push(server);
   const { url } = await server.listen(0, "127.0.0.1");
   return {
