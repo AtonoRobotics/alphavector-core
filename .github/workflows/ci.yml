@@ -16,6 +16,20 @@ jobs:
         with:
           path: images
           key: alpine-minirootfs-3.20.3
+      # Host X tools the per-agent desktop already assumes (not the Alpine image).
+      # xsetroot is x11-xserver-utils; xmessage is x11-utils on ubuntu-latest.
+      - run: sudo apt-get update && sudo apt-get install -y xvfb x11-xserver-utils x11-utils x11-apps x11vnc scrot iptables iproute2
+      # ubuntu-latest (24.04) blocks unprivileged user namespaces by default.
+      # The Alpine/unshare computer needs them; this does not weaken secrets or egress.
+      - name: Allow unprivileged user namespaces
+        run: |
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          unshare --map-root-user --mount --net -- true
+          command -v xsetroot
+          command -v xmessage
+          command -v Xvfb
+          command -v scrot
       - run: npm install
       - run: npm run prepare:image
       - run: npm test

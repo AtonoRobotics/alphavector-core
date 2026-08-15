@@ -3,7 +3,10 @@ import { promisify } from "node:util";
 import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import path from "node:path";
 import { ComputerError } from "../errors.js";
+import { captureDesktopPng, ensureRealDesktop, stopDesktop } from "./desktop.js";
+import { applyDockerAllowlist, planTenantNet } from "./egress.js";
 import { assertSafeRelPath, computerRoot } from "./paths.js";
+import { readJsonFile, writeJsonAtomic } from "../persist/json-file.js";
 import type {
   ComputerDriver,
   ComputerImage,
@@ -37,26 +40,46 @@ export class DockerComputerDriver implements ComputerDriver {
     await mkdir(paths.disk, { recursive: true });
     await mkdir(paths.desktops, { recursive: true });
     await mkdir(paths.secrets, { recursive: true });
+    await mkdir(paths.secretOverlay, { recursive: true });
     await chmod(paths.secrets, 0o700);
     const name = this.containerName(tenantId);
     await this.removeIfExists(name);
-    await execFileAsync("docker", [
-      "run",
-      "-d",
-      "--name",
-      name,
-      "-v",
-      `${paths.disk}:/home`,
-      this.imageName,
-      "sleep",
-      "infinity",
-    ]);
+    const binding = this.lookupEgress(tenantId);
+    await execFileAsync("docker", this.runArgs(name, paths.disk, paths.secretOverlay, this.imageName, binding));
+    if (binding && binding.allowHosts.length > 0) {
+      const ip = await this.containerIp(tenantId);
+      if (!ip) {
+        throw new ComputerError("EGRESS_UNENFORCEABLE", "Pack egress cannot be enforced: docker computer has no address");
+      }
+      await applyDockerAllowlist(ip, binding.allowHosts, planTenantNet(this.baseDir, tenantId).comment);
+    }
     await writeFile(path.join(paths.disk, ".tenant"), tenantId, "utf8");
+    writeJsonAtomic(path.join(paths.root, "runtime.json"), {
+      tenantId,
+      status: "running",
+      updatedAt: new Date().toISOString(),
+    });
     return this.snapshot(tenantId, "running");
   }
 
   async stop(tenantId: string): Promise<void> {
+    const paths = computerRoot(this.baseDir, tenantId);
+    try {
+      const { readdir } = await import("node:fs/promises");
+      const agents = await readdir(paths.desktops);
+      for (const agentId of agents) {
+        await stopDesktop(path.join(paths.desktops, agentId));
+      }
+    } catch {
+      // no desktops
+    }
     await this.removeIfExists(this.containerName(tenantId));
+    await applyDockerAllowlist("0.0.0.0", [], planTenantNet(this.baseDir, tenantId).comment);
+    writeJsonAtomic(path.join(paths.root, "runtime.json"), {
+      tenantId,
+      status: "stopped",
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   async status(tenantId: string): Promise<TenantComputer | undefined> {
@@ -77,17 +100,18 @@ export class DockerComputerDriver implements ComputerDriver {
   async updateImage(tenantId: string, image: ComputerImage): Promise<TenantComputer> {
     const paths = computerRoot(this.baseDir, tenantId);
     await this.stop(tenantId);
-    await execFileAsync("docker", [
-      "run",
-      "-d",
-      "--name",
-      this.containerName(tenantId),
-      "-v",
-      `${paths.disk}:/home`,
-      image.source,
-      "sleep",
-      "infinity",
-    ]);
+    const binding = this.lookupEgress(tenantId);
+    await execFileAsync(
+      "docker",
+      this.runArgs(this.containerName(tenantId), paths.disk, paths.secretOverlay, image.source, binding),
+    );
+    if (binding && binding.allowHosts.length > 0) {
+      const ip = await this.containerIp(tenantId);
+      if (!ip) {
+        throw new ComputerError("EGRESS_UNENFORCEABLE", "Pack egress cannot be enforced: docker computer has no address");
+      }
+      await applyDockerAllowlist(ip, binding.allowHosts, planTenantNet(this.baseDir, tenantId).comment);
+    }
     await writeFile(path.join(paths.root, "image-id"), image.imageId, "utf8");
     return this.snapshot(tenantId, "running");
   }
@@ -100,18 +124,8 @@ export class DockerComputerDriver implements ComputerDriver {
   }
 
   async ensureDesktop(tenantId: string, agentId: string): Promise<DesktopSession> {
-    const display = 10 + (agentId.length % 90);
-    await this.exec(tenantId, [
-      "sh",
-      "-c",
-      `mkdir -p /home/desktops/${agentId} && printf 'AV desktop agent=%s display=:%s\\n' '${agentId}' '${display}' > /home/desktops/${agentId}/screen.txt`,
-    ]);
-    return {
-      tenantId,
-      agentId,
-      display,
-      desktopPath: `/home/desktops/${agentId}`,
-    };
+    const desktopPath = path.join(computerRoot(this.baseDir, tenantId).desktops, agentId);
+    return ensureRealDesktop({ tenantId, agentId, desktopPath });
   }
 
   async shell(req: ShellRequest): Promise<ShellResult> {
@@ -142,17 +156,15 @@ export class DockerComputerDriver implements ComputerDriver {
 
   async screenshot(tenantId: string, agentId: string): Promise<Screenshot> {
     const desktop = await this.ensureDesktop(tenantId, agentId);
-    const file = await this.readFile(tenantId, `desktops/${agentId}/screen.txt`);
-    return {
-      agentId,
-      display: desktop.display,
-      mime: "text/plain",
-      bytes: Buffer.from(file.content ?? "", "utf8"),
-    };
+    const bytes = await captureDesktopPng(desktop.display, desktop.desktopPath);
+    return { agentId, display: desktop.display, mime: "image/png", bytes };
   }
 
   async writeSecret(tenantId: string, name: string, value: string): Promise<void> {
-    const dest = path.join(computerRoot(this.baseDir, tenantId).secrets, path.basename(name));
+    const paths = computerRoot(this.baseDir, tenantId);
+    await mkdir(paths.secrets, { recursive: true });
+    await chmod(paths.secrets, 0o700);
+    const dest = path.join(paths.secrets, path.basename(name));
     await writeFile(dest, value, { mode: 0o600 });
   }
 
@@ -162,10 +174,73 @@ export class DockerComputerDriver implements ComputerDriver {
 
   async setEgress(tenantId: string, egress: EgressBinding): Promise<void> {
     this.egress.set(tenantId, egress);
+    const paths = computerRoot(this.baseDir, tenantId);
+    writeJsonAtomic(paths.egressFile, egress);
+    const comment = planTenantNet(this.baseDir, tenantId).comment;
+    if (egress.allowHosts.length === 0) {
+      await applyDockerAllowlist("0.0.0.0", [], comment);
+      return;
+    }
+    const ip = await this.containerIp(tenantId);
+    if (!ip) {
+      throw new ComputerError(
+        "EGRESS_UNENFORCEABLE",
+        "Pack egress cannot be enforced: docker computer has no address to wall",
+      );
+    }
+    await applyDockerAllowlist(ip, egress.allowHosts, comment);
   }
 
   private containerName(tenantId: string): string {
     return `av-computer-${tenantId}`;
+  }
+
+  private lookupEgress(tenantId: string): EgressBinding | undefined {
+    const cached = this.egress.get(tenantId);
+    if (cached) return cached;
+    const persisted = readJsonFile<EgressBinding>(computerRoot(this.baseDir, tenantId).egressFile);
+    if (persisted) this.egress.set(tenantId, persisted);
+    return persisted;
+  }
+
+  private runArgs(
+    name: string,
+    disk: string,
+    overlay: string,
+    image: string,
+    egress: EgressBinding | undefined,
+  ): string[] {
+    const open = Boolean(egress && egress.allowHosts.length > 0);
+    return [
+      "run",
+      "-d",
+      "--name",
+      name,
+      "--network",
+      open ? "bridge" : "none",
+      "-v",
+      `${disk}:/home`,
+      "-v",
+      `${overlay}:/home/.secrets:ro`,
+      image,
+      "sleep",
+      "infinity",
+    ];
+  }
+
+  private async containerIp(tenantId: string): Promise<string | undefined> {
+    try {
+      const { stdout } = await execFileAsync("docker", [
+        "inspect",
+        "-f",
+        "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+        this.containerName(tenantId),
+      ]);
+      const ip = stdout.trim();
+      return ip || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private async exec(tenantId: string, argv: string[], cwd = "/home"): Promise<ShellResult> {

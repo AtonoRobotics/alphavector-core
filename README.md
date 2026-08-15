@@ -44,8 +44,10 @@ Assumed autonomy for routine communications or recovery is excluded (EXC-008). S
 
 ## Computer
 
-One persistent Linux computer per tenant. Agents share the disk. Desktops are per-agent. Image update keeps files.
+One persistent Linux computer per tenant. Agents share the disk. Desktops are per-agent X sessions (viewable, Architect can attach, PNG screenshot). Image update keeps files. Pack registry and running-state are durable. Host secrets are not on the bind-mounted disk; leftover `.secrets` is covered so `cat` from the agent shell fails. Pack egress is a network namespace / filter, not a JSON file. Graduation needs independent evidence and eval. EXC-008 assumed autonomy is denied.
 
 ## Development
 
 Run install, then test, then build. Node 20. Vitest. Actions workflow under .github/workflows.
+
+Host packages the real desktop needs (GitHub-hosted runners install these in CI): `xvfb`, `x11-xserver-utils` (`xsetroot`), `x11-utils` (`xmessage`), `x11vnc`, `scrot`. `npm run prepare:image` only fetches the Alpine minirootfs.

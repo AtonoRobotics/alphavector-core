@@ -20,7 +20,10 @@ import {
   readImageId,
   stampImage,
 } from "./image.js";
+import { captureDesktopPng, ensureRealDesktop, stopDesktop } from "./desktop.js";
+import { applyTenantNet, netnsExists, planTenantNet, teardownTenantNet } from "./egress.js";
 import { assertSafeRelPath, computerRoot } from "./paths.js";
+import { readJsonFile, writeJsonAtomic } from "../persist/json-file.js";
 import type {
   ComputerDriver,
   ComputerImage,
@@ -70,7 +73,9 @@ export class NamespaceComputerDriver implements ComputerDriver {
     await mkdir(paths.disk, { recursive: true });
     await mkdir(paths.desktops, { recursive: true });
     await mkdir(paths.secrets, { recursive: true });
+    await mkdir(paths.secretOverlay, { recursive: true });
     await chmod(paths.secrets, 0o700);
+    await this.hydrateEgress(tenantId);
     const template = await this.prepareTemplate();
     try {
       await readFile(paths.imageIdFile, "utf8");
@@ -80,15 +85,22 @@ export class NamespaceComputerDriver implements ComputerDriver {
     }
     await writeFile(path.join(paths.disk, ".tenant"), tenantId, "utf8");
     this.running.add(tenantId);
+    this.writeRuntime(tenantId, "running");
     return this.snapshot(tenantId);
   }
 
   async stop(tenantId: string): Promise<void> {
+    await this.stopDesktops(tenantId);
+    await teardownTenantNet(planTenantNet(this.baseDir, tenantId));
     this.running.delete(tenantId);
+    this.writeRuntime(tenantId, "stopped");
   }
 
   async status(tenantId: string): Promise<TenantComputer | undefined> {
-    if (!this.running.has(tenantId)) return undefined;
+    if (!(await this.isRunning(tenantId))) {
+      const persisted = this.readRuntime(tenantId);
+      if (!persisted) return undefined;
+    }
     return this.snapshot(tenantId);
   }
 
@@ -107,7 +119,11 @@ export class NamespaceComputerDriver implements ComputerDriver {
     await rm(paths.rootfs, { recursive: true, force: true });
     await rename(next, paths.rootfs);
     await writeFile(paths.imageIdFile, image.imageId, "utf8");
-    if (wasRunning) this.running.add(tenantId);
+    if (wasRunning) {
+      this.running.add(tenantId);
+      this.writeRuntime(tenantId, "running");
+      await this.hydrateEgress(tenantId);
+    }
     return this.snapshot(tenantId);
   }
 
@@ -117,19 +133,15 @@ export class NamespaceComputerDriver implements ComputerDriver {
     await cp(snapshotDir, paths.disk, { recursive: true });
     await mkdir(paths.desktops, { recursive: true });
     await mkdir(paths.secrets, { recursive: true });
+    await mkdir(paths.secretOverlay, { recursive: true });
     return this.snapshot(tenantId);
   }
 
   async ensureDesktop(tenantId: string, agentId: string): Promise<DesktopSession> {
     await this.requireRunning(tenantId);
     const paths = computerRoot(this.baseDir, tenantId);
-    const display = this.displayFor(agentId);
     const desktopPath = path.join(paths.desktops, agentId);
-    await mkdir(desktopPath, { recursive: true });
-    const screen = `AV desktop agent=${agentId} display=:${display} tenant=${tenantId}\n`;
-    await writeFile(path.join(desktopPath, "screen.txt"), screen, "utf8");
-    await writeFile(path.join(desktopPath, "display"), `:${display}\n`, "utf8");
-    return { tenantId, agentId, display, desktopPath };
+    return ensureRealDesktop({ tenantId, agentId, desktopPath });
   }
 
   async shell(req: ShellRequest): Promise<ShellResult> {
@@ -137,32 +149,48 @@ export class NamespaceComputerDriver implements ComputerDriver {
     const paths = computerRoot(this.baseDir, req.tenantId);
     await this.ensureDesktop(req.tenantId, req.agentId);
     const script = this.wrapCommand(req);
-    try {
-      const { stdout, stderr } = await execFileAsync(
-        "unshare",
-        [
+    const netns = await this.ensureEgressNet(req.tenantId);
+    // Isolated computers remap to root in a user namespace. Allowlisted
+    // computers already enter a privileged netns via sudo; remapping there
+    // makes the 0700 tenant dir unreadable (overflow uid).
+    const unshareArgs = netns
+      ? ["--mount", "--uts", "--pid", "--fork", "--kill-child", "/bin/bash", "-c", script]
+      : [
           "--map-root-user",
           "--mount",
           "--uts",
           "--pid",
           "--fork",
           "--kill-child",
+          "--net",
           "/bin/bash",
           "-c",
           script,
-        ],
-        {
-          cwd: paths.disk,
-          timeout: 30_000,
-          maxBuffer: 2_000_000,
-          env: {
-            PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
-            HOME: "/home",
-            AV_TENANT: req.tenantId,
-            AV_AGENT: req.agentId,
-          },
-        },
-      );
+        ];
+    try {
+      const { stdout, stderr } = netns
+        ? await execFileAsync("sudo", ["-n", "ip", "netns", "exec", netns, "unshare", ...unshareArgs], {
+            cwd: paths.disk,
+            timeout: 30_000,
+            maxBuffer: 2_000_000,
+            env: {
+              PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
+              HOME: "/home",
+              AV_TENANT: req.tenantId,
+              AV_AGENT: req.agentId,
+            },
+          })
+        : await execFileAsync("unshare", unshareArgs, {
+            cwd: paths.disk,
+            timeout: 30_000,
+            maxBuffer: 2_000_000,
+            env: {
+              PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
+              HOME: "/home",
+              AV_TENANT: req.tenantId,
+              AV_AGENT: req.agentId,
+            },
+          });
       return { exitCode: 0, stdout, stderr };
     } catch (err) {
       const e = err as { code?: number; stdout?: string; stderr?: string; message?: string };
@@ -202,13 +230,14 @@ export class NamespaceComputerDriver implements ComputerDriver {
 
   async screenshot(tenantId: string, agentId: string): Promise<Screenshot> {
     const desktop = await this.ensureDesktop(tenantId, agentId);
-    const bytes = await readFile(path.join(desktop.desktopPath, "screen.txt"));
-    return { agentId, display: desktop.display, mime: "text/plain", bytes };
+    const bytes = await captureDesktopPng(desktop.display, desktop.desktopPath);
+    return { agentId, display: desktop.display, mime: "image/png", bytes };
   }
 
   async writeSecret(tenantId: string, name: string, value: string): Promise<void> {
     const paths = computerRoot(this.baseDir, tenantId);
     await mkdir(paths.secrets, { recursive: true });
+    await chmod(paths.secrets, 0o700);
     const dest = path.join(paths.secrets, path.basename(name));
     await writeFile(dest, value, { mode: 0o600 });
   }
@@ -220,7 +249,13 @@ export class NamespaceComputerDriver implements ComputerDriver {
   async setEgress(tenantId: string, egress: EgressBinding): Promise<void> {
     this.egress.set(tenantId, egress);
     const paths = computerRoot(this.baseDir, tenantId);
-    await writeFile(path.join(paths.disk, ".egress.json"), JSON.stringify(egress), "utf8");
+    writeJsonAtomic(paths.egressFile, egress);
+    const plan = planTenantNet(this.baseDir, tenantId);
+    if (egress.allowHosts.length === 0) {
+      await teardownTenantNet(plan);
+      return;
+    }
+    await applyTenantNet(plan, egress.allowHosts);
   }
 
   private async snapshot(tenantId: string): Promise<TenantComputer> {
@@ -233,7 +268,7 @@ export class NamespaceComputerDriver implements ComputerDriver {
     }
     return {
       tenantId,
-      status: this.running.has(tenantId) ? "running" : "stopped",
+      status: this.readRuntime(tenantId)?.status === "running" || this.running.has(tenantId) ? "running" : "stopped",
       imageId,
       diskPath: paths.disk,
       sharedFilesystem: true,
@@ -241,8 +276,36 @@ export class NamespaceComputerDriver implements ComputerDriver {
   }
 
   private async requireRunning(tenantId: string): Promise<void> {
-    if (!this.running.has(tenantId)) {
+    if (!(await this.isRunning(tenantId))) {
       throw new ComputerError("COMPUTER_NOT_RUNNING", `Computer for tenant ${tenantId} is not running`);
+    }
+  }
+
+  private async isRunning(tenantId: string): Promise<boolean> {
+    if (this.running.has(tenantId)) return true;
+    const persisted = this.readRuntime(tenantId);
+    if (persisted?.status === "running") {
+      this.running.add(tenantId);
+      return true;
+    }
+    return false;
+  }
+
+  private writeRuntime(tenantId: string, status: "running" | "stopped"): void {
+    const paths = computerRoot(this.baseDir, tenantId);
+    writeJsonAtomic(path.join(paths.root, "runtime.json"), { tenantId, status, updatedAt: new Date().toISOString() });
+  }
+
+  private readRuntime(tenantId: string): { status: "running" | "stopped" } | undefined {
+    const paths = computerRoot(this.baseDir, tenantId);
+    return readJsonFile<{ status: "running" | "stopped" }>(path.join(paths.root, "runtime.json"));
+  }
+
+  private async stopDesktops(tenantId: string): Promise<void> {
+    const paths = computerRoot(this.baseDir, tenantId);
+    const agents = await listDesktopAgents(this.baseDir, tenantId);
+    for (const agentId of agents) {
+      await stopDesktop(path.join(paths.desktops, agentId));
     }
   }
 
@@ -261,14 +324,45 @@ export class NamespaceComputerDriver implements ComputerDriver {
     const paths = computerRoot(this.baseDir, req.tenantId);
     const quoted = req.argv.map(shQuote).join(" ");
     const cwd = req.cwd ? shQuote(req.cwd) : "/home";
+    const homeInRoot = path.join(paths.rootfs, "home");
+    const secretsInRoot = path.join(homeInRoot, ".secrets");
     return [
       `set -euo pipefail`,
-      `mount --bind ${shQuote(paths.disk)} ${shQuote(path.join(paths.rootfs, "home"))}`,
+      `mkdir -p ${shQuote(homeInRoot)}`,
+      `mount --bind ${shQuote(paths.disk)} ${shQuote(homeInRoot)}`,
+      // Do not mkdir .secrets on the disk. Cover a leftover path so it is not visible.
+      `if [ -d ${shQuote(secretsInRoot)} ]; then mount -t tmpfs -o size=16k,mode=000,nr_inodes=1 tmpfs ${shQuote(secretsInRoot)}; fi`,
+      `if [ -f ${shQuote(secretsInRoot)} ]; then mount --bind /dev/null ${shQuote(secretsInRoot)}; fi`,
       `hostname ${shQuote(`av-${req.tenantId.slice(0, 12)}`)}`,
       `export DISPLAY=:${this.displayFor(req.agentId)}`,
       `export AV_AGENT=${shQuote(req.agentId)}`,
       `unshare --root ${shQuote(paths.rootfs)} --wd ${cwd} /bin/sh -c ${shQuote(quoted)}`,
     ].join("\n");
+  }
+
+  private lookupEgress(tenantId: string): EgressBinding | undefined {
+    const cached = this.egress.get(tenantId);
+    if (cached) return cached;
+    const paths = computerRoot(this.baseDir, tenantId);
+    const persisted = readJsonFile<EgressBinding>(paths.egressFile);
+    if (persisted) this.egress.set(tenantId, persisted);
+    return persisted;
+  }
+
+  private async hydrateEgress(tenantId: string): Promise<void> {
+    const binding = this.lookupEgress(tenantId);
+    if (!binding || binding.allowHosts.length === 0) return;
+    await applyTenantNet(planTenantNet(this.baseDir, tenantId), binding.allowHosts);
+  }
+
+  private async ensureEgressNet(tenantId: string): Promise<string | undefined> {
+    const binding = this.lookupEgress(tenantId);
+    if (!binding || binding.allowHosts.length === 0) return undefined;
+    const plan = planTenantNet(this.baseDir, tenantId);
+    if (!(await netnsExists(plan.netns))) {
+      await applyTenantNet(plan, binding.allowHosts);
+    }
+    return plan.netns;
   }
 }
 

@@ -1,7 +1,10 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { planTenantNet } from "../src/computer/egress.js";
 import { ComputerHost } from "../src/computer/host.js";
 import { extractRootfs, stampImage } from "../src/computer/image.js";
 import { REPO_ROOT } from "./helpers.js";
@@ -19,14 +22,38 @@ afterEach(async () => {
   hosts.length = 0;
 });
 
-async function boot(): Promise<ComputerHost> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "av-comp-"));
+async function bootEnv(): Promise<{ host: ComputerHost; baseDir: string }> {
+  const baseDir = await mkdtemp(path.join(os.tmpdir(), "av-comp-"));
   const host = await ComputerHost.create({
-    baseDir: dir,
+    baseDir,
     imageCacheDir: path.join(REPO_ROOT, "images"),
   });
   hosts.push(host);
-  return host;
+  return { host, baseDir };
+}
+
+async function boot(): Promise<ComputerHost> {
+  return (await bootEnv()).host;
+}
+
+function listen(body: string): Promise<{ port: number; close: () => Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end(body);
+    });
+    server.listen(0, "0.0.0.0", () => {
+      const addr = server.address() as AddressInfo;
+      resolve({
+        port: addr.port,
+        close: () =>
+          new Promise((done, fail) => {
+            server.close((err) => (err ? fail(err) : done()));
+          }),
+      });
+    });
+    server.on("error", reject);
+  });
 }
 
 describe("computer primitive", () => {
@@ -40,7 +67,7 @@ describe("computer primitive", () => {
       agentId: "agent-one",
       argv: ["cat", "/etc/os-release"],
     });
-    expect(shell.exitCode).toBe(0);
+    expect(shell.exitCode, shell.stderr).toBe(0);
     expect(shell.stdout.toLowerCase()).toContain("alpine");
   });
 
@@ -71,9 +98,14 @@ describe("computer primitive", () => {
 
     const shotA = await host.screenshot("tenant-a", "researcher");
     const shotB = await host.screenshot("tenant-a", "writer");
-    expect(shotA.bytes.toString("utf8")).toContain("researcher");
-    expect(shotB.bytes.toString("utf8")).toContain("writer");
+    expect(shotA.mime).toBe("image/png");
+    expect(shotB.mime).toBe("image/png");
+    expect(shotA.bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+    expect(shotB.bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
     expect(shotA.bytes.equals(shotB.bytes)).toBe(false);
+    expect(deskA.viewerPath).toContain("viewer.html");
+    expect(deskB.viewerPath).toContain("viewer.html");
+    expect(deskA.vncPort).not.toBe(deskB.vncPort);
   });
 
   it("image update keeps files on disk", async () => {
@@ -123,11 +155,109 @@ describe("computer primitive", () => {
     await expect(host.readFile("tenant-a", ".secrets/password")).rejects.toThrow(/never sees passwords/);
   });
 
+  it("agent shell cat of the secrets path fails", async () => {
+    const { host, baseDir } = await bootEnv();
+    await host.start("tenant-a");
+    const secret = "super-secret-value-xyz";
+    await host.writeSecret("tenant-a", "password", secret);
+
+    const hostSecret = path.join(baseDir, "tenants", "tenant-a", "secrets", "password");
+    const diskSecretDir = path.join(baseDir, "tenants", "tenant-a", "disk", ".secrets");
+    await access(hostSecret);
+    await mkdir(diskSecretDir, { recursive: true });
+    await writeFile(path.join(diskSecretDir, "password"), secret);
+
+    const cat = await host.shell({
+      tenantId: "tenant-a",
+      agentId: "agent-one",
+      argv: ["cat", "/home/.secrets/password"],
+    });
+    expect(cat.exitCode).not.toBe(0);
+    expect(cat.stdout).not.toContain(secret);
+
+    const leftover = await host.shell({
+      tenantId: "tenant-a",
+      agentId: "agent-one",
+      argv: ["cat", "/home/.secrets/password"],
+    });
+    expect(leftover.exitCode).not.toBe(0);
+    expect(leftover.stdout).not.toContain(secret);
+  });
+
+  it("empty pack egress blocks the agent computer from the network", async () => {
+    const host = await boot();
+    await host.start("tenant-a");
+    await host.setEgress("tenant-a", { allowHosts: [] });
+    const marker = "REACHED-EMPTY-EGRESS";
+    const server = await listen(marker);
+    try {
+      const result = await host.shell({
+        tenantId: "tenant-a",
+        agentId: "agent-one",
+        argv: [
+          "sh",
+          "-c",
+          `wget -t 1 -T 2 -q -O - http://127.0.0.1:${server.port}/ || wget -t 1 -T 2 -q -O - http://1.1.1.1/ || true`,
+        ],
+      });
+      expect(result.stdout).not.toContain(marker);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("pack egress allowlist is enforced; a json file is not a wall", async () => {
+    const { host, baseDir } = await bootEnv();
+    await host.start("tenant-a");
+    const allowed = await listen("ALLOWED-PACK-EGRESS");
+    const denied = await listen("DENIED-PACK-EGRESS");
+    const plan = planTenantNet(baseDir, "tenant-a");
+    try {
+      await host.bindPackEgress("tenant-a", [`${plan.gatewayIp}:${allowed.port}`]);
+
+      const ok = await host.shell({
+        tenantId: "tenant-a",
+        agentId: "agent-one",
+        argv: ["wget", "-t", "1", "-T", "3", "-q", "-O", "-", `http://${plan.gatewayIp}:${allowed.port}/`],
+      });
+      expect(ok.exitCode).toBe(0);
+      expect(ok.stdout).toContain("ALLOWED-PACK-EGRESS");
+
+      const blocked = await host.shell({
+        tenantId: "tenant-a",
+        agentId: "agent-one",
+        argv: ["wget", "-t", "1", "-T", "2", "-q", "-O", "-", `http://${plan.gatewayIp}:${denied.port}/`],
+      });
+      expect(blocked.exitCode).not.toBe(0);
+      expect(blocked.stdout).not.toContain("DENIED-PACK-EGRESS");
+
+      await writeFile(
+        path.join(baseDir, "tenants", "tenant-a", "disk", ".egress.json"),
+        JSON.stringify({ allowHosts: [`${plan.gatewayIp}:${denied.port}`, "*"] }),
+      );
+      const still = await host.shell({
+        tenantId: "tenant-a",
+        agentId: "agent-one",
+        argv: ["wget", "-t", "1", "-T", "2", "-q", "-O", "-", `http://${plan.gatewayIp}:${denied.port}/`],
+      });
+      expect(still.exitCode).not.toBe(0);
+      expect(still.stdout).not.toContain("DENIED-PACK-EGRESS");
+    } finally {
+      await allowed.close();
+      await denied.close();
+    }
+  });
+
   it("architect can attach to an agent desktop", async () => {
     const host = await boot();
     await host.start("tenant-a");
     const session = await host.architectAttach("tenant-a", "writer");
     expect(session.agentId).toBe("writer");
     expect(session.desktopPath).toContain("writer");
+    expect(session.viewerPath).toContain("viewer.html");
+    expect(session.vncPort).toBeGreaterThan(0);
+    const html = await (await import("node:fs/promises")).readFile(session.viewerPath, "utf8");
+    expect(html).toContain("Architect attach");
+    expect(html).toContain("writer");
   });
 });

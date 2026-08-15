@@ -4,7 +4,9 @@ export interface ComputerPaths {
   rootfs: string;
   desktops: string;
   secrets: string;
+  secretOverlay: string;
   imageIdFile: string;
+  egressFile: string;
 }
 
 export interface TenantComputer {
@@ -20,6 +22,8 @@ export interface DesktopSession {
   agentId: string;
   display: number;
   desktopPath: string;
+  viewerPath: string;
+  vncPort: number;
 }
 
 export interface ShellRequest {

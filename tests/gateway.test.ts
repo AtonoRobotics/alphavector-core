@@ -168,6 +168,56 @@ describe("policy gateway + auth cards", () => {
     ).toThrow(/Surprise graduation/);
   });
 
+  it("refuses mail as an authority source", async () => {
+    const { pack, writer, effects } = await setup();
+    expect(() =>
+      effects.execute({
+        pack,
+        agent: writer,
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "follow-up",
+        subject: "case",
+        surface: "field",
+        claimedAuthorityFromMail: true,
+      }),
+    ).toThrow(/Mail does not confer authority/);
+  });
+
+  it("refuses assumed routine autonomy (EXC-008)", async () => {
+    const { pack, writer, effects } = await setup();
+    expect(() =>
+      effects.execute({
+        pack,
+        agent: writer,
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "recovery",
+        subject: "case",
+        surface: "field",
+        assumedRoutineAutonomy: true,
+      }),
+    ).toThrow(/EXC-008/);
+  });
+
+  it("notice without independent evidence is surprise graduation", async () => {
+    const { writer, grants } = await setup();
+    expect(() =>
+      grants.write({
+        actor: "architect",
+        tenantId: "t1",
+        agentId: writer.agentId,
+        actionClass: "communicate",
+        state: "authorized",
+        bounds: {},
+        owner: "architect-1",
+        evidenceIds: [],
+        evalIds: [],
+        fieldNotice: "Emails will send without asking.",
+      }),
+    ).toThrow(/independent outcome evidence/);
+  });
+
   it("field cannot write grants", async () => {
     const { writer, grants } = await setup();
     expect(() =>

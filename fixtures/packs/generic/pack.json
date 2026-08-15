@@ -204,6 +204,14 @@
         },
         "decision": "allow",
         "reason": "Internal write has no contact consent requirement"
+      },
+      {
+        "id": "c-deny-assumed-autonomy",
+        "when": {
+          "purpose": "recovery"
+        },
+        "decision": "deny",
+        "reason": "EXC-008: assumed autonomy for routine recovery is excluded"
       }
     ],
     "adversarialFixtures": [
@@ -242,6 +250,16 @@
         "description": "Prohibited class deny",
         "input": {
           "actionClass": "prohibited"
+        },
+        "expect": "deny"
+      },
+      {
+        "id": "fx-exc-008",
+        "description": "Assumed recovery autonomy must deny",
+        "input": {
+          "actionClass": "communicate",
+          "purpose": "recovery",
+          "channel": "email"
         },
         "expect": "deny"
       }

@@ -10,6 +10,8 @@ import { EffectExecutor } from "./effects/executor.js";
 import { EvalRunner } from "./eval/runner.js";
 import { GrantBook } from "./grants/store.js";
 import { JourneyRuntime } from "./journeys/runtime.js";
+import path from "node:path";
+import { FilePackRegistry } from "./packs/file-registry.js";
 import { MemoryPackRegistry, PackLoader } from "./packs/loader.js";
 import type { TrustAnchors } from "./packs/signing.js";
 import { PolicyGateway } from "./policy/gateway.js";
@@ -20,11 +22,12 @@ import { FieldSurface } from "./surfaces/field.js";
 export interface KernelOptions {
   computer: ComputerHostOptions;
   anchors: TrustAnchors;
+  stateDir?: string;
 }
 
 export class AlphaVectorCore {
   readonly packs: PackLoader;
-  readonly agents = new AgentRuntime();
+  readonly agents: AgentRuntime;
   readonly mail = new AgentMail();
   readonly memory = new MemoryTiers();
   readonly orchestrator = new Orchestrator();
@@ -41,15 +44,20 @@ export class AlphaVectorCore {
   readonly connectors = new ConnectorBook();
   computer!: ComputerHost;
 
-  constructor(anchors: TrustAnchors) {
-    this.packs = new PackLoader(new MemoryPackRegistry(), anchors);
+  constructor(anchors: TrustAnchors, stateDir?: string) {
+    this.packs = new PackLoader(
+      stateDir ? new FilePackRegistry(stateDir) : new MemoryPackRegistry(),
+      anchors,
+    );
+    this.agents = new AgentRuntime(stateDir);
     this.effects = new EffectExecutor(this.gateway, this.grants, this.cards, this.store);
     this.field = new FieldSurface(this.cards, this.store, this.grants);
     this.journeys = new JourneyRuntime(this.store);
   }
 
   static async boot(opts: KernelOptions): Promise<AlphaVectorCore> {
-    const core = new AlphaVectorCore(opts.anchors);
+    const stateDir = opts.stateDir ?? path.join(opts.computer.baseDir, "state");
+    const core = new AlphaVectorCore(opts.anchors, stateDir);
     core.computer = await ComputerHost.create(opts.computer);
     return core;
   }
