@@ -28,6 +28,10 @@ function asPrincipal(value: string | undefined): PrincipalKind {
   throw new Error("principal must be field, architect, or counsel_eval");
 }
 
+function architectTokenOf(args: string[], env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return flag(args, "--architect-token") ?? env.AV_ARCHITECT_TOKEN;
+}
+
 async function main(): Promise<void> {
   const [cmd, ...rest] = process.argv.slice(2);
   if (!cmd || cmd === "help" || cmd === "--help") {
@@ -71,15 +75,19 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log("Architect (off the field home screen). Commands: issue-field-token | revoke-field-token");
+      console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
+      console.log("First Architect credential: issue-field-token --principal architect (once).");
       return;
     }
     const dir = computerBaseDir();
     const tenantId = tenantIdOf(flags);
+    const architectToken = architectTokenOf(flags);
     if (sub === "issue-field-token") {
       const issued = architectIssueFieldToken({
         tenantId,
         principal: asPrincipal(flag(flags, "--principal")),
         computerBaseDir: dir,
+        architectToken,
       });
       console.log(JSON.stringify(issued, null, 2));
       console.log("Present this token to field-serve. Serve does not issue tokens. Secret is shown once.");
@@ -88,7 +96,7 @@ async function main(): Promise<void> {
     if (sub === "revoke-field-token") {
       const tokenId = flag(flags, "--token-id");
       if (!tokenId) throw new Error("architect revoke-field-token requires --token-id");
-      architectRevokeFieldToken({ tenantId, tokenId, computerBaseDir: dir });
+      architectRevokeFieldToken({ tenantId, tokenId, computerBaseDir: dir, architectToken });
       console.log(JSON.stringify({ ok: true, tenantId, tokenId }, null, 2));
       return;
     }
