@@ -35,8 +35,15 @@ async function liveDurable(
   issued?: { field: string },
 ) {
   const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir });
-  const fieldToken =
-    issued?.field ?? core.fieldTokens.issue({ tenantId, principal: "field", actor: "architect" }).token;
+  let fieldToken = issued?.field;
+  if (!fieldToken) {
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    fieldToken = core.fieldTokens.issue({
+      tenantId,
+      principal: "field",
+      presented: architect.token,
+    }).token;
+  }
   const server = new FieldHttpServer({ core, pack, tenantId });
   servers.push(server);
   const { url } = await server.listen(0, "127.0.0.1");

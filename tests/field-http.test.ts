@@ -18,11 +18,11 @@ afterEach(async () => {
 
 async function liveField(tenantId = "t1") {
   const { core, pack } = await bootFieldCore(tenantId);
-  const fieldIssued = core.fieldTokens.issue({ tenantId, principal: "field", actor: "architect" });
-  const architectIssued = core.fieldTokens.issue({
+  const architectIssued = core.fieldTokens.issue({ tenantId, principal: "architect" });
+  const fieldIssued = core.fieldTokens.issue({
     tenantId,
-    principal: "architect",
-    actor: "bootstrap",
+    principal: "field",
+    presented: architectIssued.token,
   });
   const tokens = { field: fieldIssued.token, architect: architectIssued.token };
   const server = new FieldHttpServer({ core, pack, tenantId });
@@ -110,10 +110,14 @@ describe("field HTTP surface against pinned alphavector-re", () => {
   });
 
   it("denies a revoked issued token and does not invent a session", async () => {
-    const { url, tenantId, fieldIssued, core, field } = await liveField("revoke");
+    const { url, tenantId, fieldIssued, core, field, tokens } = await liveField("revoke");
     const journey = await field.start("buyer", "Work this buyer journey");
     expect(journey.status).toBe("open");
-    core.fieldTokens.revoke({ tenantId, tokenId: fieldIssued.tokenId, actor: "architect" });
+    core.fieldTokens.revoke({
+      tenantId,
+      tokenId: fieldIssued.tokenId,
+      presented: tokens.architect,
+    });
     const res = await fetch(`${url}/field/journeys`, {
       method: "POST",
       headers: {

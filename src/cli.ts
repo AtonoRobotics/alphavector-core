@@ -77,6 +77,7 @@ async function main(): Promise<void> {
       console.log("Architect (off the field home screen). Commands: issue-field-token | revoke-field-token");
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
+      console.log("The last Architect credential cannot be revoked. Bootstrap stays once.");
       return;
     }
     const dir = computerBaseDir();
