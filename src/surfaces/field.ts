@@ -1,4 +1,4 @@
-import { AvError, SurfaceViolationError } from "../errors.js";
+import { AuthorizationRequiredError, AvError, SurfaceViolationError } from "../errors.js";
 import type { CardBook } from "../auth/cards.js";
 import type { AuthorizationCard, FieldCardView } from "../auth/types.js";
 import type { DurableStore } from "../data/store.js";
@@ -12,11 +12,17 @@ import type { LoadedPack, PredicateDeclaration, PrincipalKind } from "../packs/t
 import { AskSurface } from "./ask.js";
 import type {
   FieldAskInput,
+  FieldFactInput,
+  FieldFactResult,
   FieldHome,
   FieldProgressInput,
   FieldProgressResult,
   FieldStartInput,
 } from "./types.js";
+
+/** Field fact write/retract. Not a pack action class and not an RE type. */
+const FACT_CHANNEL = "facts";
+const FACT_AGENT = "field";
 
 const FORBIDDEN_FIELD = [
   "model",
@@ -166,6 +172,44 @@ export class FieldSurface {
     return { journey, effect, recordedPrefers };
   }
 
+  /**
+   * Request to record a generic fact. Issues an owner_instance card.
+   * Does not write facts.json until the card is approved.
+   */
+  record(input: FieldFactInput): void {
+    this.requestFactWrite(input, "record");
+  }
+
+  /**
+   * Request to retract a generic fact. Issues an owner_instance card.
+   * Does not change facts.json until the card is approved.
+   */
+  retract(input: FieldFactInput): void {
+    this.requestFactWrite(input, "retract");
+  }
+
+  /**
+   * Persist or retract only after the owner_instance card is approved.
+   * Pending and denied cards do not write. Non-fact cards return undefined
+   * so communicate approve-then-execute can continue.
+   */
+  commitApprovedFact(cardId: string): FieldFactResult | undefined {
+    const card = this.cards.get(cardId);
+    if (!card || card.channel !== FACT_CHANNEL) return undefined;
+    if (card.status !== "approved") {
+      throw new AvError("CARD_NOT_APPROVED", "Fact write requires an approved card");
+    }
+    if (card.actionClass === "record") {
+      this.facts.put(card.tenantId, card.subject);
+      return { id: card.subject, present: true };
+    }
+    if (card.actionClass === "retract") {
+      this.facts.retract(card.tenantId, card.subject);
+      return { id: card.subject, present: false };
+    }
+    return undefined;
+  }
+
   /** Optional sidecar. Cannot exceed pack Ask ceilings. A deny stays denied. */
   ask(input: FieldAskInput): void {
     this.assertActorIsField(input.actor);
@@ -189,6 +233,31 @@ export class FieldSurface {
         throw new SurfaceViolationError(`Field surface must not expose ${word}`);
       }
     }
+  }
+
+  private requestFactWrite(input: FieldFactInput, op: "record" | "retract"): void {
+    this.assertActorIsField(input.actor);
+    if (!input.id) {
+      throw new AvError("FACT_ID_REQUIRED", "Fact id is required");
+    }
+    this.assertFieldSafe(input.id);
+    if (this.cards.wasDenied(input.pack.tenantId, FACT_AGENT, op, input.id, FACT_CHANNEL)) {
+      throw new AvError(
+        "DENY_IS_TERMINAL",
+        "Deny is terminal; the same action cannot be silently resubmitted",
+      );
+    }
+    const card = this.cards.issue({
+      tenantId: input.pack.tenantId,
+      kind: "owner_instance",
+      actionClass: op,
+      agentId: FACT_AGENT,
+      purpose: op,
+      subject: input.id,
+      channel: FACT_CHANNEL,
+      pack: input.pack,
+    });
+    throw new AuthorizationRequiredError(card.cardId, "Authorization card required before fact write");
   }
 
   private assertActorIsField(actor: PrincipalKind): void {

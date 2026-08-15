@@ -55,6 +55,16 @@ export class FieldClient {
     return this.request<{ ok: true }>("POST", "/field/ask", { text, actionClass });
   }
 
+  /** Issues an owner_instance card. Persist happens only after approve. */
+  record(id: string): Promise<{ id: string; present: boolean }> {
+    return this.request("POST", "/field/facts", { id });
+  }
+
+  /** Issues an owner_instance card. Retract happens only after approve. */
+  retract(id: string): Promise<{ id: string; present: boolean }> {
+    return this.request("POST", "/field/facts/retract", { id });
+  }
+
   /**
    * Completes one pack journey and one owner card approve against a live field API.
    * Used by the Linux client so a reviewer can finish the required path today.

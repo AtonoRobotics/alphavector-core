@@ -507,6 +507,132 @@ describe("required field path against pinned alphavector-re", () => {
     expect(met.recordedPrefers).toEqual([PREFERRED]);
   });
 
+  it("records and retracts a fact only after an owner_instance card is approved", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-write-"));
+    const { pack, field, cards, agents, facts } = await reFieldStack(
+      await signedRePackMutated((unsigned) => {
+        const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
+        if (buyer) buyer.REQUIRES = [REQUIRED];
+      }),
+      { computerBaseDir: dir },
+    );
+    const paths = computerRoot(dir, "t1");
+    const write = { actor: "field" as const, pack, id: REQUIRED };
+
+    expect(() =>
+      field.record({ actor: "architect", pack, id: REQUIRED }),
+    ).toThrow(SurfaceViolationError);
+
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+      }),
+    ).toThrow(/REQUIRES missing/);
+
+    let cardId = "";
+    try {
+      field.record(write);
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+      cardId = (err as AuthorizationRequiredError).cardId;
+    }
+
+    expect(cards.get(cardId)?.kind).toBe("owner_instance");
+    expect(cards.get(cardId)?.status).toBe("pending");
+    expect(field.home("t1").inbox).toHaveLength(1);
+    expect(field.home("t1").inbox[0]!.cardId).toBe(cardId);
+    expect(JSON.stringify(field.home("t1").inbox)).not.toMatch(/architect_admin|T0|T1|T2|T3/i);
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    expect(facts.presentIds("t1")).toEqual([]);
+    expect(() => field.commitApprovedFact(cardId)).toThrow(/approved card/);
+    expect(existsSync(paths.factsFile)).toBe(false);
+
+    cards.resolve({ cardId, decision: "approved", actor: "field" });
+    const recorded = field.commitApprovedFact(cardId);
+    expect(recorded).toEqual({ id: REQUIRED, present: true });
+    expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
+    expect(existsSync(paths.factsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    expect(new FactBook(dir).presentIds("t1")).toEqual([REQUIRED]);
+
+    const journey = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+    });
+    const agent = agents.find((a) => a.specialties.includes("buyer"))!;
+    const advanced = field.progress({
+      actor: "field",
+      pack,
+      journeyId: journey.id,
+      agent,
+      actionClass: "read",
+    });
+    expect(advanced.effect?.executed).toBe(true);
+
+    let retractId = "";
+    try {
+      field.retract(write);
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+      retractId = (err as AuthorizationRequiredError).cardId;
+    }
+    expect(new FactBook(dir).presentIds("t1")).toEqual([REQUIRED]);
+    expect(existsSync(paths.factsFile)).toBe(true);
+
+    cards.resolve({ cardId: retractId, decision: "approved", actor: "field" });
+    expect(field.commitApprovedFact(retractId)).toEqual({ id: REQUIRED, present: false });
+    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+      }),
+    ).toThrow(/REQUIRES missing/);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+      }),
+    ).toThrow(/fail closed/);
+  });
+
+  it("keeps a denied fact write terminal and off disk", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-deny-"));
+    const { pack, field, cards } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const paths = computerRoot(dir, "t1");
+    const write = { actor: "field" as const, pack, id: REQUIRED };
+
+    let cardId = "";
+    try {
+      field.record(write);
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+      cardId = (err as AuthorizationRequiredError).cardId;
+    }
+
+    cards.resolve({ cardId, decision: "denied", actor: "field" });
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(() => field.commitApprovedFact(cardId)).toThrow(/approved card/);
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(() => field.record(write)).toThrow(/terminal/);
+    expect(() => field.record(write)).toThrow(/terminal/);
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+  });
+
   it("fail-closes on a corrupt fact store and does not invent a fact", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-bad-"));
     const paths = computerRoot(dir, "t1");

@@ -130,6 +130,37 @@ describe("durable pending cards on tenant computer disk", () => {
     expect(await second.field.cards()).toHaveLength(0);
   });
 
+  it("approves a fact card after restart and only then writes facts.json", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-card-"));
+    const first = await liveDurable("fact-restart", dir);
+    let cardId = "";
+    try {
+      await first.field.record("condition.required");
+      throw new Error("expected authorization card before fact write");
+    } catch (err) {
+      if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
+        throw err;
+      }
+      cardId = err.cardId;
+    }
+    const paths = computerRoot(dir, "fact-restart");
+    expect(existsSync(paths.cardsFile)).toBe(true);
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    await first.server.close();
+
+    const second = await liveDurable("fact-restart", dir, { field: first.fieldToken });
+    const again = await second.field.cards();
+    expect(again).toHaveLength(1);
+    expect(again[0]!.cardId).toBe(cardId);
+    const approved = await second.field.approve(cardId);
+    expect(approved.card.status).toBe("approved");
+    expect(approved.fact).toEqual({ id: "condition.required", present: true });
+    expect(existsSync(paths.factsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    expect(await second.field.cards()).toHaveLength(0);
+  });
+
   it("missing store is an empty inbox and does not invent a card", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-cards-miss-"));
     const book = new CardBook(dir);
