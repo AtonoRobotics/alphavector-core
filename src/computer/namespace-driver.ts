@@ -150,18 +150,23 @@ export class NamespaceComputerDriver implements ComputerDriver {
     await this.ensureDesktop(req.tenantId, req.agentId);
     const script = this.wrapCommand(req);
     const netns = await this.ensureEgressNet(req.tenantId);
-    const unshareArgs = [
-      "--map-root-user",
-      "--mount",
-      "--uts",
-      "--pid",
-      "--fork",
-      "--kill-child",
-      ...(netns ? [] : ["--net"]),
-      "/bin/bash",
-      "-c",
-      script,
-    ];
+    // Isolated computers remap to root in a user namespace. Allowlisted
+    // computers already enter a privileged netns via sudo; remapping there
+    // makes the 0700 tenant dir unreadable (overflow uid).
+    const unshareArgs = netns
+      ? ["--mount", "--uts", "--pid", "--fork", "--kill-child", "/bin/bash", "-c", script]
+      : [
+          "--map-root-user",
+          "--mount",
+          "--uts",
+          "--pid",
+          "--fork",
+          "--kill-child",
+          "--net",
+          "/bin/bash",
+          "-c",
+          script,
+        ];
     try {
       const { stdout, stderr } = netns
         ? await execFileAsync("sudo", ["-n", "ip", "netns", "exec", netns, "unshare", ...unshareArgs], {
