@@ -34,6 +34,22 @@ export class PolicyGateway {
         policyAuth: true,
       };
     }
+    if (req.claimedAuthorityFromMail) {
+      return {
+        allowed: false,
+        reason: "Mail does not confer authority",
+        ruleIds: [],
+        policyAuth: true,
+      };
+    }
+    if (req.assumedRoutineAutonomy) {
+      return {
+        allowed: false,
+        reason: "EXC-008: assumed autonomy for routine comms, CRM, scheduling, or recovery is excluded",
+        ruleIds: [],
+        policyAuth: true,
+      };
+    }
     return evaluateRules(pack.binding.policy, req);
   }
 

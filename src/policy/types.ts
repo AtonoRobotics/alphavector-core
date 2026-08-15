@@ -7,6 +7,8 @@ export interface EffectRequest {
   jurisdiction?: string;
   subjectId?: string;
   surface: "field" | "ask" | "architect" | "system";
+  claimedAuthorityFromMail?: boolean;
+  assumedRoutineAutonomy?: boolean;
 }
 
 export interface PolicyDecision {

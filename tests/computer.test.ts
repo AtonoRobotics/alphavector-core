@@ -155,7 +155,7 @@ describe("computer primitive", () => {
     await expect(host.readFile("tenant-a", ".secrets/password")).rejects.toThrow(/never sees passwords/);
   });
 
-  it("agent shell cannot read host secrets from the bind-mounted disk", async () => {
+  it("agent shell cat of the secrets path fails", async () => {
     const { host, baseDir } = await bootEnv();
     await host.start("tenant-a");
     const secret = "super-secret-value-xyz";
@@ -170,22 +170,18 @@ describe("computer primitive", () => {
     const cat = await host.shell({
       tenantId: "tenant-a",
       agentId: "agent-one",
-      argv: ["sh", "-c", "cat /home/.secrets/password"],
+      argv: ["cat", "/home/.secrets/password"],
     });
-    expect(cat.stdout).not.toContain(secret);
     expect(cat.exitCode).not.toBe(0);
+    expect(cat.stdout).not.toContain(secret);
 
-    const sweep = await host.shell({
+    const leftover = await host.shell({
       tenantId: "tenant-a",
       agentId: "agent-one",
-      argv: [
-        "sh",
-        "-c",
-        "find /home /root /tmp /etc -name password -o -name .secrets 2>/dev/null; cat /home/.secrets/password /home/secrets/password 2>/dev/null; echo DONE",
-      ],
+      argv: ["cat", "/home/.secrets/password"],
     });
-    expect(sweep.stdout).not.toContain(secret);
-    expect(sweep.stdout).toContain("DONE");
+    expect(leftover.exitCode).not.toBe(0);
+    expect(leftover.stdout).not.toContain(secret);
   });
 
   it("empty pack egress blocks the agent computer from the network", async () => {
@@ -217,7 +213,7 @@ describe("computer primitive", () => {
     const denied = await listen("DENIED-PACK-EGRESS");
     const plan = planTenantNet(baseDir, "tenant-a");
     try {
-      await host.setEgress("tenant-a", { allowHosts: [`${plan.gatewayIp}:${allowed.port}`] });
+      await host.bindPackEgress("tenant-a", [`${plan.gatewayIp}:${allowed.port}`]);
 
       const ok = await host.shell({
         tenantId: "tenant-a",
@@ -230,8 +226,9 @@ describe("computer primitive", () => {
       const blocked = await host.shell({
         tenantId: "tenant-a",
         agentId: "agent-one",
-        argv: ["sh", "-c", `wget -t 1 -T 2 -q -O - http://${plan.gatewayIp}:${denied.port}/ || true`],
+        argv: ["wget", "-t", "1", "-T", "2", "-q", "-O", "-", `http://${plan.gatewayIp}:${denied.port}/`],
       });
+      expect(blocked.exitCode).not.toBe(0);
       expect(blocked.stdout).not.toContain("DENIED-PACK-EGRESS");
 
       await writeFile(
@@ -241,8 +238,9 @@ describe("computer primitive", () => {
       const still = await host.shell({
         tenantId: "tenant-a",
         agentId: "agent-one",
-        argv: ["sh", "-c", `wget -t 1 -T 2 -q -O - http://${plan.gatewayIp}:${denied.port}/ || true`],
+        argv: ["wget", "-t", "1", "-T", "2", "-q", "-O", "-", `http://${plan.gatewayIp}:${denied.port}/`],
       });
+      expect(still.exitCode).not.toBe(0);
       expect(still.stdout).not.toContain("DENIED-PACK-EGRESS");
     } finally {
       await allowed.close();

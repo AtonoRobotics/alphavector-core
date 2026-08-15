@@ -17,6 +17,8 @@ export interface EffectInput {
   subject?: string;
   surface: EffectRequest["surface"];
   approvedCardId?: string;
+  claimedAuthorityFromMail?: boolean;
+  assumedRoutineAutonomy?: boolean;
 }
 
 export interface EffectResult {
@@ -50,6 +52,8 @@ export class EffectExecutor {
       jurisdiction: input.jurisdiction,
       subjectId: input.subject,
       surface: input.surface,
+      claimedAuthorityFromMail: input.claimedAuthorityFromMail,
+      assumedRoutineAutonomy: input.assumedRoutineAutonomy,
     };
 
     const policy = this.gateway.decide(input.pack, req);

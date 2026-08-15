@@ -328,10 +328,11 @@ export class NamespaceComputerDriver implements ComputerDriver {
     const secretsInRoot = path.join(homeInRoot, ".secrets");
     return [
       `set -euo pipefail`,
-      `mkdir -p ${shQuote(homeInRoot)} ${shQuote(paths.secretOverlay)}`,
+      `mkdir -p ${shQuote(homeInRoot)}`,
       `mount --bind ${shQuote(paths.disk)} ${shQuote(homeInRoot)}`,
-      `mkdir -p ${shQuote(secretsInRoot)}`,
-      `mount --bind ${shQuote(paths.secretOverlay)} ${shQuote(secretsInRoot)}`,
+      // Do not mkdir .secrets on the disk. Cover a leftover path so it is not visible.
+      `if [ -d ${shQuote(secretsInRoot)} ]; then mount -t tmpfs -o size=16k,mode=000,nr_inodes=1 tmpfs ${shQuote(secretsInRoot)}; fi`,
+      `if [ -f ${shQuote(secretsInRoot)} ]; then mount --bind /dev/null ${shQuote(secretsInRoot)}; fi`,
       `hostname ${shQuote(`av-${req.tenantId.slice(0, 12)}`)}`,
       `export DISPLAY=:${this.displayFor(req.agentId)}`,
       `export AV_AGENT=${shQuote(req.agentId)}`,
