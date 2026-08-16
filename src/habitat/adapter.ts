@@ -1,3 +1,4 @@
+import { RECORDED_EMAIL_SEND } from "./connector-world.js";
 import type { AdapterInput, CognitiveAdapter, CognitiveIntent } from "./types.js";
 
 /**
@@ -36,5 +37,6 @@ export function dryThink(input: AdapterInput): CognitiveIntent {
     channel: "email",
     purpose: "follow-up",
     subject: input.run.recordId ?? input.event.recordId ?? "unspecified",
+    ...RECORDED_EMAIL_SEND,
   };
 }

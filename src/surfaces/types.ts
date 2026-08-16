@@ -72,6 +72,10 @@ export interface FieldProgressInput {
    * (`RECORD_NOT_FOUND`). Progress without actionClass does not require it.
    */
   subject?: string;
+  /** Email/SMS send. Required at world invoke for those channels. */
+  to?: string;
+  body?: string;
+  from?: string;
   approvedCardId?: string;
   ask?: AskRequest;
   note?: string;

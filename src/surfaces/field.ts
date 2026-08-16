@@ -6,7 +6,7 @@ import type { Journey } from "../data/types.js";
 import type { EffectExecutor } from "../effects/executor.js";
 import { FactBook } from "../facts/book.js";
 import type { GrantBook } from "../grants/store.js";
-import { invokeConnectorWorld } from "../habitat/connector-world.js";
+import { connectorSendFields, invokeConnectorWorld } from "../habitat/connector-world.js";
 import { JourneyRuntime } from "../journeys/runtime.js";
 import { evaluateDeclaredPredicates } from "../packs/predicates.js";
 import type { LoadedPack, PackBinding, PredicateDeclaration, PrincipalKind } from "../packs/types.js";
@@ -261,6 +261,9 @@ export class FieldSurface {
       }
       if (input.purpose) this.assertFieldSafe(input.purpose);
       if (input.subject) this.assertFieldSafe(input.subject);
+      if (input.to) this.assertFieldSafe(input.to);
+      if (input.body) this.assertFieldSafe(input.body);
+      if (input.from) this.assertFieldSafe(input.from);
       effect = await this.executeApprovedProgress(
         this.effects,
         { ...input, actionClass: input.actionClass, agent: input.agent },
@@ -285,9 +288,9 @@ export class FieldSurface {
   }
 
   /**
-   * Admission then a live connector handle, or typed fail-closed.
-   * Writing executed without a world call is autonomy theater.
-   * Same habitat live-handle path: connector-bind.json + credentials, then commit.
+   * Admission then a live connector send (email/SMS) or handle, or typed fail-closed.
+   * Writing executed without a world send is autonomy theater.
+   * Same habitat live-send path: connector-bind.json + credentials, then commit.
    */
   private async executeApprovedProgress(
     effects: EffectExecutor,
@@ -295,6 +298,7 @@ export class FieldSurface {
     journeyKind: string,
   ) {
     const subject = input.subject ?? journeyKind;
+    const send = connectorSendFields(input);
     const admitted = effects.execute({
       pack: input.pack,
       agent: input.agent,
@@ -315,6 +319,7 @@ export class FieldSurface {
       channel: input.channel,
       purpose: input.purpose,
       subject,
+      ...send,
     });
     return effects.commitExternal(
       admitted.actionId,

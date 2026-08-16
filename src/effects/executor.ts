@@ -35,9 +35,9 @@ export interface EffectInput {
   claimedAuthorityFromMail?: boolean;
   assumedRoutineAutonomy?: boolean;
   /**
-   * Habitat and FieldSurface.progress set false, invoke the live connector,
+   * Habitat and FieldSurface.progress set false, invoke the live send,
    * then commitExternal. Default true is leftover for raw EffectExecutor
-   * callers that have not closed this door.
+   * grant-path callers and is not a world send.
    */
   recordExecution?: boolean;
 }

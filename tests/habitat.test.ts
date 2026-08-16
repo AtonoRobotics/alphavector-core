@@ -65,9 +65,12 @@ import {
   bindWorldConnector,
   bindWorldForPack,
   closeWorldHttp,
+  recordedSendOf,
   startWorldDouble,
   useWorldHttp,
   WORLD_FIXTURE_SECRET,
+  WORLD_FIXTURE_SEND,
+  WORLD_FIXTURE_SMS_SEND,
 } from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
@@ -161,6 +164,7 @@ async function startVendorThinkDouble(opts?: {
                 channel: "email",
                 purpose: "follow-up",
                 subject: rec.recordId ?? "unspecified",
+                ...WORLD_FIXTURE_SEND,
               }
             : rec.kind === "worker_done"
               ? { pass: "talking", act: "done" }
@@ -4917,8 +4921,11 @@ describe("HK-073 approved external effect calls the world", () => {
     const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
     expect(worldSrc).toMatch(/invokeConnectorWorld/);
     expect(worldSrc).toMatch(/LiveConnectorHandle/);
+    expect(worldSrc).toMatch(/requireConnectorSend/);
+    expect(worldSrc).toMatch(/to: send\.to/);
     expect(worldSrc).not.toMatch(/return tenantRows\[0\]/);
     expect(worldSrc).toMatch(/throw new AvError\(\s*"CONNECTOR_UNBOUND"/);
+    expect(worldSrc).not.toMatch(/sendgrid|twilio|api\.sendgrid|api\.twilio/i);
     expect(worldSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
     expect(bindSrc).toMatch(/baseUrl\?: string/);
     expect(bindSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
@@ -4928,9 +4935,12 @@ describe("HK-073 approved external effect calls the world", () => {
     expect(cliSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com/);
     const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/HomeView.swift"), "utf8");
     expect(ios).not.toMatch(/connector/i);
+    const fieldHttp = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    expect(fieldHttp).toMatch(/Field user cannot configure models, prompts, Temporal, tools, trust anchors, or the machine/);
+    expect(fieldHttp).toMatch(/CONFIG_PATH/);
   });
 
-  it("approved card POSTs the live handle to the Architect URL and only then writes executed", async () => {
+  it("approved card POSTs a live email send to the Architect URL and only then writes executed", async () => {
     const { core, pack, tenantId, record, world } = await habitatStackWithWorld();
     const started = await core.habitat.wake({
       kind: "field_start",
@@ -4953,11 +4963,10 @@ describe("HK-073 approved external effect calls the world", () => {
     expect(world.requests).toHaveLength(1);
     expect(world.requests[0]?.method).toBe("POST");
     expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
-    const body = world.requests[0]?.body as { handleId?: string; connectorId?: string; actionClass?: string };
-    expect(body.handleId).toBe("handle:webhook");
-    expect(body.connectorId).toBe("webhook");
-    expect(body.actionClass).toBe("communicate");
-    expect(JSON.stringify(body)).not.toContain(WORLD_FIXTURE_SECRET);
+    const send = recordedSendOf(world.requests[0]?.body);
+    expect(send).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
+    expect(JSON.stringify(world.requests[0]?.body)).not.toContain(WORLD_FIXTURE_SECRET);
+    expect(JSON.stringify(world.requests[0]?.body)).not.toMatch(/handleId/);
     expect(core.store.actions.some((a) => a.status === "executed")).toBe(true);
   });
 
@@ -5085,8 +5094,7 @@ describe("HK-073 approved external effect calls the world", () => {
     expect(decoy.requests).toHaveLength(0);
     expect(world.requests).toHaveLength(1);
     expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
-    const body = world.requests[0]?.body as { connectorId?: string };
-    expect(body.connectorId).toBe("email");
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
     expect(JSON.stringify(decoy.requests)).not.toContain("av-world-first-row-secret");
   });
 
@@ -5138,8 +5146,7 @@ describe("HK-073 approved external effect calls the world", () => {
     expect(decoy.requests).toHaveLength(0);
     expect(world.requests).toHaveLength(1);
     expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
-    const body = world.requests[0]?.body as { connectorId?: string };
-    expect(body.connectorId).toBe(pack.binding.connectors[0]!.id);
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
     expect(JSON.stringify(decoy.requests)).not.toContain("av-world-first-row-secret");
   });
 
@@ -5293,6 +5300,198 @@ describe("HK-073 approved external effect calls the world", () => {
     expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
   });
 
+  it("bound + credentials SMS send POSTs to/body/from to the recorded adapter", async () => {
+    const { core, pack, tenantId, computerBaseDir } = await habitatStack();
+    const world = await startWorldDouble();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "sms",
+      baseUrl: world.url,
+    });
+    await expect(
+      invokeConnectorWorld({
+        computerBaseDir,
+        tenantId,
+        pack,
+        actionClass: "communicate",
+        channel: "sms",
+        ...WORLD_FIXTURE_SMS_SEND,
+      }),
+    ).resolves.toMatchObject({ connectorId: "sms" });
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({
+      ...WORLD_FIXTURE_SMS_SEND,
+      channel: "sms",
+    });
+    expect(JSON.stringify(world.requests[0]?.body)).not.toMatch(/handleId/);
+  });
+
+  it("email/SMS without to/body/from is CONNECTOR_SEND_INCOMPLETE and does not POST a handle ping", async () => {
+    const { pack, tenantId, computerBaseDir, core } = await habitatStack();
+    const world = await useWorldHttp();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "email",
+      baseUrl: world.url,
+    });
+    await expect(
+      invokeConnectorWorld({
+        computerBaseDir,
+        tenantId,
+        pack,
+        actionClass: "communicate",
+        channel: "email",
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_SEND_INCOMPLETE", closed: true });
+    expect(world.requests).toHaveLength(0);
+  });
+
+  it("expired grant is GRANT_EXPIRED, does not mint a card, and does not send", async () => {
+    const { core, pack, tenantId, record, world, agents } = await habitatStackWithWorld();
+    const orch = agents.find((a) => a.isOrchestrator)!;
+    core.grants.write({
+      actor: "architect",
+      tenantId,
+      agentId: orch.agentId,
+      actionClass: "communicate",
+      state: "authorized",
+      bounds: { channels: ["email"] },
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: "Follow-up emails will now send without asking. You can kill this.",
+      expiresAt: new Date(0).toISOString(),
+    });
+    await expect(
+      core.habitat.wake({
+        kind: "field_start",
+        tenantId,
+        pack,
+        goal: "one goal",
+        recordId: record.id,
+      }),
+    ).rejects.toMatchObject({ code: "GRANT_EXPIRED", closed: true });
+    expect(world.requests).toHaveLength(0);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(core.cards.fieldInbox(tenantId)).toHaveLength(0);
+  });
+
+  it("out-of-bounds grant is GRANT_BOUNDS and does not send", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-habitat-bounds-"));
+    const { anchors, binding } = await signedGenericPack();
+    const adapter: CognitiveAdapter = {
+      name: "sms-stem",
+      owns: ["think"],
+      think(input) {
+        if (input.pass === "talking") {
+          return { pass: "talking", act: "launch_worker", workerType: "coder" };
+        }
+        return {
+          pass: "worker",
+          act: "propose_effect",
+          actionClass: "communicate",
+          channel: "sms",
+          purpose: "follow-up",
+          subject: input.run.recordId ?? "unspecified",
+          ...WORLD_FIXTURE_SMS_SEND,
+        };
+      },
+    };
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter,
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    const agents = core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    const world = await useWorldHttp();
+    const architect = core.fieldTokens.issue({ tenantId: "t1", principal: "architect" });
+    bindWorldConnector({
+      tenantId: "t1",
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "sms",
+      baseUrl: world.url,
+    });
+    const orch = agents.find((a) => a.isOrchestrator)!;
+    core.grants.write({
+      actor: "architect",
+      tenantId: "t1",
+      agentId: orch.agentId,
+      actionClass: "communicate",
+      state: "authorized",
+      bounds: { channels: ["email"] },
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: "Follow-up emails will now send without asking. You can kill this.",
+    });
+    await expect(
+      core.habitat.wake({
+        kind: "field_start",
+        tenantId: "t1",
+        pack: loaded.loaded,
+        goal: "one goal",
+        recordId: record.id,
+      }),
+    ).rejects.toMatchObject({ code: "GRANT_BOUNDS", closed: true });
+    expect(world.requests).toHaveLength(0);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(core.cards.fieldInbox("t1")).toHaveLength(0);
+  });
+
+  it("rate-exceeded grant is GRANT_RATE and does not send a second time", async () => {
+    const { core, pack, tenantId, record, world, agents } = await habitatStackWithWorld();
+    const orch = agents.find((a) => a.isOrchestrator)!;
+    core.grants.write({
+      actor: "architect",
+      tenantId,
+      agentId: orch.agentId,
+      actionClass: "communicate",
+      state: "authorized",
+      bounds: { channels: ["email"], ratePerHour: 1 },
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: "Follow-up emails will now send without asking. You can kill this.",
+    });
+    const first = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    expect(first.effect?.executed).toBe(true);
+    expect(world.requests).toHaveLength(1);
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
+    const writer = agents.find((a) => a.name === "Writer") ?? orch;
+    try {
+      core.effects.execute({
+        pack,
+        agent: writer,
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "follow-up",
+        subject: record.id,
+        surface: "field",
+      });
+      throw new Error("should have failed closed on rate");
+    } catch (err) {
+      expect(err).toMatchObject({ code: "GRANT_RATE", closed: true });
+    }
+    expect(world.requests).toHaveLength(1);
+    expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(1);
+    expect(core.cards.fieldInbox(tenantId)).toHaveLength(0);
+  });
+
   it("field cannot bind the connector, set credentials, or fire it as Architect", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-world-field-"));
     const { field, fieldToken, url, architectToken } = await liveField("t1", dir);
@@ -5407,6 +5606,7 @@ describe("HK-073 approved external effect calls the world", () => {
     });
     expect(approved.effect?.executed).toBe(true);
     expect(world.requests).toHaveLength(1);
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
     const fieldCli = runArchitectCli(
       [
         "architect",
@@ -6389,8 +6589,7 @@ describe("HK-074 grants already authorized SHALL be used by the loop", () => {
     expect(core.store.actions.some((a) => a.status === "executed")).toBe(true);
     expect(world.requests).toHaveLength(1);
     expect(world.requests[0]?.method).toBe("POST");
-    const body = world.requests[0]?.body as { actionClass?: string };
-    expect(body.actionClass).toBe("communicate");
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
     expect(core.grants.classState(tenantId, "communicate")).toBe("authorized");
     expect(core.grants.authorizedForClass(tenantId, "communicate")?.agentId).toBe(orch.agentId);
     expect(core.habitat.activeWorker(tenantId)?.agent.agentId).not.toBe(orch.agentId);
@@ -6485,6 +6684,7 @@ describe("HK-074 grants already authorized SHALL be used by the loop", () => {
     });
     expect(approved.effect?.executed).toBe(true);
     expect(world.requests).toHaveLength(1);
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
   });
 
   it("a grant does not skip the policy gateway (DEC-022)", async () => {

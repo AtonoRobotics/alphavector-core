@@ -168,6 +168,9 @@ function parsePendingRecord(cardId: string, raw: unknown): PendingProgressRecord
   if (typeof raw.channel === "string") record.channel = raw.channel;
   if (typeof raw.purpose === "string") record.purpose = raw.purpose;
   if (typeof raw.subject === "string") record.subject = raw.subject;
+  if (typeof raw.to === "string" && raw.to.trim()) record.to = raw.to.trim();
+  if (typeof raw.body === "string" && raw.body.trim()) record.body = raw.body.trim();
+  if (typeof raw.from === "string" && raw.from.trim()) record.from = raw.from.trim();
   if (cardId.length === 0) {
     throw new AvError("CARD_STORE_CORRUPT", "Card store is corrupt; refusing to invent a card");
   }

@@ -52,7 +52,7 @@ import {
   findStoredConnectorCredentials,
   readTenantConnectorCredentials,
 } from "./connector-credentials.js";
-import { invokeConnectorWorld } from "./connector-world.js";
+import { connectorSendFields, invokeConnectorWorld } from "./connector-world.js";
 import { RunStore } from "./run-store.js";
 import { writeProposalFile } from "./proposals.js";
 import { loadSkillFiles } from "./skills.js";
@@ -1352,6 +1352,7 @@ export class HabitatKernel {
         purpose: intent.purpose ?? "unspecified",
         subject: intent.subject ?? "unspecified",
         agentId: agent.agentId,
+        ...connectorSendFields(intent),
       });
       this.runs.put({
         ...run,
@@ -1372,6 +1373,7 @@ export class HabitatKernel {
             purpose: intent.purpose ?? "unspecified",
             subject: intent.subject ?? "unspecified",
             agentId: agent.agentId,
+            ...connectorSendFields(intent),
           },
           updatedAt: nowIso(),
         });
@@ -1382,15 +1384,25 @@ export class HabitatKernel {
   }
 
   /**
-   * Admission then a live connector handle, or typed fail-closed.
-   * Writing executed without a world call is autonomy theater.
+   * Admission then a live connector send (email/SMS) or handle, or typed fail-closed.
+   * Writing executed without a world send is autonomy theater.
    */
   private async executeApprovedEffect(
     pack: LoadedPack,
     agent: AgentRecord,
-    pending: { actionClass: string; channel: string; purpose: string; subject: string; agentId: string },
+    pending: {
+      actionClass: string;
+      channel: string;
+      purpose: string;
+      subject: string;
+      agentId: string;
+      to?: string;
+      body?: string;
+      from?: string;
+    },
     approvedCardId?: string,
   ): Promise<EffectResult> {
+    const send = connectorSendFields(pending);
     const admitted = this.opts.effects.execute({
       pack,
       agent,
@@ -1411,6 +1423,7 @@ export class HabitatKernel {
       channel: pending.channel,
       purpose: pending.purpose,
       subject: pending.subject,
+      ...send,
     });
     return this.opts.effects.commitExternal(admitted.actionId, {
       pack,

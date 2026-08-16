@@ -203,6 +203,9 @@ function asCognitiveIntent(raw: unknown): CognitiveIntent {
   if (typeof raw.channel === "string") intent.channel = raw.channel;
   if (typeof raw.purpose === "string") intent.purpose = raw.purpose;
   if (typeof raw.subject === "string") intent.subject = raw.subject;
+  if (typeof raw.to === "string") intent.to = raw.to;
+  if (typeof raw.body === "string") intent.body = raw.body;
+  if (typeof raw.from === "string") intent.from = raw.from;
   return intent;
 }
 

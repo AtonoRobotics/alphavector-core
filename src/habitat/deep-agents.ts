@@ -6,6 +6,7 @@ import {
   VendorBoundChatModel,
   type DeepAgentsSdkPass,
 } from "./sdk-think.js";
+import { RECORDED_EMAIL_SEND } from "./connector-world.js";
 import type { AdapterInput, CognitiveAdapter, CognitiveIntent } from "./types.js";
 import { hostedVendorClient, type VendorThinkClient } from "./vendor-think.js";
 
@@ -136,6 +137,7 @@ export function adapterThink(input: AdapterInput): CognitiveIntent {
     channel: "email",
     purpose: "follow-up",
     subject: input.run.recordId ?? input.event.recordId ?? "unspecified",
+    ...RECORDED_EMAIL_SEND,
   };
 }
 

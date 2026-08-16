@@ -33,9 +33,11 @@ import {
 } from "./helpers.js";
 import {
   WORLD_FIXTURE_SECRET,
+  WORLD_FIXTURE_SEND,
   bindWorldConnector,
   bindWorldForPack,
   closeWorldHttp,
+  recordedSendOf,
   startWorldDouble,
   useWorldHttp,
 } from "./world-double.js";
@@ -429,6 +431,7 @@ describe("required field path against pinned alphavector-re", () => {
       channel: "email",
       purpose: "follow-up",
       subject: rec.id,
+      ...WORLD_FIXTURE_SEND,
     };
 
     let cardId = "";
@@ -467,6 +470,7 @@ describe("required field path against pinned alphavector-re", () => {
     expect(world.requests).toHaveLength(1);
     expect(world.requests[0]?.method).toBe("POST");
     expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
     expect(field.home("t1").inbox).toHaveLength(0);
     expect(field.home("t1").outboundLog.some((row) => row.actionId === progressed.effect?.actionId)).toBe(
       true,
@@ -1773,6 +1777,7 @@ function communicateEffect(stack: Awaited<ReturnType<typeof journeyProgressStack
     channel: "email",
     purpose: "follow-up",
     subject: stack.rec.id,
+    ...WORLD_FIXTURE_SEND,
   };
 }
 
@@ -1794,8 +1799,11 @@ describe("approved journey progress calls the world", () => {
     const executorSrc = readFileSync(path.join(process.cwd(), "src/effects/executor.ts"), "utf8");
     expect(fieldSrc).toMatch(/invokeConnectorWorld/);
     expect(fieldSrc).toMatch(/recordExecution: false/);
+    expect(fieldSrc).toMatch(/connectorSendFields/);
     expect(fieldSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
     expect(worldSrc).toMatch(/invokeConnectorWorld/);
+    expect(worldSrc).toMatch(/requireConnectorSend/);
+    expect(worldSrc).not.toMatch(/sendgrid|twilio/i);
     expect(worldSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
     expect(executorSrc).toMatch(/recordExecution/);
     expect(executorSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com/);
@@ -1803,7 +1811,7 @@ describe("approved journey progress calls the world", () => {
     expect(ios).not.toMatch(/connector/i);
   });
 
-  it("approved journey progress POSTs the live handle and only then writes executed", async () => {
+  it("approved journey progress POSTs a live email send and only then writes executed", async () => {
     const stack = await journeyProgressStack();
     const world = await useWorldHttp();
     bindWorldForPack({
@@ -1825,10 +1833,9 @@ describe("approved journey progress calls the world", () => {
     expect(world.requests).toHaveLength(1);
     expect(world.requests[0]?.method).toBe("POST");
     expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
-    const body = world.requests[0]?.body as { handleId?: string; connectorId?: string; actionClass?: string };
-    expect(body.actionClass).toBe("communicate");
-    expect(body.handleId).toMatch(/^handle:/);
-    expect(JSON.stringify(body)).not.toContain(WORLD_FIXTURE_SECRET);
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
+    expect(JSON.stringify(world.requests[0]?.body)).not.toContain(WORLD_FIXTURE_SECRET);
+    expect(JSON.stringify(world.requests[0]?.body)).not.toMatch(/handleId/);
     expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(true);
     expect(stack.core.store.evidence.some((e) => e.kind === "journey_progress")).toBe(true);
   });
@@ -1934,6 +1941,91 @@ describe("approved journey progress calls the world", () => {
     await expect(stack.core.field.progress(communicateEffect(stack))).rejects.toThrow(/terminal/);
     expect(world.requests).toHaveLength(0);
     expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("email progress without to/body/from is CONNECTOR_SEND_INCOMPLETE after admit", async () => {
+    const stack = await journeyProgressStack();
+    const world = await useWorldHttp();
+    bindWorldForPack({
+      tenantId: "t1",
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      pack: stack.pack,
+      baseUrl: world.url,
+    });
+    const cardId = await issueProgressCard(stack);
+    stack.core.cards.resolve({ cardId, decision: "approved", actor: "field" });
+    const { to: _to, body: _body, from: _from, ...withoutSend } = communicateEffect(stack);
+    void _to;
+    void _body;
+    void _from;
+    await expect(
+      stack.core.field.progress({ ...withoutSend, approvedCardId: cardId }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_SEND_INCOMPLETE", closed: true });
+    expect(world.requests).toHaveLength(0);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("expired grant is GRANT_EXPIRED and does not send", async () => {
+    const stack = await journeyProgressStack();
+    const world = await useWorldHttp();
+    bindWorldForPack({
+      tenantId: "t1",
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      pack: stack.pack,
+      baseUrl: world.url,
+    });
+    stack.core.grants.write({
+      actor: "architect",
+      tenantId: "t1",
+      agentId: stack.followUp.agentId,
+      actionClass: "communicate",
+      state: "authorized",
+      bounds: { channels: ["email"] },
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: "Follow-up emails will now send without asking. You can kill this.",
+      expiresAt: new Date(0).toISOString(),
+    });
+    await expect(stack.core.field.progress(communicateEffect(stack))).rejects.toMatchObject({
+      code: "GRANT_EXPIRED",
+      closed: true,
+    });
+    expect(world.requests).toHaveLength(0);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(stack.core.cards.fieldInbox("t1")).toHaveLength(0);
+  });
+
+  it("out-of-bounds grant is GRANT_BOUNDS and does not send", async () => {
+    const stack = await journeyProgressStack();
+    const world = await useWorldHttp();
+    bindWorldForPack({
+      tenantId: "t1",
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      pack: stack.pack,
+      baseUrl: world.url,
+    });
+    stack.core.grants.write({
+      actor: "architect",
+      tenantId: "t1",
+      agentId: stack.followUp.agentId,
+      actionClass: "communicate",
+      state: "authorized",
+      bounds: { channels: ["email"] },
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: "Follow-up emails will now send without asking. You can kill this.",
+    });
+    await expect(
+      stack.core.field.progress({ ...communicateEffect(stack), channel: "sms" }),
+    ).rejects.toMatchObject({ code: "GRANT_BOUNDS", closed: true });
+    expect(world.requests).toHaveLength(0);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(stack.core.cards.fieldInbox("t1")).toHaveLength(0);
   });
 
   it("field cannot bind the connector, set credentials, or fire it as Architect", async () => {

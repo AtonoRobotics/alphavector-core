@@ -134,6 +134,9 @@ function parseRun(raw: unknown): RunRecord {
         purpose: effect.purpose,
         subject: effect.subject,
         agentId: effect.agentId,
+        ...(typeof effect.to === "string" && effect.to.trim() ? { to: effect.to.trim() } : {}),
+        ...(typeof effect.body === "string" && effect.body.trim() ? { body: effect.body.trim() } : {}),
+        ...(typeof effect.from === "string" && effect.from.trim() ? { from: effect.from.trim() } : {}),
       };
     }
   }

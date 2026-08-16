@@ -1,9 +1,17 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { architectBindConnector, architectWriteConnectorCredentials } from "../src/auth/architect-connectors.js";
+import { RECORDED_EMAIL_SEND, type ConnectorSend } from "../src/habitat/connector-world.js";
 import type { LoadedPack } from "../src/packs/types.js";
 
 export const WORLD_FIXTURE_SECRET = "av-world-fixture-secret";
+export { RECORDED_EMAIL_SEND };
+export const WORLD_FIXTURE_SEND: ConnectorSend = RECORDED_EMAIL_SEND;
+export const WORLD_FIXTURE_SMS_SEND: ConnectorSend = {
+  to: "+15555550100",
+  from: "+15555550199",
+  body: "follow-up",
+};
 
 export type WorldHttpCapture = {
   method: string;
@@ -45,6 +53,11 @@ export async function startWorldDouble(opts?: {
       if (req.method !== "POST") {
         res.writeHead(404, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
+      if (!isRecordedSend(body)) {
+        res.writeHead(400, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not_a_send" }));
         return;
       }
       if (opts?.rejectAuth || req.headers.authorization !== `Bearer ${expectedKey}`) {
@@ -130,4 +143,29 @@ export function bindWorldForPack(input: {
   if (!connectorId) throw new Error("loaded pack has no connectors");
   bindWorldConnector({ ...input, connectorId });
   return connectorId;
+}
+
+export function isRecordedSend(body: unknown): body is ConnectorSend & { channel?: string } {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const rec = body as Record<string, unknown>;
+  return (
+    typeof rec.to === "string" &&
+    rec.to.trim() !== "" &&
+    typeof rec.body === "string" &&
+    rec.body.trim() !== "" &&
+    typeof rec.from === "string" &&
+    rec.from.trim() !== ""
+  );
+}
+
+/** Assert the recorded adapter saw a send, not a handle ping. */
+export function recordedSendOf(body: unknown): ConnectorSend & { channel?: string } {
+  if (!isRecordedSend(body)) {
+    throw new Error("world double did not receive a send payload");
+  }
+  const rec = body as ConnectorSend & { channel?: string; handleId?: string };
+  if (rec.handleId) {
+    throw new Error("world double received a handle ping, not a send");
+  }
+  return rec;
 }

@@ -11,6 +11,10 @@ export interface PendingProgressRecord {
   channel?: string;
   purpose?: string;
   subject?: string;
+  /** Email/SMS send. Required at world invoke for those channels. */
+  to?: string;
+  body?: string;
+  from?: string;
   agentId: string;
   journey: Journey;
 }
