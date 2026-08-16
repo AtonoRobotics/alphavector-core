@@ -28,6 +28,7 @@ export interface TenantWorkerStore {
 /**
  * Thin coder book. One live worker per tenant, persisted beside runs.json.
  * Control state, not a business fact. Hydrate from disk; do not invent a worker id.
+ * Liveness is pid, not the trailer directory. A leftover trailer is not a live worker.
  */
 export class WorkerBook {
   private readonly workers = new Map<string, WorkerRecord>();
@@ -46,6 +47,11 @@ export class WorkerBook {
     return worker?.workerId === workerId ? worker : undefined;
   }
 
+  /** True only when the booked pid is still running. Directory presence is not liveness. */
+  isLive(tenantId: string): boolean {
+    return isPidAlive(this.get(tenantId)?.pid);
+  }
+
   launch(input: {
     tenantId: string;
     runId: string;
@@ -57,7 +63,7 @@ export class WorkerBook {
     }
     const existing = this.get(input.tenantId);
     if (existing) {
-      if (existsSync(existing.trailerPath)) return existing;
+      if (isPidAlive(existing.pid)) return existing;
       return this.spawnTrailer(existing, input.skills, input.hold);
     }
     const workerId = newId("worker");
@@ -285,6 +291,16 @@ function parseAgent(raw: unknown, tenantId: string): AgentRecord {
     isOrchestrator: raw.isOrchestrator,
     createdAt: raw.createdAt,
   };
+}
+
+function isPidAlive(pid: number | undefined): boolean {
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
