@@ -126,6 +126,7 @@ async function main(): Promise<void> {
       const done = await client.completeBuyerJourneyAndCard();
       const facts = await client.completeFactRecordAndRetract(
         flag(rest, "--fact-id") ?? "condition.required",
+        done.journey.recordId ?? "",
       );
       console.log(JSON.stringify({ ok: true, ...done, facts }, null, 2));
       return;

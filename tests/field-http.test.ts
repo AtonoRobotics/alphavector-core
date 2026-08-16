@@ -138,12 +138,8 @@ async function liveMutatedField(
   };
 }
 
-async function issueFactCard(
-  field: FieldClient,
-  id: string,
-  op: "record" | "retract" = "record",
-): Promise<string> {
-  return field.requestFactCard(id, op);
+async function issueFactCard(field: FieldClient, id: string, recordId: string): Promise<string> {
+  return field.requestFactCard(id, "record", recordId);
 }
 
 describe("field HTTP surface against pinned alphavector-re", () => {
@@ -287,7 +283,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       code: "SURFACE_VIOLATION",
       message: expect.stringMatching(/field user/),
     });
-    await expect(architect.record("journey.buyer")).rejects.toMatchObject({
+    await expect(architect.record("journey.buyer", "rec_none")).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
@@ -337,6 +333,11 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/if\s*\(\s*!selectedRecord\(\)\s*\)/);
     expect(html).toMatch(/Select a record before starting/);
     expect(html).toMatch(/Select a record before opening/);
+    expect(html).toMatch(/Select a record before recording a purpose/);
+    expect(html).toMatch(/Select a record before recording an avoid/);
+    expect(html).toMatch(/Select a record before retracting an avoid/);
+    expect(html).toMatch(/Select a record before recording a fact/);
+    expect(html).toMatch(/Select a record before retracting a fact/);
     expect(html).toMatch(/id="purpose-facts"/);
     expect(html).toMatch(/home\.purposeFacts/);
     expect(html).toMatch(/data-purpose=/);
@@ -386,6 +387,10 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(clientSrc).toMatch(/start\(kind\.id, `Work this \$\{kind\.label\} journey`, subject\.id\)/);
     expect(clientSrc).toMatch(/start\(journeyKind: string, objective: string, recordId: string\)/);
     expect(clientSrc).toMatch(/open\(kindId: string, recordId: string\)/);
+    expect(clientSrc).toMatch(/record\(id: string, recordId: string\)/);
+    expect(clientSrc).toMatch(/retract\(id: string, recordId: string\)/);
+    expect(clientSrc).toMatch(/completeFactRecordAndRetract\(/);
+    expect(clientSrc).toMatch(/recordId: string/);
     const fieldSrc = await readFile(path.join(REPO_ROOT, "src/surfaces/field.ts"), "utf8");
     expect(fieldSrc).not.toMatch(/consent\.dnc/);
     expect(fieldSrc).toMatch(/avoidFactsFromBinding/);
@@ -393,7 +398,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(fieldSrc).toMatch(/verb\.AVOIDS/);
     expect(fieldSrc).toMatch(/kind\.AVOIDS/);
     expect(fieldSrc).toMatch(/RECORD_ID_REQUIRED/);
-    expect(fieldSrc).toMatch(/isJourneyFactId/);
+    expect(fieldSrc).toMatch(/assertKnownRecord\(input\.pack\.tenantId, input\.recordId\)/);
     expect(fieldSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
 
     const home = await field.home();
@@ -460,42 +465,45 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const paths = computerRoot(dir, tenantId);
     expect(existsSync(paths.recordsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
-    const recordCardId = await field.requestFactCard(REQUIRED);
+    const recordCardId = await field.requestFactCard(REQUIRED, "record", subject!.id);
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
     const recorded = await field.approve(recordCardId);
-    expect(recorded.fact).toEqual({ id: REQUIRED, present: true });
+    expect(recorded.fact).toEqual({ id: REQUIRED, present: true, recordId: subject!.id });
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual(
       expect.arrayContaining([
         { id: "journey.buyer", recordId: subject!.id },
         { id: "purpose.follow-up", recordId: subject!.id },
-        { id: REQUIRED },
+        { id: REQUIRED, recordId: subject!.id },
       ]),
     );
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
 
-    const retractCardId = await field.requestFactCard(REQUIRED, "retract");
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining([REQUIRED]),
+    const retractCardId = await field.requestFactCard(REQUIRED, "retract", subject!.id);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
+    expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up", REQUIRED]),
     );
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     const retracted = await field.approve(retractCardId);
-    expect(retracted.fact).toEqual({ id: REQUIRED, present: false });
+    expect(retracted.fact).toEqual({ id: REQUIRED, present: false, recordId: subject!.id });
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
     expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
       expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
     );
+    expect(new FactBook(dir).presentIds(tenantId, subject!.id)).not.toContain(REQUIRED);
 
-    const scripted = await field.completeFactRecordAndRetract("demo.fact");
-    expect(scripted.recorded).toEqual({ id: "demo.fact", present: true });
-    expect(scripted.retracted).toEqual({ id: "demo.fact", present: false });
+    const scripted = await field.completeFactRecordAndRetract("demo.fact", subject!.id);
+    expect(scripted.recorded).toEqual({ id: "demo.fact", present: true, recordId: subject!.id });
+    expect(scripted.retracted).toEqual({ id: "demo.fact", present: false, recordId: subject!.id });
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("demo.fact");
     expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
       expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
     );
+    expect(new FactBook(dir).presentIds(tenantId, subject!.id)).not.toContain("demo.fact");
   });
 
   it("keeps a real SwiftUI iOS field target in tree on the same API", async () => {
@@ -544,12 +552,16 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       const denied = (await res.json()) as { error: string };
       expect(denied.error).toBe("UNAUTHORIZED");
     }
-    await expect(architect.record(REQUIRED)).rejects.toMatchObject({
+    await expect(architect.record(REQUIRED, "rec_none")).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
       message: expect.stringMatching(/field user/),
     });
-    const cardId = await issueFactCard(field, REQUIRED);
+    const rec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
+    const cardId = await issueFactCard(field, REQUIRED, rec.id);
     expect(cardId).toMatch(/^card_/);
   });
 
@@ -613,11 +625,15 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-http-deny-"));
     const { field, tenantId } = await liveMutatedField("fact-deny", dir, () => undefined);
     const paths = computerRoot(dir, tenantId);
-    const cardId = await issueFactCard(field, REQUIRED);
+    const rec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
+    const cardId = await issueFactCard(field, REQUIRED, rec.id);
     const denied = await field.deny(cardId);
     expect(denied.status).toBe("denied");
     expect(existsSync(paths.factsFile)).toBe(false);
-    await expect(field.record(REQUIRED)).rejects.toMatchObject({
+    await expect(field.record(REQUIRED, rec.id)).rejects.toMatchObject({
       status: 403,
       code: "DENY_IS_TERMINAL",
     });
@@ -669,20 +685,20 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         actionClass: "communicate",
         channel: "email",
         purpose: "follow-up",
-        subject: "buyer",
+        subject: buyerRec.id,
       }),
     ).rejects.toMatchObject({
       status: 403,
       code: "PREDICATE_CLOSED",
       message: expect.stringMatching(/REQUIRES missing/),
     });
-    await field.recordApprovedFact("purpose.follow-up");
+    await field.recordApprovedFact("purpose.follow-up", buyerRec.id);
     await expect(
       field.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
         purpose: "follow-up",
-        subject: "buyer",
+        subject: buyerRec.id,
       }),
     ).rejects.toMatchObject({
       status: 409,
@@ -745,7 +761,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         actionClass: "communicate",
         channel: "email",
         purpose: "follow-up",
-        subject: kind.id,
+        subject: rec.id,
       }),
     ).rejects.toMatchObject({
       status: 403,
@@ -756,13 +772,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const purpose = field.communicateRequiresPurpose(purposeHome);
     expect(purpose.id).toMatch(/^purpose\./);
     expect(purposeHome.purposeFacts.map((f) => f.id)).toContain(purpose.id);
-    await field.recordApprovedFact(purpose.id);
+    await field.recordApprovedFact(purpose.id, rec.id);
     await expect(
       field.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: rec.id,
       }),
     ).rejects.toMatchObject({
       status: 409,
@@ -813,7 +829,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       purpose.id,
     );
 
-    const cardId = await field.requestFactCard(purpose.id);
+    const cardId = await field.requestFactCard(purpose.id, "record", rec.id);
     expect(cardId).toMatch(/^card_/);
     expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
@@ -827,7 +843,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: rec.id,
       }),
     ).rejects.toMatchObject({
       status: 403,
@@ -836,16 +852,18 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     });
 
     const approved = await field.approve(cardId);
-    expect(approved.fact).toEqual({ id: purpose.id, present: true });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([purpose.id]);
-    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
+    expect(approved.fact).toEqual({ id: purpose.id, present: true, recordId: rec.id });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", purpose.id]),
+    );
 
     try {
       await field.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: rec.id,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {
@@ -855,7 +873,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       expect(executed.effect?.executed).toBe(true);
     }
 
-    await expect(architect.record(purpose.id)).rejects.toMatchObject({
+    await expect(architect.record(purpose.id, rec.id)).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
@@ -908,7 +926,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
 
-    const avoidCardId = await field.requestFactCard(avoided.id);
+    const avoidCardId = await field.requestFactCard(avoided.id, "record", rec.id);
     expect(avoidCardId).toMatch(/^card_/);
     expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
@@ -918,19 +936,21 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     ]);
 
     const recordedAvoid = await field.approve(avoidCardId);
-    expect(recordedAvoid.fact).toEqual({ id: avoided.id, present: true });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([avoided.id]);
-    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
+    expect(recordedAvoid.fact).toEqual({ id: avoided.id, present: true, recordId: rec.id });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", avoided.id]),
+    );
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
 
-    const retractId = await field.requestFactCard(avoided.id, "retract");
+    const retractId = await field.requestFactCard(avoided.id, "retract", rec.id);
     const retracted = await field.approve(retractId);
-    expect(retracted.fact).toEqual({ id: avoided.id, present: false });
+    expect(retracted.fact).toEqual({ id: avoided.id, present: false, recordId: rec.id });
     expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
 
     const purpose = field.communicateRequiresPurpose(home);
-    await field.recordApprovedFact(purpose.id);
+    await field.recordApprovedFact(purpose.id, rec.id);
     const journey = await field.start(kind.id, `Work this ${kind.label} journey`, rec.id);
 
     try {
@@ -938,22 +958,24 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: rec.id,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {
       expect(err).toMatchObject({ status: 409, code: "AUTHORIZATION_REQUIRED" });
     }
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain(avoided.id);
 
-    const unapprovedAvoid = await field.requestFactCard(avoided.id);
+    const unapprovedAvoid = await field.requestFactCard(avoided.id, "record", rec.id);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain(avoided.id);
     try {
       await field.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: rec.id,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {
@@ -961,13 +983,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     }
 
     const approvedAvoid = await field.approve(unapprovedAvoid);
-    expect(approvedAvoid.fact).toEqual({ id: avoided.id, present: true });
+    expect(approvedAvoid.fact).toEqual({ id: avoided.id, present: true, recordId: rec.id });
     await expect(
       field.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: rec.id,
       }),
     ).rejects.toMatchObject({
       status: 403,
@@ -975,13 +997,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       message: expect.stringMatching(/AVOIDS present/),
     });
 
-    const restoreId = await field.requestFactCard(avoided.id, "retract");
+    const restoreId = await field.requestFactCard(avoided.id, "retract", rec.id);
     await expect(
       field.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: rec.id,
       }),
     ).rejects.toMatchObject({
       status: 403,
@@ -989,17 +1011,20 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       message: expect.stringMatching(/AVOIDS present/),
     });
     const restored = await field.approve(restoreId);
-    expect(restored.fact).toEqual({ id: avoided.id, present: false });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([purpose.id]);
-    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
+    expect(restored.fact).toEqual({ id: avoided.id, present: false, recordId: rec.id });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", purpose.id]),
+    );
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain(avoided.id);
 
     try {
       await field.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: rec.id,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {
@@ -1009,11 +1034,11 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       expect(executed.effect?.executed).toBe(true);
     }
 
-    await expect(architect.record(avoided.id)).rejects.toMatchObject({
+    await expect(architect.record(avoided.id, rec.id)).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
-    await expect(architect.retract(avoided.id)).rejects.toMatchObject({
+    await expect(architect.retract(avoided.id, rec.id)).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
@@ -1233,6 +1258,50 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const startedA = await field.start(kind.id, `Work this ${kind.label} journey`, rec.id);
     expect(startedA.status).toBe("open");
     expect(startedA.recordId).toBe(rec.id);
+  });
+
+  it("denies purpose, AVOIDS, and generic fact writes with no recordId or unknown recordId", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-http-fact-record-required-"));
+    const { field, url, tokens, tenantId, pack } = await liveField("fact-record-required", dir);
+    const home = await field.home();
+    const purpose = field.communicateRequiresPurpose(home);
+    const avoided = communicateAvoidFromHome(home, pack);
+    const rec = await field.createApprovedRecord(home.recordKinds[0]?.id ?? "record", "Subject");
+    const ids = [purpose.id, avoided.id, REQUIRED];
+
+    for (const id of ids) {
+      for (const path of ["/field/facts", "/field/facts/retract"]) {
+        const missing = await fetch(`${url}${path}`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${tokens.field}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ id }),
+        });
+        expect(missing.status).toBe(400);
+        expect(await missing.json()).toMatchObject({ error: "RECORD_ID_REQUIRED" });
+
+        const unknown = await fetch(`${url}${path}`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${tokens.field}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ id, recordId: "rec_unknown" }),
+        });
+        expect(unknown.status).toBe(404);
+        expect(await unknown.json()).toMatchObject({ error: "RECORD_NOT_FOUND" });
+      }
+      expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+      expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
+    }
+
+    const cardId = await field.requestFactCard(REQUIRED, "record", rec.id);
+    expect(cardId).toMatch(/^card_/);
+    expect(existsSync(computerRoot(dir, tenantId).factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
   });
 
   it("keeps RE types out of core schema and migrations", async () => {

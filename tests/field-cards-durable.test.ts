@@ -134,9 +134,13 @@ describe("durable pending cards on tenant computer disk", () => {
   it("approves a fact card after restart and only then writes facts.json", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-card-"));
     const first = await liveDurable("fact-restart", dir);
+    const rec = await first.field.createApprovedRecord(
+      (await first.field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
     let cardId = "";
     try {
-      await first.field.record("condition.required");
+      await first.field.record("condition.required", rec.id);
       throw new Error("expected authorization card before fact write");
     } catch (err) {
       if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
@@ -156,7 +160,7 @@ describe("durable pending cards on tenant computer disk", () => {
     expect(again[0]!.cardId).toBe(cardId);
     const approved = await second.field.approve(cardId);
     expect(approved.card.status).toBe("approved");
-    expect(approved.fact).toEqual({ id: "condition.required", present: true });
+    expect(approved.fact).toEqual({ id: "condition.required", present: true, recordId: rec.id });
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
     expect(await second.field.cards()).toHaveLength(0);

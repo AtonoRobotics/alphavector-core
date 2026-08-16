@@ -229,7 +229,7 @@
 
     async function requestFactCard(id, path, recordId) {
       try {
-        await api("POST", path, recordId ? { id: id, recordId: recordId } : { id: id });
+        await api("POST", path, { id: id, recordId: recordId });
         setStatus("Fact request completed without a card");
       } catch (err) {
         if (err.cardId) setStatus("Card required: " + err.cardId);
@@ -262,6 +262,10 @@
 
     document.getElementById("record").onclick = async () => {
       try {
+        if (!selectedRecord()) {
+          setStatus("Select a record before recording a fact", true);
+          return;
+        }
         await requestFact("/field/facts");
       } catch (err) {
         setStatus(err.message, true);
@@ -270,6 +274,10 @@
 
     document.getElementById("retract").onclick = async () => {
       try {
+        if (!selectedRecord()) {
+          setStatus("Select a record before retracting a fact", true);
+          return;
+        }
         await requestFact("/field/facts/retract");
       } catch (err) {
         setStatus(err.message, true);
@@ -323,6 +331,10 @@
         }
         if (t.dataset.purpose) {
           try {
+            if (!selectedRecord()) {
+              setStatus("Select a record before recording a purpose", true);
+              return;
+            }
             await requestFactCard(t.dataset.purpose, "/field/facts", selectedRecord());
           } catch (err) {
             setStatus(err.message, true);
@@ -331,6 +343,10 @@
         }
         if (t.dataset.avoidRetract) {
           try {
+            if (!selectedRecord()) {
+              setStatus("Select a record before retracting an avoid", true);
+              return;
+            }
             await requestFactCard(t.dataset.avoidRetract, "/field/facts/retract", selectedRecord());
           } catch (err) {
             setStatus(err.message, true);
@@ -339,6 +355,10 @@
         }
         if (t.dataset.avoid) {
           try {
+            if (!selectedRecord()) {
+              setStatus("Select a record before recording an avoid", true);
+              return;
+            }
             await requestFactCard(t.dataset.avoid, "/field/facts", selectedRecord());
           } catch (err) {
             setStatus(err.message, true);

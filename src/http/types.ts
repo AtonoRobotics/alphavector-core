@@ -35,7 +35,7 @@ export interface FieldStartBody {
 /** Generic fact id. Pack-local string; not an RE type. */
 export interface FieldFactBody {
   id: string;
-  /** Subject record id. Absent = tenant-global. */
+  /** Subject record id. Missing fails closed. */
   recordId?: string;
 }
 

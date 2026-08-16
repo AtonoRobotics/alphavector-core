@@ -91,8 +91,12 @@ export interface FieldFactInput {
   actor: PrincipalKind;
   pack: LoadedPack;
   id: string;
-  /** Attach this fact to a subject record. Absent = tenant-global. */
-  recordId?: string;
+  /**
+   * Subject record this fact is about. Required. Missing fails closed.
+   * Purpose, AVOIDS, and generic fact writes use that record's present
+   * set only — never the tenant-global set as a fallback.
+   */
+  recordId: string;
 }
 
 export interface FieldFactResult {
