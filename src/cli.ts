@@ -6,6 +6,7 @@ import { architectWriteAdapterCredentials } from "./auth/architect-adapter-crede
 import { architectBindConnector, architectWriteConnectorCredentials } from "./auth/architect-connectors.js";
 import { architectWriteDeadline } from "./auth/architect-deadlines.js";
 import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
+import { architectDeliverMail } from "./auth/architect-mail.js";
 import { architectWriteRoutine } from "./auth/architect-routines.js";
 import { FieldClient } from "./http/field-client.js";
 import { startFieldServe } from "./http/field-listen.js";
@@ -80,7 +81,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline",
+        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -102,6 +103,9 @@ async function main(): Promise<void> {
       );
       console.log(
         "bind-deadline writes tenants/{id}/deadlines.json. Field cannot author, see, or edit. Temporal is not the bus.",
+      );
+      console.log(
+        "deliver-mail writes tenants/{id}/mail.json then habitat wake kind mail. Mail SHALL NOT confer authority. Field cannot deliver.",
       );
       return;
     }
@@ -232,8 +236,47 @@ async function main(): Promise<void> {
       );
       return;
     }
+    if (sub === "deliver-mail") {
+      const addresseeId = flag(flags, "--addressee-id");
+      const body = flag(flags, "--body");
+      if (!addresseeId || body === undefined) {
+        throw new Error("architect deliver-mail requires --addressee-id and --body");
+      }
+      const core = new AlphaVectorCore(
+        {
+          architectPublicKeyPem: "unused",
+          counselEvalPublicKeyPem: "unused",
+        },
+        path.join(dir, "state"),
+        dir,
+      );
+      const pack = core.packs.active(tenantId);
+      core.habitat.setPack(tenantId, pack);
+      const delivered = await architectDeliverMail({
+        tenantId,
+        addresseeId,
+        body,
+        computerBaseDir: dir,
+        habitat: core.habitat,
+        architectToken,
+      });
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            tenantId,
+            addresseeId,
+            confersAuthority: false,
+            runId: delivered.run?.runId,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     throw new Error(
-      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline",
+      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail",
     );
   }
   if (cmd === "field-serve") {

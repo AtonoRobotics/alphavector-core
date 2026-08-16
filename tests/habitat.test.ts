@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
@@ -369,6 +369,41 @@ function runArchitectCli(
       status: typeof e.status === "number" ? e.status : 1,
     };
   }
+}
+
+/** Same helper as runArchitectCli, but async so the test process can serve a vendor double. */
+function runArchitectCliAsync(
+  args: string[],
+  opts: { computerBaseDir: string; architectToken?: string },
+): Promise<{ stdout: string; stderr: string; status: number }> {
+  const viteNode = path.join(process.cwd(), "node_modules/vite-node/dist/cli.mjs");
+  const cli = path.join(process.cwd(), "src/cli.ts");
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [viteNode, cli, ...args], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        AV_COMPUTER_DIR: opts.computerBaseDir,
+        ...(opts.architectToken ? { AV_ARCHITECT_TOKEN: opts.architectToken } : {}),
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ stdout, stderr, status: 1 });
+    }, 30_000);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, status: typeof code === "number" ? code : 1 });
+    });
+  });
 }
 
 /** Product boot: no adapter option. DeepAgentsAdapter is the field-serve default. */
@@ -3065,6 +3100,11 @@ describe("D10 CS-018 mail wakes", () => {
     expect(fieldSrc).not.toMatch(/pickAgent/);
     expect(fieldSrc).toMatch(/mail/);
     expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/mail/);
+    const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(cliSrc).toMatch(/architectDeliverMail/);
+    expect(cliSrc).toMatch(/deliver-mail writes tenants\/\{id\}\/mail\.json/);
+    expect(cliSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(cliSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
   });
 
   it("deliver mail to an addressee while a run is open attaches with kind mail, same runId, labeled memory, no new goal or worker", async () => {
@@ -3297,6 +3337,39 @@ describe("D10 CS-018 mail wakes", () => {
     expect(readTenantMail(dir, "t1").items[0]?.fromAgentId).toBe("architect");
     expect(readTenantMail(dir, "t1").items[0]?.toAgentId).toBe(addressee.agentId);
     expect(orch.agentId).toBeDefined();
+
+    const fieldCli = runArchitectCli(
+      [
+        "architect",
+        "deliver-mail",
+        "--tenant",
+        "t1",
+        "--addressee-id",
+        addressee.agentId,
+        "--body",
+        "Field cannot deliver.",
+        "--architect-token",
+        fieldToken,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(fieldCli.status).not.toBe(0);
+    expect(`${fieldCli.stdout}\n${fieldCli.stderr}`).toMatch(/cannot bind|field token|mail/i);
+    const shellCli = runArchitectCli(
+      [
+        "architect",
+        "deliver-mail",
+        "--tenant",
+        "t1",
+        "--addressee-id",
+        addressee.agentId,
+        "--body",
+        "Shell cannot deliver.",
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(shellCli.status).not.toBe(0);
+    expect(`${shellCli.stdout}\n${shellCli.stderr}`).toMatch(/Shell is not Architect/);
   });
 
   it("corrupt mail.json fails closed; missing file is empty without inventing", async () => {
@@ -3345,6 +3418,104 @@ describe("D10 CS-018 mail wakes", () => {
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     writeFileSync(paths.mailFile, `${JSON.stringify({ items: [{ mailId: "x" }] })}\n`, "utf8");
     expect(() => readTenantMail(computerBaseDir, tenantId)).toThrow(/MAIL_STORE_CORRUPT|corrupt/i);
+  });
+
+  it("Architect CLI deliver-mail writes tenants/{id}/mail.json; open run attaches kind mail", async () => {
+    const double = await useVendorHttp();
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-mail-cli-"));
+    const { core, field, architectToken } = await liveField("t1", dir);
+    const addressee = core.agents.list("t1").find((a) => !a.isOrchestrator)!;
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.runId).toMatch(/^run_/);
+    const worker = core.habitat.activeWorker("t1");
+    const goalsBefore = core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective);
+    bindAndCredential({
+      tenantId: "t1",
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+      vendorBaseUrl: double.url,
+    });
+
+    const out = await runArchitectCliAsync(
+      [
+        "architect",
+        "deliver-mail",
+        "--tenant",
+        "t1",
+        "--addressee-id",
+        addressee.agentId,
+        "--body",
+        "Status on the open goal.",
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(out.status).toBe(0);
+    expect(out.stdout).toMatch(/"addresseeId": /);
+    expect(out.stdout).toContain(addressee.agentId);
+    expect(out.stdout).toMatch(/"confersAuthority": false/);
+    expect(out.stdout).toContain(run!.runId);
+    expect(out.stdout).not.toMatch(/token|approve|org.chart|routineId|modelId/i);
+
+    const paths = computerRoot(dir, "t1");
+    expect(paths.mailFile).toBe(path.join(dir, "tenants", "t1", "mail.json"));
+    expect(existsSync(paths.mailFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "mail.json"))).toBe(false);
+    const stored = readTenantMail(dir, "t1");
+    expect(stored.items).toHaveLength(1);
+    expect(stored.items[0]?.toAgentId).toBe(addressee.agentId);
+    expect(stored.items[0]?.fromAgentId).toBe("architect");
+    expect(stored.items[0]?.confersAuthority).toBe(false);
+
+    const wakeLog = JSON.parse(readFileSync(paths.wakeLogFile, "utf8")) as {
+      entries: Array<{ kind: string; runId?: string; detail?: { confersAuthority?: boolean } }>;
+    };
+    expect(wakeLog.entries.some((w) => w.kind === "mail" && w.runId === run!.runId)).toBe(true);
+    expect(wakeLog.entries.find((w) => w.kind === "mail")?.detail).toMatchObject({
+      addresseeId: addressee.agentId,
+      attached: true,
+      confersAuthority: false,
+    });
+    expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
+    expect(core.habitat.getRun("t1")?.goal).toBe(started.journey.objective);
+    expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker?.workerId);
+    expect(core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective)).toEqual(goalsBefore);
+    const onDisk = JSON.parse(readFileSync(paths.runsFile, "utf8")) as {
+      runs: Array<{ runId: string; goal: string }>;
+    };
+    expect(onDisk.runs).toHaveLength(1);
+    expect(onDisk.runs[0]?.runId).toBe(run!.runId);
+  });
+
+  it("Architect CLI deliver-mail with no open run is NO_OPEN_RUN and does not mint a goal", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-mail-cli-no-run-"));
+    const { core, architectToken } = await liveField("t1", dir);
+    const addressee = core.agents.list("t1").find((a) => !a.isOrchestrator)!;
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    const out = runArchitectCli(
+      [
+        "architect",
+        "deliver-mail",
+        "--tenant",
+        "t1",
+        "--addressee-id",
+        addressee.agentId,
+        "--body",
+        "No run is open.",
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(out.status).not.toBe(0);
+    expect(`${out.stdout}\n${out.stderr}`).toMatch(/NO_OPEN_RUN|no implicit start/);
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    expect(existsSync(computerRoot(dir, "t1").mailFile)).toBe(false);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+    expect(core.habitat.listWakes("t1")).toEqual([]);
+    expect(core.store.journeys.filter((j) => j.tenantId === "t1")).toEqual([]);
   });
 });
 
