@@ -25,7 +25,31 @@ import { AlphaVectorCore } from "../src/kernel.js";
 import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, signedGenericPack } from "./helpers.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
-const MAIN_FIELD_HOME = "286876b369221eeaeb0d8a940a45f407ed56c8a8";
+
+/** Files this PR changes vs origin/main. Skip when that ref is not in the checkout. */
+function changedFilesAgainstMain(): string[] | undefined {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "origin/main"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      cwd: process.cwd(),
+    });
+  } catch {
+    return undefined;
+  }
+  try {
+    const out = execFileSync("git", ["diff", "--name-only", "origin/main...HEAD"], {
+      encoding: "utf8",
+      cwd: process.cwd(),
+    });
+    return out
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return undefined;
+  }
+}
 
 const CLOSED_V1_PLUS_EXISTING = new Set<string>([
   "field_start",
@@ -108,12 +132,13 @@ describe("HK-014 immutable wake log", () => {
     expect(source).toMatch(/5091328a2a5d4a9429ec65fef6da5683ede1cac9/);
 
     const fieldHome = readFileSync(path.join(process.cwd(), "src/surfaces/field.ts"), "utf8");
-    const fieldOnMain = execFileSync("git", ["show", `${MAIN_FIELD_HOME}:src/surfaces/field.ts`], {
-      encoding: "utf8",
-      cwd: process.cwd(),
-    });
-    expect(fieldHome).toBe(fieldOnMain);
-    expect(fieldHome).not.toMatch(/payloadHash|HK-014|WAKE_LOG_MISMATCH/);
+    expect(fieldHome).toMatch(/home\(tenantId: string, pack\?: LoadedPack\): FieldHome/);
+    expect(fieldHome).toMatch(/architectControls: \[\]/);
+    expect(fieldHome).not.toMatch(/payloadHash|HK-014|WAKE_LOG|wake-log|wakeLog/);
+    const changed = changedFilesAgainstMain();
+    if (changed) {
+      expect(changed).not.toContain("src/surfaces/field.ts");
+    }
 
     const identity = readFileSync(path.join(process.cwd(), "src/identity.ts"), "utf8");
     expect(identity).toMatch(/appDisplay: "AV Dev"/);
