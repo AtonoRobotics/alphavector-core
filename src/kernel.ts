@@ -3,6 +3,7 @@ import { MemoryTiers } from "./agents/memory.js";
 import { Orchestrator } from "./agents/orchestrator.js";
 import { AgentRuntime } from "./agents/runtime.js";
 import { HabitatKernel } from "./habitat/kernel.js";
+import type { CognitiveAdapter } from "./habitat/types.js";
 import { CardBook } from "./auth/cards.js";
 import { FieldTokenBook } from "./auth/field-tokens.js";
 import { ComputerHost, type ComputerHostOptions } from "./computer/host.js";
@@ -52,7 +53,12 @@ export class AlphaVectorCore {
   readonly connectors = new ConnectorBook();
   computer!: ComputerHost;
 
-  constructor(anchors: TrustAnchors, stateDir?: string, computerBaseDir?: string) {
+  constructor(
+    anchors: TrustAnchors,
+    stateDir?: string,
+    computerBaseDir?: string,
+    opts?: { adapter?: CognitiveAdapter },
+  ) {
     this.packs = new PackLoader(
       stateDir ? new FilePackRegistry(stateDir) : new MemoryPackRegistry(),
       anchors,
@@ -81,6 +87,7 @@ export class AlphaVectorCore {
       effects: this.effects,
       agents: this.agents,
       orchestrator: this.orchestrator,
+      adapter: opts?.adapter,
     });
   }
 

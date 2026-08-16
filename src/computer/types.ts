@@ -27,6 +27,11 @@ export interface ComputerPaths {
   skillsDir: string;
   /** Worker trailer isolation. Torn down on worker_done / kill. */
   trailersDir: string;
+  /**
+   * Architect adapter bind (HK-055). Same class as field-tokens / credentials.
+   * Beside the disk, never inside the bind-mounted /home, never a field file.
+   */
+  adapterBindFile: string;
 }
 
 export interface TenantComputer {

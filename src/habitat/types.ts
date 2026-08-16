@@ -125,12 +125,19 @@ export interface SkillFile {
 
 export type AdapterPass = "talking" | "worker";
 
+/** Live bind resolved by the kernel from Architect-written adapter-bind.json. */
+export interface AdapterBind {
+  modelId: string;
+}
+
 export interface AdapterInput {
   pass: AdapterPass;
   event: WakeEvent;
   run: RunRecord;
   memory: LabeledMemory;
   skills: SkillFile[];
+  /** Present only after Architect bind. Never a field or createDeepAgent option. */
+  bind?: AdapterBind;
 }
 
 export interface CognitiveIntent {
@@ -146,6 +153,8 @@ export interface CognitiveIntent {
 export interface CognitiveAdapter {
   readonly name: string;
   readonly owns: readonly string[];
+  /** DeepAgentsAdapter requires an Architect bind. Dry-stem (eval) does not. */
+  readonly requiresBind?: boolean;
   think(input: AdapterInput): CognitiveIntent;
 }
 

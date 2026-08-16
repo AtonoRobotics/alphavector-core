@@ -58,6 +58,22 @@ export async function signedGenericPack(): Promise<{
   };
 }
 
+/** Sign a copy of the generic fixture after attaching optional declarations. */
+export async function signedGenericPackMutated(
+  mutate: (unsigned: Omit<PackBinding, "signatures">) => void,
+): Promise<{
+  binding: PackBinding;
+  anchors: TrustAnchors;
+}> {
+  const unsigned = await loadGenericUnsigned();
+  mutate(unsigned);
+  const keys = makeAnchors();
+  return {
+    binding: signPack(unsigned, keys.architectPrivate, keys.counselPrivate),
+    anchors: keys.anchors,
+  };
+}
+
 export async function signedRePack(): Promise<{
   binding: PackBinding;
   anchors: TrustAnchors;

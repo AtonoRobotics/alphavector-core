@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { signPack } from "../src/packs/signing.js";
-import { loadGenericUnsigned, makeAnchors, signedGenericPack } from "./helpers.js";
+import { loadGenericUnsigned, makeAnchors, signedGenericPack, signedGenericPackMutated } from "./helpers.js";
 
 describe("pack load DEC-019", () => {
   it("refuses an unsigned pack", async () => {
@@ -79,6 +79,40 @@ describe("pack load DEC-019", () => {
     ]) {
       expect(kinds).not.toContain(word);
     }
+  });
+
+  it("loads a pack without an adapter section", async () => {
+    const { anchors, binding } = await signedGenericPack();
+    expect(binding.adapter).toBeUndefined();
+    const loader = new PackLoader(new MemoryPackRegistry(), anchors);
+    const result = loader.load({ tenantId: "t1", binding, actor: "architect" });
+    expect(result.ok).toBe(true);
+  });
+
+  it("loads a pack with an optional adapter allow-list and default model id", async () => {
+    const { anchors, binding } = await signedGenericPackMutated((unsigned) => {
+      unsigned.adapter = { allowList: ["ci-double"], defaultModelId: "ci-double" };
+    });
+    const loader = new PackLoader(new MemoryPackRegistry(), anchors);
+    const result = loader.load({ tenantId: "t1", binding, actor: "architect" });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.loaded.binding.adapter?.allowList).toEqual(["ci-double"]);
+      expect(result.loaded.binding.adapter?.defaultModelId).toBe("ci-double");
+    }
+  });
+
+  it("refuses a pack adapter declaration that carries credentials", async () => {
+    const { anchors } = makeAnchors();
+    const unsigned = await loadGenericUnsigned();
+    const poisoned = {
+      ...unsigned,
+      adapter: { defaultModelId: "ci-double", apiKey: "sk-secret" },
+    };
+    const loader = new PackLoader(new MemoryPackRegistry(), anchors);
+    const result = loader.load({ tenantId: "t1", binding: poisoned, actor: "architect" });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("PACK_INVALID");
   });
 
   it("rejects invented T0-T3 numbers on action-class verbs", async () => {

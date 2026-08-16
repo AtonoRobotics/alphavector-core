@@ -4,3 +4,4 @@ export * from "./card-store.js";
 export * from "./field-tokens.js";
 export * from "./field-token-store.js";
 export * from "./architect-field-token.js";
+export * from "./architect-adapter-bind.js";

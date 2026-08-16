@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { CognitiveAdapter } from "../habitat/types.js";
 import { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PackBinding } from "../packs/types.js";
 import { generateEd25519, signPack } from "../packs/signing.js";
@@ -10,6 +11,8 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 export interface BootFieldCoreOptions {
   /** Tenant computer root core owns. Cards, facts, and records persist beside disk/, not in a pack. */
   computerBaseDir?: string;
+  /** Cognitive adapter. Omit to keep DryStem (eval / existing envelope). */
+  adapter?: CognitiveAdapter;
 }
 
 /** Boot a core with the pinned alphavector-re fixture. Architect load is internal, not a field route. */
@@ -35,6 +38,7 @@ export async function bootFieldCore(
     },
     stateDir,
     opts.computerBaseDir,
+    { adapter: opts.adapter },
   );
   const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
   if (!loaded.ok) {

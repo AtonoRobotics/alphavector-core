@@ -117,6 +117,16 @@ export interface FieldLanguageMap {
   [key: string]: string;
 }
 
+/**
+ * Optional pack adapter declaration (HK-056). Not required to load.
+ * A default model id is not live until Architect writes adapter-bind.json.
+ * An allow-list, when present, rejects a bind outside it (ADAPTER_NOT_ALLOWED).
+ */
+export interface PackAdapterDeclaration {
+  allowList?: string[];
+  defaultModelId?: string;
+}
+
 export interface PackSignatures {
   architect: string;
   counselEval: string;
@@ -133,6 +143,8 @@ export interface PackBinding {
   evidenceEvalFixtures: EvidenceEvalFixture[];
   askCeilings: string[];
   fieldLanguageMap: FieldLanguageMap;
+  /** Optional. Pack may declare an allow-list or default model id. Not required to load. */
+  adapter?: PackAdapterDeclaration;
   signatures?: PackSignatures;
 }
 
