@@ -177,9 +177,10 @@ describe("glass brand boards", () => {
     const app = read(FIELD_APP);
     expect(home).toMatch(/navigationTitle\("AV Dev Field"\)/);
     expect(home).toMatch(/Text\("Alpha Vector LLC"\)/);
-    expect(home).toMatch(/FieldGlass\.holdAmber/);
-    expect(home).toMatch(/Section\("Cards"\)[\s\S]*holdAmber/);
-    const withoutCards = home.replace(/Section\("Cards"\)[\s\S]*?(?=Section\()/, "");
+    expect(home).toMatch(/static let holdAmber = Color\("HoldAmber"\)/);
+    expect(home).toMatch(/Section\("Cards"\)[\s\S]*FieldGlass\.holdAmber/);
+    const usage = home.replace(/private enum FieldGlass \{[\s\S]*?\n\}/, "");
+    const withoutCards = usage.replace(/Section\("Cards"\)[\s\S]*?(?=Section\()/, "");
     expect(withoutCards).not.toMatch(/holdAmber/);
     expect(home).not.toMatch(/role:\s*\.destructive/);
     expect(home).not.toMatch(/\.foregroundStyle\(\.secondary\)/);
@@ -191,14 +192,14 @@ describe("glass brand boards", () => {
     assertOnlyBoardHues(app, "FieldApp.swift");
 
     const colorsets = listColorsets(IOS_ASSETS);
-    const names = colorsets.map((p) => path.basename(path.dirname(p)));
+    const names = colorsets.map((p) => path.basename(path.dirname(p)).replace(/\.colorset$/, ""));
     expect(names.sort()).toEqual(["AccentColor", "Bone", "Hairline", "HoldAmber", "NearBlack"].sort());
     const byName = new Map<string, string[]>();
     for (const file of colorsets) {
       const hues = colorsetHexes(read(file));
       const extra = hues.filter((h) => !ALLOWED.has(h));
       expect(extra, `${file} invented hues`).toEqual([]);
-      byName.set(path.basename(path.dirname(file)), hues);
+      byName.set(path.basename(path.dirname(file)).replace(/\.colorset$/, ""), hues);
     }
     expect(byName.get("Bone")).toEqual(["#F4F1EA"]);
     expect(byName.get("AccentColor")).toEqual(["#F4F1EA"]);
