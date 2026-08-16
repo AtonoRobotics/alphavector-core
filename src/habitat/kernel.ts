@@ -409,8 +409,8 @@ export class HabitatKernel {
   /**
    * Held coder pid died in this process. Emit worker_failed and wake the
    * orchestrator. Not worker_done. Not kill. isolation() does not call this.
-   * A booked dead pid after restart (not in heldPids) is not a crash — field_start
-   * + awaiting_card may relaunch that workerId.
+   * A booked dead pid after restart (not held by this WorkerBook instance) is
+   * not a crash — field_start + awaiting_card may relaunch that workerId.
    */
   private async reapCrashedWorkers(tenantId: string): Promise<void> {
     if (this.expectedTeardown.has(tenantId)) return;
