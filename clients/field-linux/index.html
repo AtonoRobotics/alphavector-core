@@ -28,7 +28,7 @@
 <body>
   <main>
     <h1>AV Dev Field</h1>
-    <p class="lead">Required field path. Start a pack journey, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
+    <p class="lead">Required field path. Open a pack journey, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
     <div id="status"></div>
 
     <section>
@@ -39,16 +39,17 @@
     </section>
 
     <section>
-      <h2>Start a journey</h2>
-      <label for="kind">Journey</label>
+      <h2>Journeys</h2>
+      <ul id="journey-kinds"></ul>
+      <label for="kind">Start</label>
       <select id="kind"></select>
       <label for="objective">Objective</label>
-      <input id="objective" value="Work this buyer journey" />
+      <input id="objective" />
       <button id="start" type="button">Start journey</button>
     </section>
 
     <section>
-      <h2>Open journeys</h2>
+      <h2>Started journeys</h2>
       <ul id="journeys"></ul>
     </section>
 
@@ -115,16 +116,27 @@
       el.innerHTML = rows.length ? rows.map(html).join("") : "<li class='meta'>None</li>";
     }
 
+    function objectiveFor(kind) {
+      return kind && kind.label ? "Work this " + kind.label + " journey" : "";
+    }
+
     async function refresh() {
       const home = await api("GET", "/field/home");
       const kind = document.getElementById("kind");
+      const objective = document.getElementById("objective");
+      renderList("journey-kinds", home.journeyKinds, (k) =>
+        `<li><strong>${k.label}</strong><div class="meta">${k.id}</div>
+         <button type="button" data-open="${k.id}">Open</button></li>`
+      );
       if (!kind.options.length) {
         for (const k of home.journeyKinds) {
           const opt = document.createElement("option");
           opt.value = k.id;
           opt.textContent = k.label;
-          if (k.id === "buyer") opt.selected = true;
           kind.appendChild(opt);
+        }
+        if (home.journeyKinds[0] && !objective.value) {
+          objective.value = objectiveFor(home.journeyKinds[0]);
         }
       }
       renderList("journeys", home.journeys, (j) =>
@@ -155,15 +167,19 @@
       }
     };
 
-    async function requestFact(path) {
+    async function requestFactCard(id, path) {
       try {
-        await api("POST", path, { id: document.getElementById("fact-id").value.trim() });
+        await api("POST", path, { id: id });
         setStatus("Fact request completed without a card");
       } catch (err) {
         if (err.cardId) setStatus("Card required: " + err.cardId);
         else throw err;
       }
       await refresh();
+    }
+
+    async function requestFact(path) {
+      await requestFactCard(document.getElementById("fact-id").value.trim(), path);
     }
 
     document.getElementById("record").onclick = async () => {
@@ -194,10 +210,29 @@
       }
     };
 
+    document.getElementById("kind").onchange = () => {
+      const kind = document.getElementById("kind");
+      const selected = kind.options[kind.selectedIndex];
+      if (selected) {
+        document.getElementById("objective").value = objectiveFor({
+          id: selected.value,
+          label: selected.textContent,
+        });
+      }
+    };
+
     document.body.addEventListener("click", async (ev) => {
       const t = ev.target;
       if (!(t instanceof HTMLElement)) return;
       try {
+        if (t.dataset.open) {
+          try {
+            await requestFactCard("journey." + t.dataset.open, "/field/facts");
+          } catch (err) {
+            setStatus(err.message, true);
+          }
+          return;
+        }
         if (t.dataset.progress) {
           try {
             await api("POST", "/field/journeys/" + t.dataset.progress + "/progress", {
