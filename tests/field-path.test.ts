@@ -77,6 +77,7 @@ describe("required field path against pinned alphavector-re", () => {
     const bookSrc = await readFile(path.join(REPO_ROOT, "src/facts/book.ts"), "utf8");
     expect(bookSrc).not.toMatch(/const GLOBAL/);
     expect(bookSrc).not.toMatch(/recordId \?\? GLOBAL/);
+    expect(bookSrc).not.toMatch(/if \(!fact\.recordId\) continue/);
     expect(bookSrc).toMatch(/RECORD_ID_REQUIRED/);
     expect(bookSrc).toMatch(/presentIds\(tenantId: string, recordId: string\)/);
     expect(bookSrc).toMatch(/put\(tenantId: string, id: string, recordId: string\)/);
@@ -107,20 +108,69 @@ describe("required field path against pinned alphavector-re", () => {
     expect(facts.presentIds("t1", "rec_never_seen")).toEqual([]);
   });
 
-  it("does not load leftover facts without recordId into a tenant-global bucket", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-no-global-"));
-    const paths = computerRoot(dir, "t1");
-    await mkdir(path.dirname(paths.factsFile), { recursive: true });
+  it("fail-closes on leftover facts without recordId and still loads a clean scoped file", async () => {
+    const unscoped = await mkdtemp(path.join(os.tmpdir(), "av-facts-unscoped-"));
+    const unscopedPaths = computerRoot(unscoped, "t1");
+    await mkdir(path.dirname(unscopedPaths.factsFile), { recursive: true });
     await writeFile(
-      paths.factsFile,
+      unscopedPaths.factsFile,
       JSON.stringify({ facts: [{ id: "journey.buyer" }, { id: "consent.dnc", recordId: "rec_a" }] }),
       "utf8",
     );
-    const book = new FactBook(dir);
-    expectPresentIdsDeniedWithoutRecord(book, "t1");
-    expect(book.presentIds("t1", "rec_a")).toEqual(["consent.dnc"]);
-    expect(book.presentIds("t1", "rec_a")).not.toContain("journey.buyer");
-    expect(book.presentIds("t1", "rec_never_seen")).toEqual([]);
+    const corrupt = new FactBook(unscoped);
+    expectPresentIdsDeniedWithoutRecord(corrupt, "t1");
+    expect(() => corrupt.presentIds("t1", "rec_a")).toThrow(AvError);
+    expect(() => corrupt.presentIds("t1", "rec_a")).toThrow(/corrupt/i);
+    try {
+      corrupt.presentIds("t1", "rec_a");
+      throw new Error("should have failed closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("FACT_STORE_CORRUPT");
+    }
+    expect(() => corrupt.presentIds("t1", "rec_never_seen")).toThrow(AvError);
+    expect(() => corrupt.presentIds("t1", "rec_never_seen")).toThrow(/corrupt/i);
+    expect(() => corrupt.presentIds("t1", "rec_a")).toThrow(/corrupt/i);
+    expectPresentIdsDeniedWithoutRecord(corrupt, "t1");
+
+    const missing = await mkdtemp(path.join(os.tmpdir(), "av-facts-missing-"));
+    const missingBook = new FactBook(missing);
+    expectPresentIdsDeniedWithoutRecord(missingBook, "t1");
+    expect(missingBook.presentIds("t1", "rec_a")).toEqual([]);
+    expect(missingBook.presentIds("t1", "rec_never_seen")).toEqual([]);
+
+    const empty = await mkdtemp(path.join(os.tmpdir(), "av-facts-empty-"));
+    const emptyPaths = computerRoot(empty, "t1");
+    await mkdir(path.dirname(emptyPaths.factsFile), { recursive: true });
+    await writeFile(emptyPaths.factsFile, JSON.stringify({ facts: [] }), "utf8");
+    const emptyBook = new FactBook(empty);
+    expectPresentIdsDeniedWithoutRecord(emptyBook, "t1");
+    expect(emptyBook.presentIds("t1", "rec_a")).toEqual([]);
+    expect(emptyBook.presentIds("t1", "rec_never_seen")).toEqual([]);
+
+    const clean = await mkdtemp(path.join(os.tmpdir(), "av-facts-scoped-"));
+    const cleanPaths = computerRoot(clean, "t1");
+    await mkdir(path.dirname(cleanPaths.factsFile), { recursive: true });
+    await writeFile(
+      cleanPaths.factsFile,
+      JSON.stringify({
+        facts: [
+          { id: "consent.dnc", recordId: "rec_a" },
+          { id: "journey.buyer", recordId: "rec_a" },
+          { id: "purpose.follow-up", recordId: "rec_b" },
+        ],
+      }),
+      "utf8",
+    );
+    const scoped = new FactBook(clean);
+    expectPresentIdsDeniedWithoutRecord(scoped, "t1");
+    expect(scoped.presentIds("t1", "rec_a")).toEqual(
+      expect.arrayContaining(["consent.dnc", "journey.buyer"]),
+    );
+    expect(scoped.presentIds("t1", "rec_a")).not.toContain("purpose.follow-up");
+    expect(scoped.presentIds("t1", "rec_b")).toEqual(["purpose.follow-up"]);
+    expect(scoped.presentIds("t1", "rec_b")).not.toContain("consent.dnc");
+    expect(scoped.presentIds("t1", "rec_never_seen")).toEqual([]);
   });
 
   it("lets a field user start and progress each pack journey kind; architect cannot", async () => {

@@ -414,6 +414,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const bookSrc = await readFile(path.join(REPO_ROOT, "src/facts/book.ts"), "utf8");
     expect(bookSrc).not.toMatch(/const GLOBAL/);
     expect(bookSrc).not.toMatch(/recordId \?\? GLOBAL/);
+    expect(bookSrc).not.toMatch(/if \(!fact\.recordId\) continue/);
     expect(bookSrc).toMatch(/RECORD_ID_REQUIRED/);
     expect(bookSrc).toMatch(/presentIds\(tenantId: string, recordId: string\)/);
     expect(bookSrc).toMatch(/put\(tenantId: string, id: string, recordId: string\)/);
