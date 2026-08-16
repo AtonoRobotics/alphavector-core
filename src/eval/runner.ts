@@ -1,3 +1,5 @@
+import type { WakeLogEntry } from "../habitat/types.js";
+import { replayWakeLog } from "../habitat/wake-log.js";
 import type { LoadedPack } from "../packs/types.js";
 
 export interface EvalResult {
@@ -15,5 +17,10 @@ export class EvalRunner {
       failed.push("no independent outcome evidence kind");
     }
     return { passed: failed.length === 0, failed };
+  }
+
+  /** Replay habitat facilities from a wake log. No model. */
+  replayFacilities(entries: WakeLogEntry[]): ReturnType<typeof replayWakeLog> {
+    return replayWakeLog(entries);
   }
 }

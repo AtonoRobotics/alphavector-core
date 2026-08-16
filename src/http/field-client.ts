@@ -55,6 +55,10 @@ export class FieldClient {
     return this.request<{ ok: true }>("POST", "/field/ask", { text, actionClass });
   }
 
+  kill(reason = "field kill"): Promise<{ ok: true }> {
+    return this.request<{ ok: true }>("POST", "/field/kill", { reason });
+  }
+
   /** Issues an owner_instance card. Persist happens only after approve. Missing recordId fails closed. */
   record(id: string, recordId: string): Promise<{ id: string; present: boolean }> {
     return this.request("POST", "/field/facts", { id, recordId });

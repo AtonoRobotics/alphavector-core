@@ -148,6 +148,13 @@ export class FieldHttpServer {
         // Claims only — never a write to the tenant fact store.
         conditions: Array.isArray(body.conditions) ? body.conditions.map(String) : undefined,
       });
+      core.habitat.observeFieldStart({
+        tenantId,
+        pack,
+        goal: journey.objective,
+        journeyId: journey.id,
+        recordId: journey.recordId,
+      });
       this.json(res, 201, journey);
       return;
     }
@@ -174,6 +181,13 @@ export class FieldHttpServer {
         decision: "denied",
       });
       this.forgetPending(card.cardId);
+      core.habitat.wake({
+        kind: "card_decide",
+        tenantId,
+        pack,
+        cardId: card.cardId,
+        decision: "denied",
+      });
       this.json(res, 200, { cardId: card.cardId, status: card.status });
       return;
     }
@@ -239,7 +253,9 @@ export class FieldHttpServer {
 
     if (method === "POST" && path === "/field/kill") {
       const body = (await readJson(req)) as { reason?: string };
-      core.field.kill(tenantId, String(body.reason ?? "field kill"));
+      const reason = String(body.reason ?? "field kill");
+      core.field.kill(tenantId, reason);
+      core.habitat.wake({ kind: "kill", tenantId, reason, pack });
       this.json(res, 200, { ok: true });
       return;
     }
@@ -255,9 +271,7 @@ export class FieldHttpServer {
   ): Promise<void> {
     const { core, pack, tenantId } = this.opts;
     const journey = core.store.journeys.find((j) => j.id === journeyId && j.tenantId === tenantId);
-    const agent = body.actionClass
-      ? this.pickAgent(journey?.journeyKind ?? "", body.actionClass)
-      : undefined;
+    const agent = body.actionClass ? this.boundPackAgent() : undefined;
     try {
       const result = core.field.progress({
         actor,
@@ -309,7 +323,18 @@ export class FieldHttpServer {
     }
     const pending = this.pending.get(cardId);
     if (!pending) {
-      this.json(res, 200, { card: { cardId: card.cardId, status: card.status } });
+      const resumed = core.habitat.wake({
+        kind: "card_decide",
+        tenantId: this.opts.tenantId,
+        pack,
+        cardId,
+        decision: "approved",
+      });
+      this.json(res, 200, {
+        card: { cardId: card.cardId, status: card.status },
+        ...(resumed.effect ? { effect: resumed.effect } : {}),
+        ...(resumed.run ? { runId: resumed.run.runId } : {}),
+      });
       return;
     }
     const agent = core.agents.list(this.opts.tenantId).find((a) => a.agentId === pending.agentId);
@@ -348,19 +373,13 @@ export class FieldHttpServer {
     this.opts.core.cards.clearPending(this.opts.tenantId, cardId);
   }
 
-  private pickAgent(journeyKind: string, actionClass: string): AgentRecord {
-    const agents = this.opts.core.agents.list(this.opts.tenantId);
-    if (actionClass === "communicate") {
-      const follow = agents.find((a) => a.name === "Follow-up");
-      if (follow) return follow;
-    }
-    return (
-      agents.find((a) => a.specialties.includes(journeyKind)) ??
-      agents.find((a) => a.isOrchestrator) ??
-      (() => {
-        throw new AvError("AGENT_REQUIRED", "No pack agent is bound for this tenant");
-      })()
-    );
+  /** Pack orchestrator or habitat worker. Field SHALL NOT pick an agent by name. */
+  private boundPackAgent(): AgentRecord {
+    const worker = this.opts.core.habitat.activeWorkerAgent(this.opts.tenantId);
+    if (worker) return worker;
+    const orch = this.opts.core.agents.list(this.opts.tenantId).find((a) => a.isOrchestrator);
+    if (orch) return orch;
+    throw new AvError("AGENT_REQUIRED", "No pack agent is bound for this tenant");
   }
 
   private principalOf(req: IncomingMessage): PrincipalKind | undefined {
@@ -401,10 +420,12 @@ export class FieldHttpServer {
               err.code === "DENY_IS_TERMINAL" ||
               err.code === "PREDICATE_CLOSED"
             ? 403
-            : err.code === "CARD_STORE_CORRUPT" ||
+            :             err.code === "CARD_STORE_CORRUPT" ||
                 err.code === "TOKEN_STORE_CORRUPT" ||
                 err.code === "FACT_STORE_CORRUPT" ||
-                err.code === "RECORD_STORE_CORRUPT"
+                err.code === "RECORD_STORE_CORRUPT" ||
+                err.code === "RUN_STORE_CORRUPT" ||
+                err.code === "MEMORY_STORE_CORRUPT"
               ? 500
               : 400;
       this.json(res, status, { error: err.code, message: err.message });
