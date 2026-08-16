@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MemoryTiers } from "../src/agents/memory.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { EvalRunner } from "../src/eval/runner.js";
-import { AvError } from "../src/errors.js";
+import { AvError, PolicyDeniedError } from "../src/errors.js";
 import { architectBindAdapter } from "../src/auth/architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "../src/auth/architect-adapter-credentials.js";
 import { architectIssueFieldToken } from "../src/auth/architect-field-token.js";
@@ -5868,6 +5868,196 @@ describe("HK-072 durable memory injected on every wake", () => {
     const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/HomeView.swift"), "utf8");
     expect(ios).not.toMatch(/memory store|write-memory|neo4j|vector store/i);
     expect(core.habitat.getRun("t1")).toBeUndefined();
+  });
+});
+
+describe("HK-074 grants already authorized SHALL be used by the loop", () => {
+  function authorizeClass(
+    core: AlphaVectorCore,
+    tenantId: string,
+    agentId: string,
+    actionClass = "communicate",
+  ) {
+    return core.grants.write({
+      actor: "architect",
+      tenantId,
+      agentId,
+      actionClass,
+      state: "authorized",
+      bounds: { channels: ["email"] },
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: "Follow-up emails will now send without asking. You can kill this.",
+    });
+  }
+
+  it("keeps the RE fixture pin at 5091328 and does not invent T0–T3 or a vendor host", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const files = [
+      "src/grants/ask.ts",
+      "src/grants/store.ts",
+      "src/effects/executor.ts",
+      "src/habitat/kernel.ts",
+      "src/policy/gateway.ts",
+    ];
+    for (const rel of files) {
+      const src = readFileSync(path.join(process.cwd(), rel), "utf8");
+      expect(src).not.toMatch(/\bT0\b|\bT1\b|\bT2\b|\bT3\b/);
+      expect(src).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+      expect(src).not.toMatch(/\b(Desk|Shape|Director|Play|Plant|HIL|Thor)\b/);
+      expect(src).not.toMatch(/listing|specialist title|real estate/i);
+    }
+    const types = readFileSync(path.join(process.cwd(), "src/grants/types.ts"), "utf8");
+    expect(types).toMatch(/Authorization is the default/);
+    expect(types).toMatch(/HABITAT_ASK_REASONS/);
+    expect(types).toMatch(/no numeric tiers|T0-T3 are not accepted/);
+  });
+
+  it("uses an authorized grant for that class and does not mint a new owner_instance card", async () => {
+    const { core, pack, tenantId, record, world, agents } = await habitatStackWithWorld();
+    const orch = agents.find((a) => a.isOrchestrator)!;
+    authorizeClass(core, tenantId, orch.agentId);
+    const beforeInbox = core.cards.fieldInbox(tenantId).length;
+
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+
+    expect(started.cardId).toBeUndefined();
+    expect(started.effect?.executed).toBe(true);
+    expect(started.effect?.policyDecision).toBeTruthy();
+    expect(started.run?.status).not.toBe("awaiting_card");
+    expect(core.cards.fieldInbox(tenantId)).toHaveLength(beforeInbox);
+    expect([...core.cards.fieldInbox(tenantId)].every((c) => c.cardId !== started.cardId)).toBe(true);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(true);
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0]?.method).toBe("POST");
+    const body = world.requests[0]?.body as { actionClass?: string };
+    expect(body.actionClass).toBe("communicate");
+    expect(core.grants.classState(tenantId, "communicate")).toBe("authorized");
+    expect(core.grants.authorizedForClass(tenantId, "communicate")?.agentId).toBe(orch.agentId);
+    expect(core.habitat.activeWorker(tenantId)?.agent.agentId).not.toBe(orch.agentId);
+  });
+
+  it("re-ask without a reason fails closed as HABITAT_REASK, not a silent second card", async () => {
+    const { core, pack, tenantId, record, agents } = await habitatStack();
+    const orch = agents.find((a) => a.isOrchestrator)!;
+    authorizeClass(core, tenantId, orch.agentId);
+    const before = core.cards.fieldInbox(tenantId).length;
+
+    expect(() => core.habitat.askForClass({ tenantId, actionClass: "communicate" })).toThrow(AvError);
+    try {
+      core.habitat.askForClass({ tenantId, actionClass: "communicate" });
+      throw new Error("should have failed closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("HABITAT_REASK");
+      expect((err as AvError).closed).toBe(true);
+      expect((err as AvError).message).toMatch(/habitat bug/i);
+    }
+    expect(core.cards.fieldInbox(tenantId)).toHaveLength(before);
+
+    expect(core.habitat.askForClass({ tenantId, actionClass: "material_state" })).toBe("class_mismatch");
+    expect(
+      core.habitat.askForClass({
+        tenantId,
+        actionClass: "communicate",
+        ceiling: "human_decision",
+      }),
+    ).toBe("human_decision");
+
+    core.grants.kill({ tenantId, actionClass: "communicate", reason: "owner kill" });
+    expect(core.habitat.askForClass({ tenantId, actionClass: "communicate" })).toBe("grant_revoked");
+    expect(core.cards.fieldInbox(tenantId)).toHaveLength(before);
+
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    expect(started.cardId).toMatch(/^card_/);
+    expect(started.effect).toBeUndefined();
+    expect(core.cards.get(started.cardId!)?.kind).toBe("owner_instance");
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("no grant and no current card cannot assume send or retry (EXC-008)", async () => {
+    const { core, pack, tenantId, record, world, agents } = await habitatStackWithWorld();
+    const writer = agents.find((a) => a.name === "Writer")!;
+    expect(core.grants.classState(tenantId, "communicate")).toBe("requires_authorization");
+    expect(core.habitat.askForClass({ tenantId, actionClass: "communicate" })).toBe("no_grant");
+
+    expect(() =>
+      core.effects.execute({
+        pack,
+        agent: writer,
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "follow-up",
+        subject: record.id,
+        surface: "field",
+        assumedRoutineAutonomy: true,
+      }),
+    ).toThrow(/EXC-008/);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(world.requests).toHaveLength(0);
+
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    expect(started.cardId).toMatch(/^card_/);
+    expect(started.effect).toBeUndefined();
+    expect(started.run?.status).toBe("awaiting_card");
+    expect(core.cards.get(started.cardId!)?.kind).toBe("owner_instance");
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(world.requests).toHaveLength(0);
+
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    const approved = await core.habitat.wake({
+      kind: "card_decide",
+      tenantId,
+      pack,
+      cardId: started.cardId,
+      decision: "approved",
+    });
+    expect(approved.effect?.executed).toBe(true);
+    expect(world.requests).toHaveLength(1);
+  });
+
+  it("a grant does not skip the policy gateway (DEC-022)", async () => {
+    const { core, pack, tenantId, agents } = await habitatStack();
+    const orch = agents.find((a) => a.isOrchestrator)!;
+    authorizeClass(core, tenantId, orch.agentId);
+    const coder = {
+      ...orch,
+      agentId: "worker_loop",
+      name: "coder",
+      isOrchestrator: false,
+    };
+    expect(() =>
+      core.effects.execute({
+        pack,
+        agent: coder,
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "dnc",
+        subject: "case",
+        surface: "field",
+      }),
+    ).toThrow(PolicyDeniedError);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(core.cards.fieldInbox(tenantId)).toHaveLength(0);
   });
 });
 

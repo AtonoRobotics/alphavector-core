@@ -148,6 +148,16 @@ describe("HK-082 Architect sits in the habitat", () => {
   it("Architect sits on live org, open runs, workers, grants, eval, isolation as records", async () => {
     const stack = await habitatCore();
     const orch = stack.agents.find((a) => a.isOrchestrator)!;
+    await stack.core.habitat.wake(
+      {
+        kind: "field_start",
+        tenantId: stack.tenantId,
+        pack: stack.pack,
+        goal: "one goal",
+        recordId: stack.record.id,
+      },
+      { holdWorker: true },
+    );
     stack.core.grants.write({
       actor: "architect",
       tenantId: stack.tenantId,
@@ -160,16 +170,6 @@ describe("HK-082 Architect sits in the habitat", () => {
       evalIds: ["eval1"],
       fieldNotice: "Follow-up emails will now send without asking. You can kill this.",
     });
-    await stack.core.habitat.wake(
-      {
-        kind: "field_start",
-        tenantId: stack.tenantId,
-        pack: stack.pack,
-        goal: "one goal",
-        recordId: stack.record.id,
-      },
-      { holdWorker: true },
-    );
 
     const seat = architectSit({
       tenantId: stack.tenantId,

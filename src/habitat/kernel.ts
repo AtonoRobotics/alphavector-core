@@ -6,8 +6,11 @@ import type { AgentRuntime } from "../agents/runtime.js";
 import type { CardBook } from "../auth/cards.js";
 import { AuthorizationRequiredError, AvError } from "../errors.js";
 import type { EffectExecutor, EffectResult } from "../effects/executor.js";
+import { assertHabitatMayAsk, habitatAskReason } from "../grants/ask.js";
+import type { GrantBook } from "../grants/store.js";
+import type { HabitatAskReason } from "../grants/types.js";
 import { newId, nowIso } from "../ids.js";
-import type { LoadedPack } from "../packs/types.js";
+import type { ActionCeiling, LoadedPack } from "../packs/types.js";
 import { readTenantAdapterBind } from "./adapter-bind.js";
 import { readTenantAdapterCredentials } from "./adapter-credentials.js";
 import { DeepAgentsAdapter } from "./deep-agents.js";
@@ -76,6 +79,7 @@ export const HABITAT_ROUTINE_TICK_MS = 60_000;
 export interface HabitatKernelOptions {
   computerBaseDir?: string;
   cards: CardBook;
+  grants: GrantBook;
   effects: EffectExecutor;
   agents: AgentRuntime;
   orchestrator: Orchestrator;
@@ -1258,15 +1262,45 @@ export class HabitatKernel {
     };
   }
 
+  /**
+   * Explicit re-ask. An authorized grant for that class must be used.
+   * Re-ask without a reason (no grant, grant revoked, class mismatch,
+   * human_decision) fails closed as HABITAT_REASK — not a silent second card.
+   */
+  askForClass(input: {
+    tenantId: string;
+    actionClass: string;
+    proposedClass?: string;
+    ceiling?: ActionCeiling;
+  }): HabitatAskReason {
+    return assertHabitatMayAsk(
+      habitatAskReason({
+        grants: this.opts.grants,
+        tenantId: input.tenantId,
+        actionClass: input.actionClass,
+        proposedClass: input.proposedClass,
+        ceiling: input.ceiling,
+      }),
+    );
+  }
+
   private async admit(
     pack: LoadedPack,
     agent: AgentRecord,
     intent: CognitiveIntent,
   ): Promise<{ effect?: EffectResult; cardId?: string }> {
     const run = this.requireRun(pack.tenantId);
+    const actionClass = intent.actionClass ?? "communicate";
+    const verb = pack.binding.actionClassVerbs.find((v) => v.id === actionClass);
+    const askReason = habitatAskReason({
+      grants: this.opts.grants,
+      tenantId: pack.tenantId,
+      actionClass,
+      ceiling: verb?.ceiling,
+    });
     try {
       const effect = await this.executeApprovedEffect(pack, agent, {
-        actionClass: intent.actionClass ?? "communicate",
+        actionClass,
         channel: intent.channel ?? "unspecified",
         purpose: intent.purpose ?? "unspecified",
         subject: intent.subject ?? "unspecified",
@@ -1280,12 +1314,13 @@ export class HabitatKernel {
       return { effect };
     } catch (err) {
       if (err instanceof AuthorizationRequiredError) {
+        assertHabitatMayAsk(askReason);
         this.runs.put({
           ...run,
           status: "awaiting_card",
           pendingCardId: err.cardId,
           pendingEffect: {
-            actionClass: intent.actionClass ?? "communicate",
+            actionClass,
             channel: intent.channel ?? "unspecified",
             purpose: intent.purpose ?? "unspecified",
             subject: intent.subject ?? "unspecified",

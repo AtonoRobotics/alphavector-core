@@ -86,6 +86,7 @@ export class AlphaVectorCore {
     this.habitat = new HabitatKernel({
       computerBaseDir,
       cards: this.cards,
+      grants: this.grants,
       effects: this.effects,
       agents: this.agents,
       orchestrator: this.orchestrator,
