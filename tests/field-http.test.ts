@@ -23,8 +23,11 @@ afterEach(async () => {
   }
 });
 
-async function liveField(tenantId = "t1") {
-  const { core, pack } = await bootFieldCore(tenantId);
+async function liveField(tenantId = "t1", computerBaseDir?: string) {
+  const { core, pack } = await bootFieldCore(
+    tenantId,
+    computerBaseDir ? { computerBaseDir } : {},
+  );
   const architectIssued = core.fieldTokens.issue({ tenantId, principal: "architect" });
   const fieldIssued = core.fieldTokens.issue({
     tenantId,
@@ -85,16 +88,7 @@ async function issueFactCard(
   id: string,
   op: "record" | "retract" = "record",
 ): Promise<string> {
-  try {
-    if (op === "record") await field.record(id);
-    else await field.retract(id);
-    throw new Error("expected authorization card before fact write");
-  } catch (err) {
-    if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
-      throw err;
-    }
-    return err.cardId;
-  }
+  return field.requestFactCard(id, op);
 }
 
 describe("field HTTP surface against pinned alphavector-re", () => {
@@ -220,7 +214,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
   });
 
   it("serves a Linux-openable field client that can complete a journey and a card", async () => {
-    const { url, field, tokens, tenantId } = await liveField("linux");
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-linux-page-"));
+    const { url, field, tokens, tenantId } = await liveField("linux", dir);
     const page = await fetch(url);
     expect(page.headers.get("content-type")).toMatch(/text\/html/);
     const html = await page.text();
@@ -228,6 +223,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/data-approve/);
     expect(html).toMatch(/\/field\/journeys/);
     expect(html).toMatch(/\/field\/cards/);
+    expect(html).toMatch(/id="fact-id"/);
+    expect(html).toMatch(/id="record"/);
+    expect(html).toMatch(/id="retract"/);
+    expect(html).toMatch(/\/field\/facts/);
+    expect(html).toMatch(/\/field\/facts\/retract/);
+    expect(html).not.toMatch(/listing_id|person_id|household_id|buyer_id/i);
     expect(html).not.toContain(tokens.field);
     expect(html).not.toMatch(/window\.FIELD_DEFAULTS/);
     expect(html).toMatch(/Issued field token/);
@@ -240,6 +241,28 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const done = await field.completeBuyerJourneyAndCard();
     expect(done.journey.journeyKind).toBe("buyer");
     expect(done.effect.executed).toBe(true);
+
+    // Same POSTs the page script issues: record/retract then existing card approve.
+    const paths = computerRoot(dir, tenantId);
+    const recordCardId = await field.requestFactCard(REQUIRED);
+    expect(existsSync(paths.factsFile)).toBe(false);
+    const recorded = await field.approve(recordCardId);
+    expect(recorded.fact).toEqual({ id: REQUIRED, present: true });
+    expect(JSON.parse(readFileSync(paths.factsFile, "utf8"))).toEqual({
+      facts: [{ id: REQUIRED }],
+    });
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+
+    const retractCardId = await field.requestFactCard(REQUIRED, "retract");
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([REQUIRED]);
+    const retracted = await field.approve(retractCardId);
+    expect(retracted.fact).toEqual({ id: REQUIRED, present: false });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+
+    const scripted = await field.completeFactRecordAndRetract("demo.fact");
+    expect(scripted.recorded).toEqual({ id: "demo.fact", present: true });
+    expect(scripted.retracted).toEqual({ id: "demo.fact", present: false });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
   });
 
   it("keeps a real SwiftUI iOS field target in tree on the same API", async () => {

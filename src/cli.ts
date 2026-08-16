@@ -124,7 +124,10 @@ async function main(): Promise<void> {
     const client = new FieldClient(base, token);
     if (rest.includes("--complete-demo")) {
       const done = await client.completeBuyerJourneyAndCard();
-      console.log(JSON.stringify({ ok: true, ...done }, null, 2));
+      const facts = await client.completeFactRecordAndRetract(
+        flag(rest, "--fact-id") ?? "condition.required",
+      );
+      console.log(JSON.stringify({ ok: true, ...done, facts }, null, 2));
       return;
     }
     const home = await client.home();
