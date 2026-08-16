@@ -32,9 +32,11 @@ import {
   readTenantMail,
   reapHeldCoders,
   HabitatMemoryStore,
+  invokeConnectorWorld,
   loadSkillFiles,
   readSkillFile,
   resetDeepAgentsInvocations,
+  resolveLiveConnectorHandle,
   WorkerBook,
 } from "../src/habitat/index.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
@@ -4912,6 +4914,8 @@ describe("HK-073 approved external effect calls the world", () => {
     const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
     expect(worldSrc).toMatch(/invokeConnectorWorld/);
     expect(worldSrc).toMatch(/LiveConnectorHandle/);
+    expect(worldSrc).not.toMatch(/return tenantRows\[0\]/);
+    expect(worldSrc).toMatch(/throw new AvError\(\s*"CONNECTOR_UNBOUND"/);
     expect(worldSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
     expect(bindSrc).toMatch(/baseUrl\?: string/);
     expect(bindSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
@@ -4974,6 +4978,166 @@ describe("HK-073 approved external effect calls the world", () => {
       }),
     ).rejects.toMatchObject({ code: "CONNECTOR_UNBOUND", closed: true });
     expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("approved effect whose channel matches no bind is CONNECTOR_UNBOUND and does not POST the first tenant row", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const world = await useWorldHttp();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    const firstRowSecret = "av-world-first-row-secret";
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "other-outbound",
+      baseUrl: world.url,
+      secret: firstRowSecret,
+    });
+    expect(pack.binding.connectors.some((c) => c.id === "other-outbound")).toBe(false);
+    expect(() =>
+      resolveLiveConnectorHandle({
+        computerBaseDir,
+        tenantId,
+        pack,
+        actionClass: "communicate",
+        channel: "email",
+      }),
+    ).toThrow(/CONNECTOR_UNBOUND|no silent no-op/);
+    await expect(
+      invokeConnectorWorld({
+        computerBaseDir,
+        tenantId,
+        pack,
+        actionClass: "communicate",
+        channel: "email",
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_UNBOUND", closed: true });
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    await expect(
+      core.habitat.wake({
+        kind: "card_decide",
+        tenantId,
+        pack,
+        cardId: started.cardId,
+        decision: "approved",
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_UNBOUND", closed: true });
+    expect(world.requests).toHaveLength(0);
+    expect(JSON.stringify(world.requests)).not.toContain(firstRowSecret);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("in-bound channel match POSTs that connector and not the first tenant row", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const decoy = await startWorldDouble({ secret: "av-world-first-row-secret" });
+    const world = await startWorldDouble();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "other-outbound",
+      baseUrl: decoy.url,
+      secret: "av-world-first-row-secret",
+    });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "email",
+      baseUrl: world.url,
+    });
+    const handle = resolveLiveConnectorHandle({
+      computerBaseDir,
+      tenantId,
+      pack,
+      actionClass: "communicate",
+      channel: "email",
+    });
+    expect(handle.connectorId).toBe("email");
+    expect(handle.connectorId).not.toBe("other-outbound");
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    const approved = await core.habitat.wake({
+      kind: "card_decide",
+      tenantId,
+      pack,
+      cardId: started.cardId,
+      decision: "approved",
+    });
+    expect(approved.effect?.executed).toBe(true);
+    expect(decoy.requests).toHaveLength(0);
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
+    const body = world.requests[0]?.body as { connectorId?: string };
+    expect(body.connectorId).toBe("email");
+    expect(JSON.stringify(decoy.requests)).not.toContain("av-world-first-row-secret");
+  });
+
+  it("pack-declared connector-id match POSTs that connector and not the first tenant row", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const decoy = await startWorldDouble({ secret: "av-world-first-row-secret" });
+    const world = await startWorldDouble();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "other-outbound",
+      baseUrl: decoy.url,
+      secret: "av-world-first-row-secret",
+    });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: pack.binding.connectors[0]!.id,
+      baseUrl: world.url,
+    });
+    const handle = resolveLiveConnectorHandle({
+      computerBaseDir,
+      tenantId,
+      pack,
+      actionClass: "communicate",
+      channel: "email",
+    });
+    expect(handle.connectorId).toBe(pack.binding.connectors[0]!.id);
+    expect(handle.connectorId).not.toBe("other-outbound");
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    const approved = await core.habitat.wake({
+      kind: "card_decide",
+      tenantId,
+      pack,
+      cardId: started.cardId,
+      decision: "approved",
+    });
+    expect(approved.effect?.executed).toBe(true);
+    expect(decoy.requests).toHaveLength(0);
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
+    const body = world.requests[0]?.body as { connectorId?: string };
+    expect(body.connectorId).toBe(pack.binding.connectors[0]!.id);
+    expect(JSON.stringify(decoy.requests)).not.toContain("av-world-first-row-secret");
   });
 
   it("missing required credentials fail closed and do not call the world", async () => {
