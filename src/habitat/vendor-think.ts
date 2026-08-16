@@ -1,7 +1,7 @@
 import type { AdapterCredentials, AdapterInput, CognitiveIntent } from "./types.js";
 
 /**
- * Vendor-shaped think hop. Not adapterThink. Not dryThink. Not the SDK loop.
+ * Vendor-shaped think hop. Not the CI intent mapper. Not the SDK loop.
  * Credentials authorize the call; they are not copied into the returned intent
  * and are not model context.
  *
