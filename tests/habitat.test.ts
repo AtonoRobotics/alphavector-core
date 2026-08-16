@@ -155,9 +155,14 @@ async function startVendorThinkDouble(opts?: {
                 purpose: "follow-up",
                 subject: rec.recordId ?? "unspecified",
               }
-            : rec.kind === "field_ask" || rec.kind === "mail" || rec.kind === "deadline"
-              ? { pass: "talking", act: "follow_up" }
-              : { pass: "talking", act: "launch_worker", workerType: "coder" };
+            : rec.kind === "worker_done"
+              ? { pass: "talking", act: "done" }
+              : rec.kind === "field_ask" ||
+                  rec.kind === "field_continue" ||
+                  rec.kind === "mail" ||
+                  rec.kind === "deadline"
+                ? { pass: "talking", act: "follow_up" }
+                : { pass: "talking", act: "launch_worker", workerType: "coder" };
       res.writeHead(200, { "content-type": "application/json" });
       res.end(chatCompletionsEnvelope(intent));
     });
@@ -946,13 +951,15 @@ describe("D10 §6 habitat kernel", () => {
 
   it("no pickAgent conductor in the field path", async () => {
     const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
-    expect(fieldSrc).not.toMatch(/pickAgent/);
+    expect(fieldSrc).not.toMatch(/\/field\/pickAgent/);
     expect(fieldSrc).not.toMatch(/Follow-up/);
     expect(fieldSrc).toMatch(/boundPackAgent/);
     expect(fieldSrc).toMatch(/observeFieldStart/);
     expect(fieldSrc).toMatch(/wake\(\{ kind: "field_ask"/);
     expect(fieldSrc).toMatch(/\/field\/ask/);
+    expect(fieldSrc).toMatch(/\/field\/continue/);
     expect(fieldSrc).toMatch(/\/field\/kill/);
+    expect(fieldSrc).toMatch(/FIELD_CANNOT_PICK_AGENT/);
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(kernelSrc).toMatch(
       /return this\.wake\(\{ \.\.\.event, kind: "field_start" \},\s*\{\s*holdWorker:\s*true\s*\}\);/,
@@ -961,7 +968,9 @@ describe("D10 §6 habitat kernel", () => {
     expect(kernelSrc).not.toMatch(/does not throw ONE_GOAL/);
     expect(kernelSrc).toMatch(/throw new AvError\("ONE_GOAL"/);
     expect(kernelSrc).toMatch(/event\.kind === "field_ask"/);
+    expect(kernelSrc).toMatch(/event\.kind === "field_continue"/);
     expect(kernelSrc).toMatch(/throw new AvError\("NO_OPEN_RUN"/);
+    expect(kernelSrc).toMatch(/FIELD_CANNOT_PICK_AGENT/);
   });
 
   it("follow-up sticks to the same worker; relaunch after kill is not follow-up", async () => {
@@ -1781,6 +1790,212 @@ describe("D10 §6 field verbs", () => {
     expect(onDisk.runs).toHaveLength(1);
     expect(onDisk.runs[0]?.runId).toBe(runA!.runId);
     expect(onDisk.runs[0]?.goal).toBe(first.journey.objective);
+  });
+});
+
+describe("D10 §8 #8 follow-up kernel verb", () => {
+  it("keeps the RE fixture pin at 5091328", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+  });
+
+  it("worker_done follow-up launches the next worker on the same run", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-hab-follow-"));
+    const { anchors, binding } = await signedGenericPack();
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: {
+        name: "follow-up-think",
+        owns: ["think"],
+        think(input) {
+          if (input.pass === "talking" && input.event.kind === "worker_done") {
+            return { pass: "talking", act: "follow_up" };
+          }
+          return dryThink(input);
+        },
+      },
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId: "t1",
+      pack: loaded.loaded,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    const runId = started.run!.runId;
+    const firstWorkerId = started.run!.workerId;
+    expect(firstWorkerId).toMatch(/^worker_/);
+    expect(started.run?.status).toBe("awaiting_card");
+
+    const continued = await core.habitat.wake({ kind: "worker_done", tenantId: "t1", pack: loaded.loaded });
+    expect(continued.wokeOrchestrator).toBe(true);
+    expect(continued.launchedWorker).toBe(true);
+    expect(continued.run?.runId).toBe(runId);
+    expect(continued.run?.goal).toBe("one goal");
+    expect(continued.run?.status).toBe("awaiting_card");
+    expect(continued.run?.workerId).toBeDefined();
+    expect(continued.run?.workerId).not.toBe(firstWorkerId);
+    expect(continued.run?.workerType).toBe("coder");
+    expect(core.habitat.getRun("t1")?.runId).toBe(runId);
+    expect(core.habitat.getRun("t1")?.status).not.toBe("completed");
+    expect(core.habitat.openRuns("t1")).toHaveLength(1);
+    expect(core.habitat.openRuns("t1")[0]?.runId).toBe(runId);
+    expect(core.habitat.activeWorker("t1")?.workerId).toBe(continued.run?.workerId);
+    expect(core.habitat.activeWorker("t1")?.type).toBe("coder");
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "worker_done" && w.runId === runId)).toBe(true);
+
+    const orch = core.agents.list("t1").find((a) => a.isOrchestrator)!;
+    const worker = core.habitat.activeWorkerAgent("t1")!;
+    expect(() =>
+      core.orchestrator.dispatch({ orchestrator: orch, assignee: worker, goal: "other goal" }),
+    ).toThrow(/ONE_GOAL|one goal at a time/);
+  });
+
+  it("field continue is a wake on the same run and does not pick who works", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-continue-wake-"));
+    const { core, field } = await liveField("t1", dir);
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    const workerId = run!.workerId;
+    const pid = core.habitat.activeWorker("t1")?.pid;
+
+    const woke = await field.continue();
+    expect(woke.ok).toBe(true);
+    expect(woke.runId).toBe(run!.runId);
+    expect(woke.launchedWorker).toBe(false);
+    expect(woke.memory.profile.label).toBe("profile");
+    expect(woke.memory.logs.label).toBe("logs");
+    expect(woke.memory.recall.label).toBe("recall");
+
+    const after = core.habitat.getRun("t1");
+    expect(after?.runId).toBe(run!.runId);
+    expect(after?.goal).toBe(started.journey.objective);
+    expect(after?.status).toBe(run!.status);
+    expect(after?.workerId).toBe(workerId);
+    expect(core.habitat.activeWorker("t1")?.pid).toBe(pid);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "field_continue" && w.runId === run!.runId)).toBe(
+      true,
+    );
+    expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
+  });
+
+  it("field cannot pick an agent on continue or worker_done", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-no-pick-"));
+    const { core, field, fieldToken, url, pack } = await liveField("t1", dir);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    const runId = core.habitat.getRun("t1")!.runId;
+
+    await expect(
+      core.habitat.wake({
+        kind: "field_continue",
+        tenantId: "t1",
+        pack,
+        agentId: "agent_picked",
+      }),
+    ).rejects.toMatchObject({ code: "FIELD_CANNOT_PICK_AGENT" });
+    await expect(
+      core.habitat.wake({
+        kind: "field_continue",
+        tenantId: "t1",
+        pack,
+        workerType: "coder",
+      }),
+    ).rejects.toMatchObject({ code: "FIELD_CANNOT_PICK_AGENT" });
+    await expect(
+      core.habitat.wake({
+        kind: "worker_done",
+        tenantId: "t1",
+        pack,
+        assigneeAgentId: "agent_picked",
+      }),
+    ).rejects.toMatchObject({ code: "FIELD_CANNOT_PICK_AGENT" });
+
+    for (const body of [{ agentId: "agent_picked" }, { workerType: "coder" }, { pickAgent: "Follow-up" }]) {
+      const res = await fetch(`${url}/field/continue`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${fieldToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("FIELD_CANNOT_PICK_AGENT");
+    }
+
+    expect(core.habitat.getRun("t1")?.runId).toBe(runId);
+    expect(core.habitat.getRun("t1")?.status).toBe("awaiting_card");
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "field_continue")).toBe(false);
+
+    const pick = await fetch(`${url}/field/pickAgent`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ agent: "coder" }),
+    });
+    expect(pick.status).toBe(404);
+
+    const clientSrc = readFileSync(path.join(process.cwd(), "src/http/field-client.ts"), "utf8");
+    expect(clientSrc).toMatch(/continue\(\): Promise<FieldContinueResult>/);
+    expect(clientSrc).not.toMatch(/continue\([^)]*agent/i);
+    expect(clientSrc).not.toMatch(/continue\([^)]*workerType/i);
+    const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/FieldAPI.swift"), "utf8");
+    expect(ios).toMatch(/func continueRun\(\)/);
+    expect(ios).toMatch(/\/field\/continue/);
+    expect(ios).not.toMatch(/func continueRun\([^)]*agent/i);
+    expect(ios).not.toMatch(/pickAgent/);
+    const home = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/HomeView.swift"), "utf8");
+    expect(home).not.toMatch(/pickAgent|agentId|workerType/);
+  });
+
+  it("field continue with no open run is NO_OPEN_RUN and does not create runs.json", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-continue-no-run-"));
+    const { core, field } = await liveField("t1", dir);
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    await expect(field.continue()).rejects.toMatchObject({
+      status: 400,
+      code: "NO_OPEN_RUN",
+      message: expect.stringMatching(/no implicit start/i),
+    });
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+    expect(core.habitat.listWakes("t1")).toEqual([]);
+    expect(core.habitat.trailerExists("t1")).toBe(false);
+  });
+
+  it("HTTP approve then worker_done follow-up keeps the same run and launches the next worker", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-follow-"));
+    const { core, field } = await liveFieldWithWorld("t1", dir, undefined, {
+      name: "http-follow-up-think",
+      owns: ["think"],
+      think(input) {
+        if (input.pass === "talking" && input.event.kind === "worker_done") {
+          return { pass: "talking", act: "follow_up" };
+        }
+        return dryThink(input);
+      },
+    });
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    const runId = core.habitat.getRun("t1")!.runId;
+    const firstWorkerId = core.habitat.getRun("t1")!.workerId;
+    const cardId = core.habitat.getRun("t1")!.pendingCardId!;
+    const approved = await field.approve(cardId);
+    expect(approved.card.status).toBe("approved");
+    expect(approved.effect?.executed).toBe(true);
+    expect(approved.runId).toBe(runId);
+    expect(core.habitat.getRun("t1")?.runId).toBe(runId);
+    expect(core.habitat.getRun("t1")?.status).toBe("awaiting_card");
+    expect(core.habitat.getRun("t1")?.workerId).toBeDefined();
+    expect(core.habitat.getRun("t1")?.workerId).not.toBe(firstWorkerId);
+    expect(core.habitat.getRun("t1")?.pendingCardId).toBeDefined();
+    expect(core.habitat.getRun("t1")?.pendingCardId).not.toBe(cardId);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "worker_done" && w.runId === runId)).toBe(true);
+    expect(core.habitat.openRuns("t1")).toHaveLength(1);
   });
 });
 
@@ -5428,6 +5643,12 @@ describe("HK-072 durable memory injected on every wake", () => {
       markers,
     );
 
+    await core.habitat.wake({ kind: "field_continue", tenantId: "t1", pack: loaded.loaded });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "field_continue"),
+      markers,
+    );
+
     architectWriteRoutine({
       tenantId: "t1",
       routineId: "mem-brief",
@@ -5485,8 +5706,23 @@ describe("HK-072 durable memory injected on every wake", () => {
       markers,
     );
 
+    await core.habitat.wake({ kind: "worker_done", tenantId: "t1", pack: loaded.loaded });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "worker_done" && s.pass === "talking"),
+      markers,
+    );
+
     const thinkKinds = new Set(seen.map((s) => s.event.kind));
-    for (const kind of ["field_start", "field_ask", "routine", "mail", "deadline", "connector"] as const) {
+    for (const kind of [
+      "field_start",
+      "field_ask",
+      "field_continue",
+      "routine",
+      "mail",
+      "deadline",
+      "connector",
+      "worker_done",
+    ] as const) {
       expect(thinkKinds.has(kind), `${kind} must think with inject`).toBe(true);
     }
     expect(seen.every((s) => s.memory.profile.label === "profile")).toBe(true);

@@ -72,6 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const KNOWN_WAKE_KINDS: ReadonlySet<WakeKind> = new Set([
   "field_start",
   "field_ask",
+  "field_continue",
   "card_decide",
   "worker_done",
   "kill",
@@ -125,7 +126,14 @@ export function replayWakeLog(entries: unknown, context?: WakeLogReplayContext):
     if (!stemDecisionsEqual(recomputed, stored)) {
       return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
     }
-    if ((kind === "field_ask" || kind === "routine" || kind === "mail" || kind === "deadline") && !runId) {
+    if (
+      (kind === "field_ask" ||
+        kind === "field_continue" ||
+        kind === "routine" ||
+        kind === "mail" ||
+        kind === "deadline") &&
+      !runId
+    ) {
       return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
     }
     if (runId && storedRunIds && !storedRunIds.includes(runId)) {
