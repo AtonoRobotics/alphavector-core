@@ -1548,7 +1548,7 @@ describe("required field path against pinned alphavector-re", () => {
 
   it("retracts a whole record only after approve; missing recordId fails closed", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-retract-"));
-    const { pack, field, cards, records } = await reFieldStack(undefined, {
+    const { pack, field, cards, records, facts } = await reFieldStack(undefined, {
       computerBaseDir: dir,
     });
     const paths = computerRoot(dir, "t1");
@@ -1573,6 +1573,17 @@ describe("required field path against pinned alphavector-re", () => {
     }
     cards.resolve({ cardId: createId, decision: "approved", actor: "field" });
     const recId = field.commitApprovedFact(createId)!.id;
+
+    facts.put("t1", "journey.buyer", recId);
+    facts.put("t1", "purpose.follow-up", recId);
+    facts.put("t1", "journey.seller", keepRecId);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
+    expect(new FactBook(dir).presentIds("t1", recId)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    expect(new FactBook(dir).presentIds("t1", keepRecId)).toEqual(["journey.seller"]);
+    expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
 
     expect(() => field.retractRecord({ actor: "architect", pack, recordId: recId })).toThrow(
       SurfaceViolationError,
@@ -1601,12 +1612,20 @@ describe("required field path against pinned alphavector-re", () => {
     expect(cards.get(deniedId)?.channel).toBe("records");
     expect(() => field.commitApprovedFact(deniedId)).toThrow(/approved card/);
     expect(records.get("t1", recId)?.label).toBe("Gone");
+    expect(new FactBook(dir).presentIds("t1", recId)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    expect(new FactBook(dir).presentIds("t1", keepRecId)).toEqual(["journey.seller"]);
     expect(JSON.parse(await readFile(paths.recordsFile, "utf8")).records.map((r: { id: string }) => r.id)).toEqual(
       expect.arrayContaining([keepRecId, recId]),
     );
 
     cards.resolve({ cardId: deniedId, decision: "denied", actor: "field" });
     expect(records.get("t1", recId)?.label).toBe("Gone");
+    expect(new FactBook(dir).presentIds("t1", recId)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    expect(new FactBook(dir).presentIds("t1", keepRecId)).toEqual(["journey.seller"]);
     expect(() => field.retractRecord({ actor: "field", pack, recordId: recId })).toThrow(
       /Deny is terminal/,
     );
@@ -1620,10 +1639,29 @@ describe("required field path against pinned alphavector-re", () => {
     }
     expect(() => field.commitApprovedFact(approvedId)).toThrow(/approved card/);
     expect(new RecordBook(dir).get("t1", keepRecId)?.label).toBe("Keep");
+    expect(new FactBook(dir).presentIds("t1", keepRecId)).toEqual(["journey.seller"]);
+    expect(new FactBook(dir).presentIds("t1", recId)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
     cards.resolve({ cardId: approvedId, decision: "approved", actor: "field" });
     expect(field.commitApprovedFact(approvedId)).toEqual({ id: keepRecId, present: false });
     expect(records.get("t1", keepRecId)).toBeUndefined();
     expect(records.get("t1", recId)?.label).toBe("Gone");
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
+    expect(new FactBook(dir).presentIds("t1", keepRecId)).toEqual([]);
+    expect(new FactBook(dir).presentIds("t1", recId)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    expect(new FactBook(dir).presentIds("t1", recId)).not.toContain("journey.seller");
+    expect(JSON.parse(await readFile(paths.factsFile, "utf8")).facts).toEqual(
+      expect.arrayContaining([
+        { id: "journey.buyer", recordId: recId },
+        { id: "purpose.follow-up", recordId: recId },
+      ]),
+    );
+    expect(JSON.parse(await readFile(paths.factsFile, "utf8")).facts).not.toEqual(
+      expect.arrayContaining([{ id: "journey.seller", recordId: keepRecId }]),
+    );
     expect(new RecordBook(dir).get("t1", keepRecId)).toBeUndefined();
     expect(new RecordBook(dir).get("t1", recId)).toEqual({
       id: recId,
@@ -1635,5 +1673,6 @@ describe("required field path against pinned alphavector-re", () => {
       expect.objectContaining({ id: recId, label: "Gone" }),
     ]);
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
   });
 });

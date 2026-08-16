@@ -454,6 +454,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(fieldSrc).toMatch(/actionClass === "update"/);
     expect(fieldSrc).toMatch(/actionClass === "delete"/);
     expect(fieldSrc).toMatch(/retractRecord/);
+    expect(fieldSrc).toMatch(/this\.facts\.presentIds\(card\.tenantId, recordId\)/);
+    expect(fieldSrc).toMatch(/this\.facts\.retract\(card\.tenantId, factId, recordId\)/);
     expect(fieldSrc).toMatch(/verb\.AVOIDS/);
     expect(fieldSrc).toMatch(/kind\.AVOIDS/);
     expect(fieldSrc).toMatch(/RECORD_ID_REQUIRED/);
@@ -1590,6 +1592,16 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const type = (await field.home()).recordKinds[0];
     const keep = await field.createApprovedRecord(type.id, "Keep");
     const rec = await field.createApprovedRecord(type.id, "Gone");
+    await field.recordApprovedFact("journey.buyer", rec.id);
+    await field.recordApprovedFact("purpose.follow-up", rec.id);
+    await field.recordApprovedFact("journey.seller", keep.id);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    expect(new FactBook(dir).presentIds(tenantId, keep.id)).toEqual(["journey.seller"]);
+    expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
 
     await expect(architect.retractRecord(rec.id)).rejects.toMatchObject({
       status: 403,
@@ -1621,6 +1633,10 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const unapproved = await field.requestRecordRetractCard(rec.id);
     expect(unapproved).toMatch(/^card_/);
     expect(new RecordBook(dir).get(tenantId, rec.id)?.label).toBe("Gone");
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    expect(new FactBook(dir).presentIds(tenantId, keep.id)).toEqual(["journey.seller"]);
     expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records.map((r: { id: string }) => r.id)).toEqual(
       expect.arrayContaining([keep.id, rec.id]),
     );
@@ -1628,6 +1644,10 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const denied = await field.requestRecordRetractCard(keep.id);
     await field.deny(denied);
     expect(new RecordBook(dir).get(tenantId, keep.id)?.label).toBe("Keep");
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    expect(new FactBook(dir).presentIds(tenantId, keep.id)).toEqual(["journey.seller"]);
     await expect(field.retractRecord(keep.id)).rejects.toMatchObject({
       status: 403,
       code: "DENY_IS_TERMINAL",
@@ -1638,14 +1658,25 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(approved.record).toBeUndefined();
     expect(new RecordBook(dir).get(tenantId, rec.id)).toBeUndefined();
     expect(new RecordBook(dir).get(tenantId, keep.id)?.label).toBe("Keep");
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, keep.id)).toEqual(["journey.seller"]);
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
     expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records).toEqual([
       expect.objectContaining({ id: keep.id, label: "Keep" }),
+    ]);
+    expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([
+      { id: "journey.seller", recordId: keep.id },
     ]);
 
     const restarted = new RecordBook(dir);
     expect(restarted.get(tenantId, rec.id)).toBeUndefined();
     expect(restarted.get(tenantId, keep.id)?.label).toBe("Keep");
+    const restartedFacts = new FactBook(dir);
+    expectPresentIdsDeniedWithoutRecord(restartedFacts, tenantId);
+    expect(restartedFacts.presentIds(tenantId, rec.id)).toEqual([]);
+    expect(restartedFacts.presentIds(tenantId, keep.id)).toEqual(["journey.seller"]);
     const home = await field.home();
     expect(home.records.find((r) => r.id === rec.id)).toBeUndefined();
     expect(home.records.find((r) => r.id === keep.id)?.label).toBe("Keep");

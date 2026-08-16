@@ -396,8 +396,9 @@ export class FieldSurface {
    * Request to retract a whole known record. Issues an owner_instance card
    * with actionClass delete so it does not collide with attribute retract
    * (records + retract, subject is the key) or fact retract (facts + retract).
-   * Does not write records.json until approved. Missing or unknown recordId
-   * fails closed.
+   * Does not write records.json or facts.json until approved. Approved
+   * delete retracts facts scoped to that recordId via FactBook.retract,
+   * then removes the record. Missing or unknown recordId fails closed.
    */
   retractRecord(input: FieldRecordRetractInput): void {
     this.assertActorIsField(input.actor);
@@ -444,6 +445,9 @@ export class FieldSurface {
     }
     if (card.channel === RECORD_CHANNEL && card.actionClass === "delete") {
       const recordId = this.assertKnownRecord(card.tenantId, card.purpose);
+      for (const factId of this.facts.presentIds(card.tenantId, recordId)) {
+        this.facts.retract(card.tenantId, factId, recordId);
+      }
       this.records.remove(card.tenantId, recordId);
       return { id: recordId, present: false };
     }
