@@ -6,8 +6,8 @@ import { AuthorizationRequiredError, AvError } from "../errors.js";
 import type { EffectExecutor, EffectResult } from "../effects/executor.js";
 import { newId, nowIso } from "../ids.js";
 import type { LoadedPack } from "../packs/types.js";
-import { DryStemAdapter } from "./adapter.js";
 import { readTenantAdapterBind } from "./adapter-bind.js";
+import { DeepAgentsAdapter } from "./deep-agents.js";
 import { HabitatMemoryStore } from "./memory-store.js";
 import { RunStore } from "./run-store.js";
 import { writeSkillFiles } from "./skills.js";
@@ -58,7 +58,7 @@ export class HabitatKernel {
     this.wakeLog = new WakeLog(opts.computerBaseDir);
     this.workers = new WorkerBook(opts.computerBaseDir);
     this.memory = new HabitatMemoryStore(opts.computerBaseDir);
-    this.adapter = opts.adapter ?? new DryStemAdapter();
+    this.adapter = opts.adapter ?? new DeepAgentsAdapter();
   }
 
   getRun(tenantId: string): RunRecord | undefined {
@@ -544,7 +544,7 @@ export class HabitatKernel {
    * Architect bind is required for DeepAgentsAdapter think (HK-055).
    * Pack defaultModelId is not live. Missing bind is ADAPTER_UNBOUND.
    * Bind outside a declared allow-list is ADAPTER_NOT_ALLOWED.
-   * Dry-stem (eval) does not require a bind.
+   * Dry-stem (explicit eval / test fixture) does not require a bind.
    */
   private requireThinkBind(tenantId: string, pack: LoadedPack | undefined): AdapterBind | undefined {
     if (!this.adapter.requiresBind) return undefined;

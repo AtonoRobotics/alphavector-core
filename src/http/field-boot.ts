@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DeepAgentsAdapter } from "../habitat/deep-agents.js";
 import type { CognitiveAdapter } from "../habitat/types.js";
 import { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PackBinding } from "../packs/types.js";
@@ -11,7 +12,11 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 export interface BootFieldCoreOptions {
   /** Tenant computer root core owns. Cards, facts, and records persist beside disk/, not in a pack. */
   computerBaseDir?: string;
-  /** Cognitive adapter. Omit to keep DryStem (eval / existing envelope). */
+  /**
+   * Cognitive adapter. Omit for the product default DeepAgentsAdapter
+   * (requires an Architect bind). DryStemAdapter is fixture-only — pass it
+   * explicitly in eval / envelope tests.
+   */
   adapter?: CognitiveAdapter;
 }
 
@@ -38,7 +43,7 @@ export async function bootFieldCore(
     },
     stateDir,
     opts.computerBaseDir,
-    { adapter: opts.adapter },
+    { adapter: opts.adapter ?? new DeepAgentsAdapter() },
   );
   const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
   if (!loaded.ok) {

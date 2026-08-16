@@ -7,6 +7,7 @@ import { architectIssueFieldToken, architectRevokeFieldToken } from "../src/auth
 import { FieldTokenBook } from "../src/auth/field-tokens.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { AvError, SurfaceViolationError } from "../src/errors.js";
+import { DryStemAdapter } from "../src/habitat/adapter.js";
 import { FieldClient } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { startFieldServe } from "../src/http/field-listen.js";
@@ -27,6 +28,18 @@ async function listenServe(tenantId: string, computerBaseDir: string) {
   const started = await startFieldServe({ tenantId, computerBaseDir, port: 0 });
   servers.push(started.server);
   return started;
+}
+
+/** Envelope fixture: DryStem is explicit. Product field-serve does not default to DryStem. */
+async function listenEnvelope(tenantId: string, computerBaseDir: string) {
+  const { core, pack } = await bootFieldCore(tenantId, {
+    computerBaseDir,
+    adapter: new DryStemAdapter(),
+  });
+  const server = new FieldHttpServer({ core, pack, tenantId });
+  servers.push(server);
+  const listened = await server.listen(0, "127.0.0.1");
+  return { server, url: listened.url, port: listened.port, tenantId };
 }
 
 function bootstrapArchitect(dir: string, tenantId: string) {
@@ -130,7 +143,7 @@ describe("tenant-issued field tokens on computer disk", () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-ftok-http-"));
     const architect = bootstrapArchitect(dir, "restart");
     const issued = issueFieldAsArchitect(dir, "restart", architect.token);
-    const first = await listenServe("restart", dir);
+    const first = await listenEnvelope("restart", dir);
     const field = new FieldClient(first.url, issued.token);
     const { journey } = await createOpenStart(field, "buyer", "Work this buyer journey");
     expect(journey.journeyKind).toBe("buyer");
@@ -139,7 +152,7 @@ describe("tenant-issued field tokens on computer disk", () => {
     expect(cardId).toMatch(/^card_/);
     await first.server.close();
 
-    const second = await listenServe("restart", dir);
+    const second = await listenEnvelope("restart", dir);
     const again = new FieldClient(second.url, issued.token);
     await expect(
       new FieldClient(second.url, "field-dev-token").start("buyer", "demo must not work", "rec_none"),
@@ -198,7 +211,7 @@ describe("tenant-issued field tokens on computer disk", () => {
     expect(issued.principal).toBe("field");
     expect(issued.tenantId).toBe("issued");
 
-    const first = await listenServe("issued", dir);
+    const first = await listenEnvelope("issued", dir);
     const field = new FieldClient(first.url, issued.token);
     const { journey } = await createOpenStart(field, "buyer", "Architect issued this token");
     expect(journey.status).toBe("open");

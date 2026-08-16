@@ -1,11 +1,13 @@
 import type { AdapterInput, CognitiveAdapter, CognitiveIntent } from "./types.js";
 
 /**
- * Fixture / dry stem. No model. Eval and tests replay facilities with this.
+ * Fixture / dry stem. No model. Eval and envelope tests pass this explicitly.
+ * Not the field-serve / HabitatKernel product default.
  */
 export class DryStemAdapter implements CognitiveAdapter {
   readonly name = "dry-stem";
   readonly owns = ["think"] as const;
+  readonly requiresBind = false;
 
   think(input: AdapterInput): CognitiveIntent {
     return dryThink(input);

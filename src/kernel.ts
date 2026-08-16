@@ -2,6 +2,7 @@ import { AgentMail } from "./agents/mail.js";
 import { MemoryTiers } from "./agents/memory.js";
 import { Orchestrator } from "./agents/orchestrator.js";
 import { AgentRuntime } from "./agents/runtime.js";
+import { DeepAgentsAdapter } from "./habitat/deep-agents.js";
 import { HabitatKernel } from "./habitat/kernel.js";
 import type { CognitiveAdapter } from "./habitat/types.js";
 import { CardBook } from "./auth/cards.js";
@@ -87,7 +88,7 @@ export class AlphaVectorCore {
       effects: this.effects,
       agents: this.agents,
       orchestrator: this.orchestrator,
-      adapter: opts?.adapter,
+      adapter: opts?.adapter ?? new DeepAgentsAdapter(),
     });
   }
 
