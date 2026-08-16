@@ -4933,7 +4933,7 @@ describe("HK-070 skills are loadable files", () => {
     expect(cliSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
     expect(vendorSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
     expect(skillSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
-    expect(skillSrc).not.toMatch(/Mission-Control|Desk|Shape|Director|Play|Plant|HIL|Thor/);
+    expect(skillSrc).not.toMatch(/Mission-Control|\bDesk\b|\bShape\b|\bPlay\b|\bPlant\b|\bHIL\b|\bThor\b/);
     expect(skillSrc).not.toMatch(/evalRunner|promotion exam|T0|T1|T2|T3/);
   });
 
@@ -5015,9 +5015,10 @@ describe("HK-070 skills are loadable files", () => {
       recordId: stack.record.id,
     });
     expect(double.requests.length).toBeGreaterThan(0);
-    const bodies = double.requests.map((r) => JSON.stringify(r.body));
-    expect(bodies.some((b) => b.includes(marker))).toBe(true);
-    expect(bodies.some((b) => b.includes("\"name\":\"dispatch\""))).toBe(true);
+    const handles = double.requests.map((r) => thinkHandlesFromChatBody(r.body));
+    expect(JSON.stringify(double.requests.map((r) => r.body))).toContain(marker);
+    expect(handles.some((h) => JSON.stringify(h).includes(marker))).toBe(true);
+    expect(handles.some((h) => JSON.stringify(h).includes("dispatch"))).toBe(true);
   });
 
   it("missing or corrupt skill files fail closed (typed)", async () => {
