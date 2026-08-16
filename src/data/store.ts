@@ -216,7 +216,7 @@ export class DurableStore {
         rec.sourceLineage,
         rec.lifecycle,
         rec.recordKind,
-        rec.payload,
+        JSON.stringify(rec.payload),
       ],
     );
     this.records.push(rec);
@@ -404,7 +404,7 @@ export class DurableStore {
         ev.sourceLineage,
         ev.lifecycle,
         ev.kind,
-        ev.payload,
+        JSON.stringify(ev.payload),
         ev.producedBy,
       ],
     );
@@ -469,7 +469,7 @@ export class DurableStore {
         c.updatedAt,
         c.sourceLineage,
         c.lifecycle,
-        c.parties,
+        JSON.stringify(c.parties),
         c.deadline ?? null,
         c.status,
       ],
@@ -499,7 +499,7 @@ export class DurableStore {
         i.sourceLineage,
         i.lifecycle,
         i.channel,
-        i.participants,
+        JSON.stringify(i.participants),
         i.summary,
       ],
     );

@@ -73,9 +73,10 @@ describe("data plane DEC-026", () => {
 describe("DEC-005 PostgreSQL ledger", () => {
   it("keeps the RE fixture pin at 5091328 and does not hardcode a vendor host", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
-    expect(CORE_SCHEMA_SQL).toMatch(/PostgreSQL schema\. Production business truth \(DEC-005\)/);
-    expect(CORE_SCHEMA_SQL).toMatch(/Pack kinds are data, not columns/);
-    const src = `${CORE_SCHEMA_SQL}\n${readFileSync(
+    const sqlSrc = readFileSync(fileURLToPath(new URL("../src/data/sql.ts", import.meta.url)), "utf8");
+    expect(sqlSrc).toMatch(/PostgreSQL schema\. Production business truth \(DEC-005\)/);
+    expect(sqlSrc).toMatch(/Pack kinds are data, not columns/);
+    const src = `${sqlSrc}\n${readFileSync(
       fileURLToPath(new URL("../src/data/store.ts", import.meta.url)),
       "utf8",
     )}`;
