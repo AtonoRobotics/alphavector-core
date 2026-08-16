@@ -5410,9 +5410,20 @@ describe("HK-072 durable memory injected on every wake", () => {
     expect(bodies).toContain(profile);
     expect(bodies).toContain(log);
     expect(bodies).toContain(recall);
-    expect(bodies).toContain('"label":"profile"');
-    expect(bodies).toContain('"label":"logs"');
-    expect(bodies).toContain('"label":"recall"');
+    const userContents = double.requests.map((r) => {
+      const rec = r.body && typeof r.body === "object" ? (r.body as { messages?: Array<{ content?: unknown }> }) : {};
+      const user = rec.messages?.find((m) => typeof m.content === "string" && m.content.includes("memory"));
+      return typeof user?.content === "string" ? (JSON.parse(user.content) as { memory?: AdapterInput["memory"] }) : {};
+    });
+    expect(userContents.some((c) => c.memory?.profile.label === "profile" && c.memory.profile.body?.notes.includes(profile))).toBe(
+      true,
+    );
+    expect(userContents.some((c) => c.memory?.logs.label === "logs" && c.memory.logs.entries.some((e) => e.text === log))).toBe(
+      true,
+    );
+    expect(userContents.some((c) => c.memory?.recall.label === "recall" && c.memory.recall.items.some((e) => e.text === recall))).toBe(
+      true,
+    );
   });
 
   it("memory write is not a fact, consent, or outcome", async () => {
