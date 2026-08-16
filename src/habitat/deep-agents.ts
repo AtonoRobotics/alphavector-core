@@ -103,7 +103,7 @@ export class DeepAgentsAdapter implements CognitiveAdapter {
         files: pass.files,
       });
     } catch (err) {
-      if (err instanceof AvError) throw err;
+      throwIfAvError(err);
       throw new AvError("ADAPTER_VENDOR_REJECTED", "Deep Agents SDK pass returned an unusable think body");
     }
     return intentFromSdkResult(result);
@@ -145,4 +145,21 @@ function normalizeOpts(
 ): DeepAgentsAdapterOptions {
   if (typeof thinkFnOrOpts === "function") return { thinkFn: thinkFnOrOpts };
   return thinkFnOrOpts ?? {};
+}
+
+/** LangGraph wraps model errors; typed AvError must still fail closed. */
+function throwIfAvError(err: unknown): void {
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [err];
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    if (current instanceof AvError) throw current;
+    if ("cause" in current) queue.push((current as { cause: unknown }).cause);
+    if ("errors" in current && Array.isArray((current as { errors: unknown[] }).errors)) {
+      queue.push(...(current as { errors: unknown[] }).errors);
+    }
+    if ("originalError" in current) queue.push((current as { originalError: unknown }).originalError);
+  }
 }
