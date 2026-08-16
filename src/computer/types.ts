@@ -34,7 +34,10 @@ export interface ComputerPaths {
    * loadSkillFiles does not read this directory.
    */
   proposalsDir: string;
-  /** Worker trailer isolation. Torn down on worker_done / kill. */
+  /**
+   * Worker trailer isolation on the tenant disk (`/home/trailers`).
+   * Torn down on worker_done / kill. Control book (workers.json) stays beside disk/.
+   */
   trailersDir: string;
   /**
    * Architect adapter bind (HK-055). Same class as field-tokens / credentials.
@@ -105,6 +108,12 @@ export interface ShellResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  pid?: number;
+}
+
+/** Host-visible handle for a process left running inside the tenant machine. */
+export interface HeldProcess {
+  pid: number;
 }
 
 export interface StructuredFile {
@@ -141,6 +150,16 @@ export interface ComputerDriver {
   resetFromSnapshot(tenantId: string, snapshotDir: string): Promise<TenantComputer>;
   ensureDesktop(tenantId: string, agentId: string): Promise<DesktopSession>;
   shell(req: ShellRequest): Promise<ShellResult>;
+  /**
+   * Run argv inside the tenant machine. Does not open a desktop.
+   * Worker execution uses this, not a host `spawn(process.execPath)`.
+   */
+  execInMachine(req: ShellRequest): Promise<ShellResult>;
+  /**
+   * Start argv inside the tenant machine and leave it running.
+   * Returns a host-visible pid for liveness / teardown. Not a host Node child doing the work.
+   */
+  spawnHeld(req: ShellRequest): Promise<HeldProcess>;
   readFile(tenantId: string, relPath: string): Promise<StructuredFile>;
   screenshot(tenantId: string, agentId: string): Promise<Screenshot>;
   writeSecret(tenantId: string, name: string, value: string): Promise<void>;

@@ -107,6 +107,7 @@ export class AlphaVectorCore {
     const stateDir = opts.stateDir ?? path.join(opts.computer.baseDir, "state");
     const core = new AlphaVectorCore(opts.anchors, stateDir, opts.computer.baseDir);
     core.computer = await ComputerHost.create(opts.computer);
+    core.habitat.attachComputer(core.computer);
     return core;
   }
 }

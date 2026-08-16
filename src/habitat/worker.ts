@@ -1,7 +1,8 @@
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentRecord } from "../agents/types.js";
+import type { ComputerHost } from "../computer/host.js";
 import { computerRoot } from "../computer/paths.js";
 import { AvError } from "../errors.js";
 import { newId, nowIso } from "../ids.js";
@@ -9,17 +10,18 @@ import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 import { copySkillsToTrailer } from "./skills.js";
 import { CODER_TYPE, type SkillFile, type WorkerRecord } from "./types.js";
 
-const CODER_EXEC_SOURCE = `import { writeFileSync } from "node:fs";
-import path from "node:path";
-writeFileSync(path.join(process.cwd(), "executor-output.txt"), "coder-executor\\n", "utf8");
-if (process.env.AV_CODER_HOLD === "1") {
-  setInterval(() => {}, 1 << 30);
+/** Busybox/ash on the tenant computer. Alpine has no Node. */
+function coderExecSource(hold?: boolean): string {
+  return `#!/bin/sh
+printf 'coder-executor\\n' > executor-output.txt
+${hold ? "while true; do sleep 2147483647; done\n" : ""}`;
 }
-`;
 
 /**
  * Thin coder worker: executor + branch on the tenant computer.
  * Habitat owns the coder type. Trailer isolation is torn down on worker_done / kill.
+ * The process runs inside the tenant machine (computer.execInMachine / spawnHeld).
+ * Not in the kernel process. Not a host `spawn(process.execPath)`.
  */
 export interface TenantWorkerStore {
   workers: WorkerRecord[];
@@ -35,7 +37,14 @@ export class WorkerBook {
   private readonly hydrated = new Set<string>();
   private readonly corrupt = new Map<string, AvError>();
 
-  constructor(private readonly computerBaseDir?: string) {}
+  constructor(
+    private readonly computerBaseDir?: string,
+    private computer?: ComputerHost,
+  ) {}
+
+  attachComputer(computer: ComputerHost): void {
+    this.computer = computer;
+  }
 
   get(tenantId: string): WorkerRecord | undefined {
     this.ensure(tenantId);
@@ -52,12 +61,12 @@ export class WorkerBook {
     return isPidAlive(this.get(tenantId)?.pid);
   }
 
-  launch(input: {
+  async launch(input: {
     tenantId: string;
     runId: string;
     skills?: SkillFile[];
     hold?: boolean;
-  }): WorkerRecord {
+  }): Promise<WorkerRecord> {
     if (!this.computerBaseDir) {
       throw new AvError("WORKER_COMPUTER_REQUIRED", "Workers run on the tenant computer");
     }
@@ -147,32 +156,38 @@ export class WorkerBook {
   }
 
   /** Recreate the trailer/process for this workerId. Does not mint a different id. */
-  private spawnTrailer(record: WorkerRecord, skills?: SkillFile[], hold?: boolean): WorkerRecord {
+  private async spawnTrailer(record: WorkerRecord, skills?: SkillFile[], hold?: boolean): Promise<WorkerRecord> {
+    if (!this.computer) {
+      throw new AvError("WORKER_COMPUTER_REQUIRED", "Workers run on the tenant computer");
+    }
     mkdirSync(record.trailerPath, { recursive: true });
     this.initBranch(record.trailerPath, record.branch);
     if (skills?.length) copySkillsToTrailer(skills, record.trailerPath);
-    const execFile = path.join(record.trailerPath, "coder-exec.mjs");
-    writeFileSync(execFile, CODER_EXEC_SOURCE, "utf8");
-    const env = { ...process.env, AV_CODER_HOLD: hold ? "1" : "0" };
-    // Product field start holds via spawn() (not spawnSync). Fixture/eval may
-    // omit hold and spawnSync so the executor writes and exits. Not detached
-    // and not unref: reap on kill / worker_done, not on start.
+    const execFile = path.join(record.trailerPath, "coder-exec.sh");
+    writeFileSync(execFile, coderExecSource(hold), "utf8");
+    const guestCwd = `/home/trailers/${record.workerId}`;
+    const argv = ["/bin/sh", `${guestCwd}/coder-exec.sh`];
+    // Product field start holds via spawnHeld inside the tenant machine.
+    // Fixture/eval may omit hold and execInMachine so the executor writes and exits.
+    // Not a host Node child of the kernel. Reap on kill / worker_done, not on start.
     let pid: number | undefined;
     if (hold) {
-      const child = spawn(process.execPath, [execFile], {
-        cwd: record.trailerPath,
-        stdio: "ignore",
-        env,
+      const held = await this.computer.spawnHeld({
+        tenantId: record.tenantId,
+        agentId: record.agent.agentId,
+        argv,
+        cwd: guestCwd,
       });
-      rememberHeldCoder(child);
-      pid = child.pid;
+      rememberHeldPid(held.pid);
+      pid = held.pid;
     } else {
-      const child = spawnSync(process.execPath, [execFile], {
-        cwd: record.trailerPath,
-        stdio: "ignore",
-        env,
+      const result = await this.computer.execInMachine({
+        tenantId: record.tenantId,
+        agentId: record.agent.agentId,
+        argv,
+        cwd: guestCwd,
       });
-      pid = child.pid ?? undefined;
+      pid = result.pid;
     }
     const next: WorkerRecord = { ...record, pid };
     this.workers.set(record.tenantId, next);
@@ -314,15 +329,14 @@ function parseAgent(raw: unknown, tenantId: string): AgentRecord {
 }
 
 const heldCoders = new Set<ChildProcess>();
+const heldPids = new Set<number>();
 
-function rememberHeldCoder(child: ChildProcess): void {
-  heldCoders.add(child);
-  child.on("exit", () => {
-    heldCoders.delete(child);
-  });
+function rememberHeldPid(pid: number): void {
+  heldPids.add(pid);
 }
 
 function forgetHeldCoder(pid: number): void {
+  heldPids.delete(pid);
   for (const child of heldCoders) {
     if (child.pid === pid) heldCoders.delete(child);
   }
@@ -330,6 +344,20 @@ function forgetHeldCoder(pid: number): void {
 
 /** SIGTERM leftover held coder children. Tests use this so HTTP-start hold does not leak. */
 export function reapHeldCoders(): void {
+  for (const pid of [...heldPids]) {
+    if (isPidAlive(pid)) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        try {
+          process.kill(-pid, "SIGTERM");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }
+  heldPids.clear();
   for (const child of [...heldCoders]) {
     if (child.pid && isPidAlive(child.pid)) {
       try {

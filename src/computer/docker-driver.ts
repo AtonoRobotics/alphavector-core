@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import path from "node:path";
@@ -12,6 +12,7 @@ import type {
   ComputerImage,
   DesktopSession,
   EgressBinding,
+  HeldProcess,
   Screenshot,
   ShellRequest,
   ShellResult,
@@ -130,7 +131,22 @@ export class DockerComputerDriver implements ComputerDriver {
 
   async shell(req: ShellRequest): Promise<ShellResult> {
     await this.ensureDesktop(req.tenantId, req.agentId);
+    return this.execInMachine(req);
+  }
+
+  async execInMachine(req: ShellRequest): Promise<ShellResult> {
     return this.exec(req.tenantId, req.argv, req.cwd ?? "/home");
+  }
+
+  async spawnHeld(req: ShellRequest): Promise<HeldProcess> {
+    const cwd = req.cwd ?? "/home";
+    const child = spawn("docker", ["exec", "-w", cwd, this.containerName(req.tenantId), ...req.argv], {
+      stdio: "ignore",
+    });
+    if (!child.pid) {
+      throw new ComputerError("WORKER_SPAWN_FAILED", "Failed to start a process on the tenant computer");
+    }
+    return { pid: child.pid };
   }
 
   async readFile(tenantId: string, relPath: string): Promise<StructuredFile> {

@@ -33,7 +33,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     // Habitat-written proposals. Same class as skills / memory / cards: not on agent disk/.
     // A proposal is not a skill. loadSkillFiles does not read this directory.
     proposalsDir: path.join(root, "proposals"),
-    trailersDir: path.join(root, "trailers"),
+    // Trailer files live on the tenant disk (bind-mounted at /home). Not a host-only tree.
+    trailersDir: path.join(root, "disk", "trailers"),
     // Architect adapter bind. Same reason as field-tokens: not field UI, not on agent disk/.
     adapterBindFile: path.join(root, "adapter-bind.json"),
     // Provider credentials. Same class as field-tokens: not on bind, not on disk/, not a pack.

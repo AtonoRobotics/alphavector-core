@@ -1576,7 +1576,7 @@ describe("D10 §6 field verbs", () => {
 
     const book = new WorkerBook(dir);
     expect(book.get("t1")?.workerId).toBe(worker.workerId);
-    expect(book.launch({ tenantId: "t1", runId: worker.runId }).workerId).toBe(worker.workerId);
+    expect((await book.launch({ tenantId: "t1", runId: worker.runId })).workerId).toBe(worker.workerId);
     expect(book.get("t1")?.workerId).toBe(worker.workerId);
   });
 
@@ -1700,8 +1700,8 @@ describe("D10 §6 field verbs", () => {
     const book = new WorkerBook(dir);
     expect(() => book.get("t1")).toThrow(AvError);
     expect(() => book.get("t1")).toThrow(/WORKER_STORE_CORRUPT|corrupt/i);
-    expect(() => book.launch({ tenantId: "t1", runId: "run_invented" })).toThrow(AvError);
-    expect(() => book.launch({ tenantId: "t1", runId: "run_invented" })).toThrow(/corrupt/i);
+    await expect(book.launch({ tenantId: "t1", runId: "run_invented" })).rejects.toBeInstanceOf(AvError);
+    await expect(book.launch({ tenantId: "t1", runId: "run_invented" })).rejects.toThrow(/corrupt/i);
     expect(() => book.getById("t1", "worker_invented")).toThrow(/corrupt/i);
   });
 
@@ -2802,7 +2802,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(packRaw).not.toMatch(/"apiKey"/);
     const worker = stack.core.habitat.activeWorker(stack.tenantId);
     expect(worker?.trailerPath).toBeDefined();
-    const trailerListing = readFileSync(path.join(worker!.trailerPath, "coder-exec.mjs"), "utf8");
+    const trailerListing = readFileSync(path.join(worker!.trailerPath, "coder-exec.sh"), "utf8");
     expect(trailerListing).not.toContain(VENDOR_FIXTURE_KEY);
     expect(JSON.stringify(working.memory)).not.toContain(VENDOR_FIXTURE_KEY);
     expect(double.requests.length).toBeGreaterThan(0);

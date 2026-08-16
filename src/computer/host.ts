@@ -7,6 +7,7 @@ import type {
   ComputerImage,
   DesktopSession,
   EgressBinding,
+  HeldProcess,
   Screenshot,
   ShellRequest,
   ShellResult,
@@ -64,6 +65,16 @@ export class ComputerHost {
 
   shell(req: ShellRequest): Promise<ShellResult> {
     return this.driver.shell(req);
+  }
+
+  /** Run argv inside the tenant machine. No desktop. Used by workers (HK-075). */
+  execInMachine(req: ShellRequest): Promise<ShellResult> {
+    return this.driver.execInMachine(req);
+  }
+
+  /** Start argv inside the tenant machine and leave it running. */
+  spawnHeld(req: ShellRequest): Promise<HeldProcess> {
+    return this.driver.spawnHeld(req);
   }
 
   readFile(tenantId: string, relPath: string): Promise<StructuredFile> {

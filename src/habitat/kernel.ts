@@ -4,6 +4,8 @@ import type { AgentRecord } from "../agents/types.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
 import type { AgentRuntime } from "../agents/runtime.js";
 import type { CardBook } from "../auth/cards.js";
+import { ComputerHost } from "../computer/host.js";
+import { defaultImageCacheDir } from "../computer/image.js";
 import { AuthorizationRequiredError, AvError } from "../errors.js";
 import type { EffectExecutor, EffectResult } from "../effects/executor.js";
 import { assertHabitatMayAsk, habitatAskReason } from "../grants/ask.js";
@@ -81,6 +83,10 @@ export const HABITAT_ROUTINE_TICK_MS = 60_000;
 
 export interface HabitatKernelOptions {
   computerBaseDir?: string;
+  /** Already-created tenant computer. Product boot attaches this. */
+  computer?: ComputerHost;
+  /** Alpine image cache. Ops/env, not a field control. */
+  imageCacheDir?: string;
   cards: CardBook;
   grants: GrantBook;
   effects: EffectExecutor;
@@ -111,15 +117,44 @@ export class HabitatKernel {
   private readonly tickMs: number;
   private frozenNow?: string;
   private timer?: ReturnType<typeof setInterval>;
+  private computer?: ComputerHost;
 
   constructor(private readonly opts: HabitatKernelOptions) {
     this.runs = new RunStore(opts.computerBaseDir);
     this.wakeLog = new WakeLog(opts.computerBaseDir);
-    this.workers = new WorkerBook(opts.computerBaseDir);
+    this.workers = new WorkerBook(opts.computerBaseDir, opts.computer);
     this.memory = new HabitatMemoryStore(opts.computerBaseDir);
     this.adapter = opts.adapter ?? new DeepAgentsAdapter();
     this.nowFn = opts.now ?? nowIso;
     this.tickMs = Number.isFinite(opts.tickMs) && (opts.tickMs as number) > 0 ? (opts.tickMs as number) : HABITAT_ROUTINE_TICK_MS;
+    if (opts.computer) this.computer = opts.computer;
+  }
+
+  attachComputer(computer: ComputerHost): void {
+    this.computer = computer;
+    this.workers.attachComputer(computer);
+  }
+
+  /**
+   * One persistent Linux computer per tenant. Starts if needed. Packs do not own it.
+   * Field does not configure the machine.
+   */
+  async ensureComputer(tenantId: string): Promise<ComputerHost> {
+    if (!this.opts.computerBaseDir) {
+      throw new AvError("WORKER_COMPUTER_REQUIRED", "Workers run on the tenant computer");
+    }
+    if (!this.computer) {
+      this.computer = await ComputerHost.create({
+        baseDir: this.opts.computerBaseDir,
+        imageCacheDir: this.opts.imageCacheDir ?? defaultImageCacheDir(),
+      });
+      this.workers.attachComputer(this.computer);
+    }
+    const status = await this.computer.driver.status(tenantId);
+    if (status?.status !== "running") {
+      await this.computer.start(tenantId);
+    }
+    return this.computer;
   }
 
   /** Kernel-owned clock. Ticker and fireDue read this; field does not set it. */
@@ -908,7 +943,8 @@ export class HabitatKernel {
       // is not live): launch() recreates the process for the same workerId.
       // A live pid returns existing. Do not no-op because the directory exists.
       if (this.workers.get(event.tenantId) && !this.workers.isLive(event.tenantId)) {
-        this.workers.launch({
+        await this.ensureComputer(event.tenantId);
+        await this.workers.launch({
           tenantId: event.tenantId,
           runId: existing.runId,
           skills: this.injectSkills(event.tenantId),
@@ -991,6 +1027,16 @@ export class HabitatKernel {
     return this.actLaunchAndWork(event, pack, orch, skills, holdWorker, until);
   }
 
+  private async launchOnComputer(
+    tenantId: string,
+    runId: string,
+    skills: SkillFile[],
+    hold: boolean,
+  ): Promise<WorkerRecord> {
+    await this.ensureComputer(tenantId);
+    return this.workers.launch({ tenantId, runId, skills, hold });
+  }
+
   private async actLaunchAndWork(
     event: WakeEvent,
     pack: LoadedPack,
@@ -1005,12 +1051,7 @@ export class HabitatKernel {
     const worker =
       followUp && this.workers.isLive(event.tenantId)
         ? this.workers.get(event.tenantId)!
-        : this.workers.launch({
-            tenantId: event.tenantId,
-            runId: run.runId,
-            skills,
-            hold: holdWorker,
-          });
+        : await this.launchOnComputer(event.tenantId, run.runId, skills, holdWorker);
     if (!followUp) {
       this.opts.orchestrator.dispatch({
         orchestrator: orch,

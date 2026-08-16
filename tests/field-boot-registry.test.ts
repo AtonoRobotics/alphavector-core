@@ -184,14 +184,22 @@ describe("product boot from signed registry pack", () => {
     servers.push(server);
     const listened = await server.listen(0, "127.0.0.1");
     const headers = { authorization: `Bearer ${issued.token}` };
-    for (const route of ["/field/models", "/field/prompts", "/field/temporal", "/field/tools"]) {
+    for (const route of [
+      "/field/models",
+      "/field/prompts",
+      "/field/temporal",
+      "/field/tools",
+      "/field/machine",
+      "/field/hypervisor",
+      "/field/computer",
+    ]) {
       const res = await fetch(`${listened.url}${route}`, { headers });
       expect(res.status).toBe(403);
       const body = (await res.json()) as { error: string; message: string };
       expect(body.error).toBe("SURFACE_VIOLATION");
-      expect(body.message).toMatch(/cannot configure models, prompts, Temporal, tools, or trust anchors/);
+      expect(body.message).toMatch(/cannot configure models, prompts, Temporal, tools, trust anchors, or the machine/);
     }
     const serverSrc = readFileSync(path.join(REPO_ROOT, "src/http/field-server.ts"), "utf8");
-    expect(serverSrc).toMatch(/Field user cannot configure models, prompts, Temporal, tools, or trust anchors/);
+    expect(serverSrc).toMatch(/Field user cannot configure models, prompts, Temporal, tools, trust anchors, or the machine/);
   });
 });
