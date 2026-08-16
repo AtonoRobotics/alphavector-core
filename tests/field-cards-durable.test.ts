@@ -12,7 +12,13 @@ import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { ALPHAVECTOR_RE_PIN_SHA, bootTestFieldCore, createOpenStart, signedRePack } from "./helpers.js";
-import { bindWorldForPack, closeWorldHttp, useWorldHttp } from "./world-double.js";
+import {
+  bindWorldForPack,
+  closeWorldHttp,
+  recordedSendOf,
+  useWorldHttp,
+  WORLD_FIXTURE_SEND,
+} from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
@@ -137,6 +143,8 @@ describe("durable pending cards on tenant computer disk", () => {
     const approved = await second.field.approve(cardId);
     expect(approved.card.status).toBe("approved");
     expect(approved.effect?.executed).toBe(true);
+    expect(world.requests).toHaveLength(1);
+    expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
     expect(await second.field.cards()).toHaveLength(0);
   });
 

@@ -18,7 +18,47 @@ export interface LiveConnectorHandle {
   baseUrl: string;
 }
 
-/** Handles only. Never the Architect-written secret. */
+/** Email/SMS send. Bound URL + Architect secret. Not a handle ping. */
+export interface ConnectorSend {
+  to: string;
+  body: string;
+  from: string;
+}
+
+/** Recorded CI / dry-stem send. Reserved .test addresses. Not a public recipient. */
+export const RECORDED_EMAIL_SEND: ConnectorSend = {
+  to: "to@example.test",
+  from: "from@example.test",
+  body: "follow-up",
+};
+
+export const SEND_CHANNELS = ["email", "sms"] as const;
+export type SendChannel = (typeof SEND_CHANNELS)[number];
+
+export function isSendChannel(channel: string | undefined): channel is SendChannel {
+  return channel === "email" || channel === "sms";
+}
+
+/**
+ * Optional send fields copied from intent / pending / field progress.
+ * Empty strings are omitted. Completeness is checked at invoke for send channels.
+ */
+export function connectorSendFields(input: {
+  to?: string;
+  body?: string;
+  from?: string;
+}): Partial<ConnectorSend> {
+  const to = input.to?.trim();
+  const body = input.body?.trim();
+  const from = input.from?.trim();
+  return {
+    ...(to ? { to } : {}),
+    ...(body ? { body } : {}),
+    ...(from ? { from } : {}),
+  };
+}
+
+/** Handles only. Never the Architect-written secret. Not an email/SMS send. */
 export interface ConnectorWorldBody {
   handleId: string;
   connectorId: string;
@@ -26,6 +66,11 @@ export interface ConnectorWorldBody {
   channel?: string;
   purpose?: string;
   subject?: string;
+}
+
+/** Live send posted to the bound URL. Not a handle ping. */
+export interface ConnectorSendBody extends ConnectorSend {
+  channel: SendChannel;
 }
 
 export interface ConnectorWorldInput {
@@ -36,24 +81,22 @@ export interface ConnectorWorldInput {
   channel?: string;
   purpose?: string;
   subject?: string;
+  to?: string;
+  body?: string;
+  from?: string;
 }
 
 /**
- * After admission, invoke the live connector handle and reach the world.
- * Unbound / missing URL / missing required credentials / unreachable / rejected
- * fail closed. Does not write a ledger row.
+ * After admission, invoke the live connector and reach the world.
+ * Email/SMS POST a send (to / body / from) to the Architect-bound URL.
+ * A generic handle ping is not a send and does not count as executed.
+ * Unbound / missing URL / missing required credentials / incomplete send /
+ * unreachable / rejected fail closed. Does not write a ledger row.
  */
 export async function invokeConnectorWorld(input: ConnectorWorldInput): Promise<LiveConnectorHandle> {
   const handle = resolveLiveConnectorHandle(input);
   const secret = readConnectorSecret(input.computerBaseDir, input.tenantId, handle.connectorId);
-  const body: ConnectorWorldBody = {
-    handleId: handle.handleId,
-    connectorId: handle.connectorId,
-    actionClass: input.actionClass,
-    ...(input.channel ? { channel: input.channel } : {}),
-    ...(input.purpose ? { purpose: input.purpose } : {}),
-    ...(input.subject ? { subject: input.subject } : {}),
-  };
+  const body = connectorWorldPostBody(input, handle);
   let res: Response;
   try {
     res = await fetch(handle.baseUrl, {
@@ -109,6 +152,51 @@ export function resolveLiveConnectorHandle(input: ConnectorWorldInput): LiveConn
     handleId: `handle:${bound.connectorId}`,
     connectorId: bound.connectorId,
     baseUrl,
+  };
+}
+
+export function requireConnectorSend(input: {
+  channel?: string;
+  to?: string;
+  body?: string;
+  from?: string;
+}): ConnectorSend {
+  if (!isSendChannel(input.channel)) {
+    throw new AvError(
+      "CONNECTOR_SEND_INCOMPLETE",
+      "Email/SMS send requires an email or sms channel; no silent no-op",
+    );
+  }
+  const send = connectorSendFields(input);
+  if (!send.to || !send.body || !send.from) {
+    throw new AvError(
+      "CONNECTOR_SEND_INCOMPLETE",
+      "Email/SMS send requires to, body, and from; no silent no-op",
+    );
+  }
+  return { to: send.to, body: send.body, from: send.from };
+}
+
+function connectorWorldPostBody(
+  input: ConnectorWorldInput,
+  handle: LiveConnectorHandle,
+): ConnectorSendBody | ConnectorWorldBody {
+  if (isSendChannel(input.channel)) {
+    const send = requireConnectorSend(input);
+    return {
+      to: send.to,
+      body: send.body,
+      from: send.from,
+      channel: input.channel,
+    };
+  }
+  return {
+    handleId: handle.handleId,
+    connectorId: handle.connectorId,
+    actionClass: input.actionClass,
+    ...(input.channel ? { channel: input.channel } : {}),
+    ...(input.purpose ? { purpose: input.purpose } : {}),
+    ...(input.subject ? { subject: input.subject } : {}),
   };
 }
 

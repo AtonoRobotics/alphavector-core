@@ -80,6 +80,10 @@ export interface PendingEffect {
   purpose: string;
   subject: string;
   agentId: string;
+  /** Email/SMS send. Required at world invoke for those channels. */
+  to?: string;
+  body?: string;
+  from?: string;
 }
 
 export interface RunRecord {
@@ -208,6 +212,10 @@ export interface CognitiveIntent {
   channel?: string;
   purpose?: string;
   subject?: string;
+  /** Email/SMS send. Required at world invoke for those channels. */
+  to?: string;
+  body?: string;
+  from?: string;
 }
 
 export interface CognitiveAdapter {

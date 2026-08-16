@@ -21,7 +21,13 @@ import {
   expectPresentIdsDeniedWithoutRecord,
   signedRePackMutated,
 } from "./helpers.js";
-import { bindWorldForPack, closeWorldHttp, useWorldHttp } from "./world-double.js";
+import {
+  bindWorldForPack,
+  closeWorldHttp,
+  recordedSendOf,
+  useWorldHttp,
+  WORLD_FIXTURE_SEND,
+} from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const REQUIRED = "condition.required";
@@ -1161,6 +1167,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
         subject: rec.id,
+        ...WORLD_FIXTURE_SEND,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {
@@ -1170,6 +1177,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       expect(executed.effect?.executed).toBe(true);
       expect(world.requests).toHaveLength(1);
       expect(world.requests[0]?.method).toBe("POST");
+      expect(recordedSendOf(world.requests[0]?.body)).toEqual({ ...WORLD_FIXTURE_SEND, channel: "email" });
     }
 
     await expect(architect.record(purpose.id, rec.id)).rejects.toMatchObject({
@@ -1325,6 +1333,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
         subject: rec.id,
+        ...WORLD_FIXTURE_SEND,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {
@@ -1431,6 +1440,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
         subject: recB.id,
+        ...WORLD_FIXTURE_SEND,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {

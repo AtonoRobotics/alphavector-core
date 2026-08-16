@@ -14,6 +14,10 @@ export interface FieldProgressBody {
   channel?: string;
   purpose?: string;
   subject?: string;
+  /** Email/SMS send. Required at world invoke for those channels. */
+  to?: string;
+  body?: string;
+  from?: string;
   ask?: { text: string; actionClass: string };
   /** Claims only. Does not write the tenant fact store. */
   conditions?: string[];

@@ -331,6 +331,9 @@ export class FieldHttpServer {
         channel: body.channel,
         purpose: body.purpose,
         subject: body.subject,
+        to: typeof body.to === "string" ? body.to : undefined,
+        body: typeof body.body === "string" ? body.body : undefined,
+        from: typeof body.from === "string" ? body.from : undefined,
         note: body.note,
         ask: body.ask
           ? { tenantId, text: body.ask.text, actionClass: body.ask.actionClass }
@@ -347,6 +350,9 @@ export class FieldHttpServer {
           channel: body.channel,
           purpose: body.purpose,
           subject: body.subject,
+          ...(typeof body.to === "string" && body.to.trim() ? { to: body.to.trim() } : {}),
+          ...(typeof body.body === "string" && body.body.trim() ? { body: body.body.trim() } : {}),
+          ...(typeof body.from === "string" && body.from.trim() ? { from: body.from.trim() } : {}),
           agentId: agent.agentId,
           journey,
         };
@@ -398,6 +404,9 @@ export class FieldHttpServer {
       channel: pending.channel,
       purpose: pending.purpose,
       subject: pending.subject,
+      to: pending.to,
+      body: pending.body,
+      from: pending.from,
       approvedCardId: cardId,
     });
     this.forgetPending(cardId);
