@@ -4,6 +4,7 @@ import path from "node:path";
 import { architectBindAdapter } from "./auth/architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "./auth/architect-adapter-credentials.js";
 import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
+import { architectWriteRoutine } from "./auth/architect-routines.js";
 import { FieldClient } from "./http/field-client.js";
 import { startFieldServe } from "./http/field-listen.js";
 import { PRODUCT } from "./identity.js";
@@ -77,7 +78,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials",
+        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -85,6 +86,9 @@ async function main(): Promise<void> {
       console.log("bind-adapter writes tenants/{id}/adapter-bind.json. Field cannot bind, see, or edit.");
       console.log(
         "set-adapter-credentials writes tenants/{id}/adapter-credentials.json. Not on the bind. Field cannot set credentials.",
+      );
+      console.log(
+        "bind-routine writes tenants/{id}/routines.json. Field cannot author routines. Temporal is not the bus.",
       );
       return;
     }
@@ -133,8 +137,26 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ ok: true, tenantId: written.tenantId, writtenBy: written.writtenBy }, null, 2));
       return;
     }
+    if (sub === "bind-routine") {
+      const routineId = flag(flags, "--routine-id");
+      const goal = flag(flags, "--goal");
+      const dueAt = flag(flags, "--due-at");
+      if (!routineId || !goal || !dueAt) {
+        throw new Error("architect bind-routine requires --routine-id, --goal, and --due-at");
+      }
+      const written = architectWriteRoutine({
+        tenantId,
+        routineId,
+        goal,
+        dueAt,
+        computerBaseDir: dir,
+        architectToken,
+      });
+      console.log(JSON.stringify({ ok: true, tenantId: written.tenantId, routineId: written.routineId, boundBy: written.boundBy }, null, 2));
+      return;
+    }
     throw new Error(
-      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials",
+      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine",
     );
   }
   if (cmd === "field-serve") {

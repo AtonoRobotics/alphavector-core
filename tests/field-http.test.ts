@@ -315,6 +315,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/adapter-credentials",
       "/field/credentials",
       "/field/api-key",
+      "/field/routines",
     ]) {
       const res = await fetch(`${url}${path}`, { headers });
       expect(res.status).toBe(403);
@@ -405,6 +406,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).not.toContain("field-dev-token");
     expect(html).not.toContain(`field-${tenantId}`);
     expect(html).not.toMatch(/architectControls|pick a model|edit prompt|inspect temporal|configure tool/i);
+    expect(html).not.toMatch(/id="routine"|id="routines"|bind-routine|author routine/i);
     expect(html).not.toMatch(/Desk|Shape|Director|Play|Plant|HIL|Thor|Mission Control/);
 
     const clientSrc = await readFile(path.join(REPO_ROOT, "src/http/field-client.ts"), "utf8");

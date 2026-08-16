@@ -8,6 +8,7 @@ export * from "./worker.js";
 export * from "./adapter.js";
 export * from "./adapter-bind.js";
 export * from "./adapter-credentials.js";
+export * from "./routine-store.js";
 export * from "./vendor-think.js";
 export * from "./deep-agents.js";
 export * from "./stem.js";

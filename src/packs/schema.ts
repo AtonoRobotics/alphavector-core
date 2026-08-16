@@ -144,6 +144,23 @@ export function assertCompletePack(raw: unknown): PackBinding {
     }
   }
 
+  if (raw.routines !== undefined) {
+    if (!Array.isArray(raw.routines)) {
+      throw new PackLoadError("PACK_INCOMPLETE", "routines must be an array when present");
+    }
+    for (const routine of raw.routines) {
+      if (!isRecord(routine) || typeof routine.id !== "string" || !routine.id.trim()) {
+        throw new PackLoadError("PACK_INCOMPLETE", "each routine requires an id");
+      }
+      if (typeof routine.goal !== "string" || !routine.goal.trim()) {
+        throw new PackLoadError("PACK_INCOMPLETE", `routine ${routine.id} requires a goal`);
+      }
+      if (routine.dueAt !== undefined && (typeof routine.dueAt !== "string" || !routine.dueAt.trim())) {
+        throw new PackLoadError("PACK_INCOMPLETE", `routine ${routine.id} dueAt must be a non-empty string when present`);
+      }
+    }
+  }
+
   return raw as unknown as PackBinding;
 }
 
