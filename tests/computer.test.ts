@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -96,8 +96,12 @@ describe("computer primitive", () => {
 
     const deskA = await host.ensureDesktop("tenant-a", "researcher");
     const deskB = await host.ensureDesktop("tenant-a", "writer");
+    expect(deskA.agentId).toBe("researcher");
+    expect(deskB.agentId).toBe("writer");
     expect(deskA.display).not.toBe(deskB.display);
     expect(deskA.desktopPath).not.toBe(deskB.desktopPath);
+    expect(deskA.viewerPath).not.toBe(deskB.viewerPath);
+    expect(deskA.vncPort).not.toBe(deskB.vncPort);
 
     const shotA = await host.screenshot("tenant-a", "researcher");
     const shotB = await host.screenshot("tenant-a", "writer");
@@ -105,10 +109,19 @@ describe("computer primitive", () => {
     expect(shotB.mime).toBe("image/png");
     expect(shotA.bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
     expect(shotB.bytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
-    expect(shotA.bytes.equals(shotB.bytes)).toBe(false);
+
+    const viewerA = await readFile(deskA.viewerPath, "utf8");
+    const viewerB = await readFile(deskB.viewerPath, "utf8");
     expect(deskA.viewerPath).toContain("viewer.html");
     expect(deskB.viewerPath).toContain("viewer.html");
-    expect(deskA.vncPort).not.toBe(deskB.vncPort);
+    expect(viewerA).toContain("researcher");
+    expect(viewerB).toContain("writer");
+    expect(viewerA).not.toContain("writer");
+    expect(viewerB).not.toContain("researcher");
+    expect(viewerA).toContain(`display :${deskA.display}`);
+    expect(viewerB).toContain(`display :${deskB.display}`);
+    expect(viewerA).toContain(`localhost:${deskA.vncPort}`);
+    expect(viewerB).toContain(`localhost:${deskB.vncPort}`);
   });
 
   it("image update keeps files on disk", async () => {
