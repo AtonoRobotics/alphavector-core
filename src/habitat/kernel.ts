@@ -126,6 +126,7 @@ export class HabitatKernel {
         kind: event.kind,
         tenantId: event.tenantId,
         at: nowIso(),
+        decision,
         detail: { typedOnly: true },
       });
       return {
@@ -174,6 +175,7 @@ export class HabitatKernel {
       tenantId: event.tenantId,
       runId: run.runId,
       at: nowIso(),
+      decision,
     });
     return {
       run,
@@ -219,6 +221,7 @@ export class HabitatKernel {
         tenantId: event.tenantId,
         runId: existing.runId,
         at: nowIso(),
+        decision,
         detail: { followUp: true },
       });
       return {
@@ -252,6 +255,7 @@ export class HabitatKernel {
       tenantId: event.tenantId,
       runId: run.runId,
       at: nowIso(),
+      decision,
       detail: { goal: event.goal },
     });
     const memory = this.injectMemory(event.tenantId, orch.agentId);
@@ -355,6 +359,7 @@ export class HabitatKernel {
       tenantId: event.tenantId,
       runId: run?.runId,
       at: nowIso(),
+      decision: stem(event),
       detail: { cardId: event.cardId, decision: event.decision },
     });
     if (!run || !event.cardId || run.pendingCardId !== event.cardId) {
@@ -415,6 +420,7 @@ export class HabitatKernel {
       tenantId: event.tenantId,
       runId: run?.runId,
       at: nowIso(),
+      decision: stem(event),
       detail: { workerId: event.workerId ?? run?.workerId },
     });
     this.workers.teardown(event.tenantId);
@@ -446,6 +452,7 @@ export class HabitatKernel {
       tenantId: event.tenantId,
       runId: run?.runId,
       at: nowIso(),
+      decision: stem(event),
       detail: { reason: event.reason ?? "kill" },
     });
     this.workers.teardown(event.tenantId);

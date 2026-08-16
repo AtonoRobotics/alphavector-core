@@ -2,8 +2,8 @@ import { computerRoot } from "../computer/paths.js";
 import { AvError } from "../errors.js";
 import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 import { loadRunStore } from "./run-store.js";
-import { stem } from "./stem.js";
-import type { WakeKind, WakeLogEntry } from "./types.js";
+import { stem, type StemDecision } from "./stem.js";
+import type { WakeEvent, WakeKind, WakeLogEntry } from "./types.js";
 
 export interface TenantWakeLog {
   entries: WakeLogEntry[];
@@ -95,7 +95,8 @@ export interface WakeLogReplayContext {
 
 /**
  * Replay facilities from a wake log with no model and no adapter.
- * Re-applies stem() per entry. Missing, empty, unknown, or mismatched logs fail closed.
+ * Re-applies stem() per entry and compares to the stored StemDecision.
+ * Missing, empty, unknown, or mismatched logs fail closed. Do not invent a decision.
  */
 export function replayWakeLog(entries: unknown, context?: WakeLogReplayContext): WakeLogReplayResult {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -115,8 +116,15 @@ export function replayWakeLog(entries: unknown, context?: WakeLogReplayContext):
       return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
     }
     const runId = typeof raw.runId === "string" && raw.runId ? raw.runId : undefined;
-    // Facilities only. stem() is deterministic; no adapter, no model.
-    stem({ kind, tenantId: raw.tenantId, runId });
+    const stored = raw.decision;
+    if (!isStemDecision(stored)) {
+      return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
+    }
+    // Facilities only. Re-apply stem() and compare; no adapter, no model.
+    const recomputed = stem(stemEventFromEntry(kind, raw.tenantId, runId, raw.detail));
+    if (!stemDecisionsEqual(recomputed, stored)) {
+      return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
+    }
     if (kind === "field_ask" && !runId) {
       return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
     }
@@ -128,6 +136,31 @@ export function replayWakeLog(entries: unknown, context?: WakeLogReplayContext):
   }
 
   return { passed: kinds.length > 0, kinds, runIds };
+}
+
+function isStemDecision(value: unknown): value is StemDecision {
+  return (
+    isRecord(value) &&
+    typeof value.wakeOrchestrator === "boolean" &&
+    typeof value.wakeOps === "boolean"
+  );
+}
+
+function stemDecisionsEqual(a: StemDecision, b: StemDecision): boolean {
+  return a.wakeOrchestrator === b.wakeOrchestrator && a.wakeOps === b.wakeOps;
+}
+
+function stemEventFromEntry(
+  kind: WakeKind,
+  tenantId: string,
+  runId: string | undefined,
+  detail: unknown,
+): WakeEvent {
+  const card =
+    isRecord(detail) && (detail.decision === "approved" || detail.decision === "denied")
+      ? detail.decision
+      : undefined;
+  return { kind, tenantId, runId, decision: card };
 }
 
 /** Load wake-log.json (and runs.json when present) from tenant disk, then replay. No model. */
