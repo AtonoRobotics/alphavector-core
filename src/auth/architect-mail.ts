@@ -9,14 +9,14 @@ import { requireArchitect } from "./require-architect.js";
  * Field SHALL NOT deliver, impersonate, or send as Architect. Not a /field route.
  * Mail SHALL NOT confer authority.
  */
-export function architectDeliverMail(input: {
+export async function architectDeliverMail(input: {
   tenantId: string;
   addresseeId: string;
   body: string;
   computerBaseDir: string;
   habitat: HabitatKernel;
   architectToken?: string;
-}): WakeResult {
+}): Promise<WakeResult> {
   const addresseeId = input.addresseeId.trim();
   const body = input.body;
   if (!addresseeId) {
