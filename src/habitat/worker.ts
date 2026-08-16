@@ -36,6 +36,8 @@ export class WorkerBook {
   private readonly workers = new Map<string, WorkerRecord>();
   private readonly hydrated = new Set<string>();
   private readonly corrupt = new Map<string, AvError>();
+  /** Pids this book spawnHeld in this instance. Hydrated leftover pids are not held here. */
+  private readonly heldHere = new Set<number>();
 
   constructor(
     private readonly computerBaseDir?: string,
@@ -59,6 +61,15 @@ export class WorkerBook {
   /** True only when the booked pid is still running. Directory presence is not liveness. */
   isLive(tenantId: string): boolean {
     return isPidAlive(this.get(tenantId)?.pid);
+  }
+
+  /**
+   * True when this book instance spawnHeld the booked pid.
+   * A leftover pid after restart (hydrated from workers.json) is not held here.
+   */
+  isHeldHere(tenantId: string): boolean {
+    const pid = this.get(tenantId)?.pid;
+    return typeof pid === "number" && this.heldHere.has(pid);
   }
 
   async launch(input: {
@@ -120,6 +131,7 @@ export class WorkerBook {
     const worker = this.get(tenantId);
     if (!worker) return;
     if (worker.pid) {
+      this.heldHere.delete(worker.pid);
       forgetHeldCoder(worker.pid);
       terminatePid(worker.pid);
     }
@@ -171,6 +183,7 @@ export class WorkerBook {
         cwd: guestCwd,
       });
       rememberHeldPid(held.pid);
+      this.heldHere.add(held.pid);
       pid = held.pid;
     } else {
       const result = await this.computer.execInMachine({
@@ -328,11 +341,6 @@ function rememberHeldPid(pid: number): void {
 
 function forgetHeldCoder(pid: number): void {
   heldPids.delete(pid);
-}
-
-/** True only for a pid this process spawnHeld and is still watching. Booked dead pid after restart is not held. */
-export function isHeldCoder(pid: number | undefined): boolean {
-  return typeof pid === "number" && heldPids.has(pid);
 }
 
 /** Signal the host-visible handle (unshare / docker exec). Do not kill the process group. */

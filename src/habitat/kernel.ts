@@ -76,7 +76,7 @@ import {
 } from "./types.js";
 import { WakeBus } from "./wake-bus.js";
 import { replayWakeLog, replayWakeLogFromDisk, WakeLog } from "./wake-log.js";
-import { isHeldCoder, WorkerBook } from "./worker.js";
+import { WorkerBook } from "./worker.js";
 
 /** Core-owned due interval. Not field-configured. Not Temporal (DEC-020). */
 export const HABITAT_ROUTINE_TICK_MS = 60_000;
@@ -415,7 +415,7 @@ export class HabitatKernel {
   private async reapCrashedWorkers(tenantId: string): Promise<void> {
     if (this.expectedTeardown.has(tenantId)) return;
     const worker = this.workers.get(tenantId);
-    if (!worker?.pid || !isHeldCoder(worker.pid)) return;
+    if (!worker?.pid || !this.workers.isHeldHere(tenantId)) return;
     if (this.workers.isLive(tenantId)) return;
     await this.reportWorkerFailed({
       tenantId,
