@@ -8,6 +8,7 @@ import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
 import { FactBook } from "../src/facts/book.js";
 import { RecordBook } from "../src/records/book.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
+import { reapHeldCoders } from "../src/habitat/index.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
@@ -81,6 +82,7 @@ function communicateAvoidFromHome(
 }
 
 afterEach(async () => {
+  reapHeldCoders();
   while (servers.length) {
     await servers.pop()?.close();
   }

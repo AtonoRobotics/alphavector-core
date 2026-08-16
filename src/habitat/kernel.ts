@@ -90,8 +90,8 @@ export class HabitatKernel {
   }
 
   /**
-   * Field journey start: the product wake, same as
-   * `HabitatKernel.wake({ kind: "field_start" })`.
+   * Field journey start: the product wake. Holds the coder child (live pid).
+   * Same as `HabitatKernel.wake({ kind: "field_start" }, { holdWorker: true })`.
    * Creates or resumes the run, injects labeled memory, and launches the thin
    * coder (executor + branch, trailer isolation). Talking stays thin.
    * A second start with the same goal is follow-up (same worker / same run).
@@ -100,7 +100,7 @@ export class HabitatKernel {
    */
   observeFieldStart(event: Omit<WakeEvent, "kind"> & { pack: LoadedPack; goal: string }): WakeResult {
     this.packs.set(event.tenantId, event.pack);
-    return this.wake({ ...event, kind: "field_start" });
+    return this.wake({ ...event, kind: "field_start" }, { holdWorker: true });
   }
 
   wake(event: WakeEvent, opts?: { until?: "talking" | "card" | "done"; holdWorker?: boolean }): WakeResult {

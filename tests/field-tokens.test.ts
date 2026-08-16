@@ -8,6 +8,7 @@ import { FieldTokenBook } from "../src/auth/field-tokens.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { AvError, SurfaceViolationError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
+import { reapHeldCoders } from "../src/habitat/index.js";
 import { FieldClient } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { startFieldServe } from "../src/http/field-listen.js";
@@ -19,6 +20,7 @@ const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  reapHeldCoders();
   while (servers.length) {
     await servers.pop()?.close();
   }

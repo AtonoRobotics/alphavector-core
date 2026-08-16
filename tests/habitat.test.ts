@@ -15,6 +15,7 @@ import {
   DryStemAdapter,
   HABITAT_OWNED,
   isPidAlive,
+  reapHeldCoders,
   resetDeepAgentsInvocations,
   WorkerBook,
 } from "../src/habitat/index.js";
@@ -39,7 +40,7 @@ import {
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
 
-/** HTTP start does not hold. Wait until the booked pid is gone (or a zombie). */
+/** Wait until the booked pid is gone (or a zombie). */
 function waitForPidDead(pid: number | undefined, ms = 2000): boolean {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -49,8 +50,21 @@ function waitForPidDead(pid: number | undefined, ms = 2000): boolean {
   return !isPidAlive(pid);
 }
 
+/** Kill the coder pid without teardown so the book and trailer stay (leftover). */
+function killPidLeaveBook(pid: number | undefined): void {
+  if (pid && isPidAlive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+  expect(waitForPidDead(pid)).toBe(true);
+}
+
 afterEach(async () => {
   resetDeepAgentsInvocations();
+  reapHeldCoders();
   while (servers.length) {
     await servers.pop()?.close();
   }
@@ -195,6 +209,10 @@ describe("D10 §6 habitat kernel", () => {
     expect(core.habitat.trailerExists("t1")).toBe(true);
     expect(run!.talkingDidHeavyWork).toBe(false);
     expect(run!.status).toBe("awaiting_card");
+    const worker = core.habitat.activeWorker("t1");
+    expect(worker?.pid).toBeDefined();
+    expect(isPidAlive(worker?.pid)).toBe(true);
+    expect(new WorkerBook(dir).isLive("t1")).toBe(true);
   });
 
   it("fixture start wakes stem, talking does not do heavy work, worker is the coder", async () => {
@@ -633,7 +651,9 @@ describe("D10 §6 habitat kernel", () => {
     expect(fieldSrc).toMatch(/\/field\/ask/);
     expect(fieldSrc).toMatch(/\/field\/kill/);
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
-    expect(kernelSrc).toMatch(/return this\.wake\(\{ \.\.\.event, kind: "field_start" \}\);/);
+    expect(kernelSrc).toMatch(
+      /return this\.wake\(\{ \.\.\.event, kind: "field_start" \},\s*\{\s*holdWorker:\s*true\s*\}\);/,
+    );
     expect(kernelSrc).not.toMatch(/wake\(\{ \.\.\.event, kind: "field_start" \},\s*\{\s*until:\s*["']talking["']/);
     expect(kernelSrc).not.toMatch(/does not throw ONE_GOAL/);
     expect(kernelSrc).toMatch(/throw new AvError\("ONE_GOAL"/);
@@ -863,6 +883,8 @@ describe("D10 §6 field verbs", () => {
     const worker = core.habitat.activeWorker("t1");
     expect(worker?.type).toBe("coder");
     expect(worker?.isolation).toBe("trailer");
+    expect(worker?.pid).toBeDefined();
+    expect(isPidAlive(worker?.pid)).toBe(true);
     expect(existsSync(path.join(worker!.trailerPath, ".branch"))).toBe(true);
     expect(readFileSync(path.join(worker!.trailerPath, ".branch"), "utf8")).toContain("coder/");
     const cards = await field.cards();
@@ -875,6 +897,8 @@ describe("D10 §6 field verbs", () => {
     expect(again?.runId).toBe(run!.runId);
     expect(again?.workerId).toBe(run!.workerId);
     expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker!.workerId);
+    expect(core.habitat.activeWorker("t1")?.pid).toBe(worker!.pid);
+    expect(isPidAlive(worker!.pid)).toBe(true);
     expect(core.habitat.trailerExists("t1")).toBe(true);
     expect(again?.talkingDidHeavyWork).toBe(false);
     expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
@@ -1006,7 +1030,8 @@ describe("D10 §6 field verbs", () => {
     expect(worker.workerId).toBe(run.workerId);
     expect(worker.type).toBe("coder");
     expect(existsSync(worker.trailerPath)).toBe(true);
-    expect(waitForPidDead(worker.pid)).toBe(true);
+    expect(isPidAlive(worker.pid)).toBe(true);
+    killPidLeaveBook(worker.pid);
     const paths = computerRoot(dir, "t1");
     expect(existsSync(paths.workersFile)).toBe(true);
     expect(paths.workersFile).toBe(path.join(dir, "tenants", "t1", "workers.json"));
@@ -1035,6 +1060,7 @@ describe("D10 §6 field verbs", () => {
     expect(live?.branch).toBe(worker.branch);
     expect(live?.pid).toBeDefined();
     expect(live?.pid).not.toBe(worker.pid);
+    expect(isPidAlive(live?.pid)).toBe(true);
     expect(second.core.habitat.trailerExists("t1")).toBe(true);
   });
 
@@ -1045,28 +1071,23 @@ describe("D10 §6 field verbs", () => {
     const run = first.core.habitat.getRun("t1")!;
     const worker = first.core.habitat.activeWorker("t1")!;
     expect(existsSync(worker.trailerPath)).toBe(true);
-    expect(waitForPidDead(worker.pid)).toBe(true);
+    expect(isPidAlive(worker.pid)).toBe(true);
     await first.server.close();
 
-    const held = new WorkerBook(dir).launch({ tenantId: "t1", runId: run.runId, hold: true });
-    expect(held.workerId).toBe(worker.workerId);
-    expect(held.trailerPath).toBe(worker.trailerPath);
-    expect(isPidAlive(held.pid)).toBe(true);
-
     const second = await liveField("t1", dir, { field: first.fieldToken });
-    expect(second.core.habitat.activeWorker("t1")?.pid).toBe(held.pid);
+    expect(second.core.habitat.activeWorker("t1")?.pid).toBe(worker.pid);
     expect(isPidAlive(second.core.habitat.activeWorker("t1")?.pid)).toBe(true);
 
     await second.field.start("buyer", started.journey.objective, started.record.id);
     expect(second.core.habitat.getRun("t1")?.runId).toBe(run.runId);
     expect(second.core.habitat.getRun("t1")?.workerId).toBe(worker.workerId);
     expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
-    expect(second.core.habitat.activeWorker("t1")?.pid).toBe(held.pid);
+    expect(second.core.habitat.activeWorker("t1")?.pid).toBe(worker.pid);
     expect(isPidAlive(second.core.habitat.activeWorker("t1")?.pid)).toBe(true);
 
     await second.field.kill("stop");
     expect(second.core.habitat.activeWorker("t1")).toBeUndefined();
-    expect(isPidAlive(held.pid)).toBe(false);
+    expect(isPidAlive(worker.pid)).toBe(false);
   });
 
   it("field kill after dead-pid relaunch tears the trailer down and clears the book", async () => {
@@ -1075,7 +1096,8 @@ describe("D10 §6 field verbs", () => {
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const worker = first.core.habitat.activeWorker("t1")!;
     expect(existsSync(worker.trailerPath)).toBe(true);
-    expect(waitForPidDead(worker.pid)).toBe(true);
+    expect(isPidAlive(worker.pid)).toBe(true);
+    killPidLeaveBook(worker.pid);
     await first.server.close();
 
     const second = await liveField("t1", dir, { field: first.fieldToken });
@@ -1083,6 +1105,7 @@ describe("D10 §6 field verbs", () => {
     const live = second.core.habitat.activeWorker("t1");
     expect(live?.workerId).toBe(worker.workerId);
     expect(live?.pid).not.toBe(worker.pid);
+    expect(isPidAlive(live?.pid)).toBe(true);
     expect(second.core.habitat.trailerExists("t1")).toBe(true);
     await second.field.kill("stop");
     expect(second.core.habitat.trailerExists("t1")).toBe(false);
@@ -1168,7 +1191,8 @@ describe("D10 §6 field verbs", () => {
     const cardId = run.pendingCardId;
     expect(run.status).toBe("awaiting_card");
     expect(existsSync(worker.trailerPath)).toBe(true);
-    expect(waitForPidDead(worker.pid)).toBe(true);
+    expect(isPidAlive(worker.pid)).toBe(true);
+    killPidLeaveBook(worker.pid);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -1202,7 +1226,8 @@ describe("D10 §6 field verbs", () => {
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const run = first.core.habitat.getRun("t1")!;
     const worker = first.core.habitat.activeWorker("t1")!;
-    expect(waitForPidDead(worker.pid)).toBe(true);
+    expect(isPidAlive(worker.pid)).toBe(true);
+    killPidLeaveBook(worker.pid);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -1225,7 +1250,8 @@ describe("D10 §6 field verbs", () => {
     const first = await liveField("t1", dir);
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const worker = first.core.habitat.activeWorker("t1")!;
-    expect(waitForPidDead(worker.pid)).toBe(true);
+    expect(isPidAlive(worker.pid)).toBe(true);
+    killPidLeaveBook(worker.pid);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -1252,7 +1278,8 @@ describe("D10 §6 field verbs", () => {
     const runId = first.core.habitat.getRun("t1")!.runId;
     const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
     const worker = first.core.habitat.activeWorker("t1")!;
-    expect(waitForPidDead(worker.pid)).toBe(true);
+    expect(isPidAlive(worker.pid)).toBe(true);
+    killPidLeaveBook(worker.pid);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -1277,7 +1304,8 @@ describe("D10 §6 field verbs", () => {
     const runId = first.core.habitat.getRun("t1")!.runId;
     const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
     const worker = first.core.habitat.activeWorker("t1")!;
-    expect(waitForPidDead(worker.pid)).toBe(true);
+    expect(isPidAlive(worker.pid)).toBe(true);
+    killPidLeaveBook(worker.pid);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -1363,6 +1391,7 @@ describe("D10 §6 field verbs", () => {
     expect(still?.workerId).toBe(workerId);
     expect(still?.trailerPath).toBe(trailerPath);
     expect(still?.pid).toBe(pid);
+    expect(isPidAlive(pid)).toBe(true);
     expect(core.habitat.trailerExists("t1")).toBe(true);
     expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
   });
@@ -1429,6 +1458,12 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(kernelSrc).toMatch(/opts\.adapter \?\? new DeepAgentsAdapter/);
     expect(kernelSrc).not.toMatch(/new DryStemAdapter/);
+    expect(kernelSrc).toMatch(
+      /return this\.wake\(\{ \.\.\.event, kind: "field_start" \},\s*\{\s*holdWorker:\s*true\s*\}\);/,
+    );
+    const workerSrc = readFileSync(path.join(process.cwd(), "src/habitat/worker.ts"), "utf8");
+    expect(workerSrc).not.toMatch(/detached:\s*true/);
+    expect(workerSrc).not.toMatch(/\.unref\s*\(/);
     const coreSrc = readFileSync(path.join(process.cwd(), "src/kernel.ts"), "utf8");
     expect(coreSrc).toMatch(/opts\?\.adapter \?\? new DeepAgentsAdapter/);
     expect(coreSrc).not.toMatch(/DryStemAdapter/);
@@ -1611,6 +1646,97 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(core.habitat.getRun("t1")?.runId).toMatch(/^run_/);
     expect(core.habitat.trailerExists("t1")).toBe(true);
     expect(core.habitat.getRun("t1")?.talkingDidHeavyWork).toBe(false);
+    const worker = core.habitat.activeWorker("t1");
+    expect(worker?.pid).toBeDefined();
+    expect(isPidAlive(worker?.pid)).toBe(true);
+    expect(new WorkerBook(dir).isLive("t1")).toBe(true);
+    const booked = JSON.parse(readFileSync(computerRoot(dir, "t1").workersFile, "utf8")) as {
+      workers: Array<{ pid?: number; workerId: string }>;
+    };
+    expect(booked.workers[0]?.pid).toBe(worker?.pid);
+    expect(core.habitat.getRun("t1")?.status).toBe("awaiting_card");
+    expect(core.habitat.getRun("t1")?.pendingCardId).toMatch(/^card_/);
+  });
+
+  it("HTTP start on a bound tenant holds a live coder pid", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-hold-"));
+    const { core, field, architectToken } = await liveProductField("t1", dir);
+    architectBindAdapter({
+      tenantId: "t1",
+      modelId: "ci-double",
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+    });
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    const worker = core.habitat.activeWorker("t1");
+    expect(worker?.pid).toBeDefined();
+    expect(isPidAlive(worker?.pid)).toBe(true);
+    expect(new WorkerBook(dir).isLive("t1")).toBe(true);
+    expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(true);
+    const booked = JSON.parse(readFileSync(computerRoot(dir, "t1").workersFile, "utf8")) as {
+      workers: Array<{ pid?: number }>;
+    };
+    expect(booked.workers[0]?.pid).toBe(worker?.pid);
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    expect(core.habitat.getRun("t1")?.talkingDidHeavyWork).toBe(false);
+    expect(core.habitat.getRun("t1")?.status).toBe("awaiting_card");
+    expect(core.habitat.getRun("t1")?.pendingCardId).toMatch(/^card_/);
+    const cards = await field.cards();
+    expect(cards).toHaveLength(1);
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+  });
+
+  it("same-goal second HTTP start returns the existing worker and does not relaunch", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-follow-"));
+    const { core, field, architectToken, pack } = await liveProductField("t1", dir);
+    architectBindAdapter({
+      tenantId: "t1",
+      modelId: "ci-double",
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+    });
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const worker = core.habitat.activeWorker("t1")!;
+    expect(isPidAlive(worker.pid)).toBe(true);
+    const follow = await field.start("buyer", started.journey.objective, started.record.id);
+    expect(follow.id).toBeDefined();
+    expect(core.habitat.getRun("t1")?.runId).toBeDefined();
+    expect(core.habitat.getRun("t1")?.workerId).toBe(worker.workerId);
+    expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
+    expect(core.habitat.activeWorker("t1")?.pid).toBe(worker.pid);
+    expect(isPidAlive(worker.pid)).toBe(true);
+    const kernelFollow = core.habitat.observeFieldStart({
+      tenantId: "t1",
+      pack,
+      goal: started.journey.objective,
+      journeyId: follow.id,
+      recordId: started.record.id,
+    });
+    expect(kernelFollow.launchedWorker).toBe(false);
+    expect(kernelFollow.run?.workerId).toBe(worker.workerId);
+    expect(core.habitat.activeWorker("t1")?.pid).toBe(worker.pid);
+  });
+
+  it("HTTP kill after a held start tears the trailer down and clears the book", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-hold-kill-"));
+    const { core, field, architectToken } = await liveProductField("t1", dir);
+    architectBindAdapter({
+      tenantId: "t1",
+      modelId: "ci-double",
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+    });
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    const worker = core.habitat.activeWorker("t1")!;
+    expect(isPidAlive(worker.pid)).toBe(true);
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    await field.kill("stop");
+    expect(core.habitat.trailerExists("t1")).toBe(false);
+    expect(core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(isPidAlive(worker.pid)).toBe(false);
+    expect(new WorkerBook(dir).get("t1")).toBeUndefined();
+    expect(new WorkerBook(dir).isLive("t1")).toBe(false);
+    expect(core.habitat.getRun("t1")?.status).toBe("killed");
   });
 
   it("bootFieldCore with no adapter option and no bind is ADAPTER_UNBOUND", async () => {
@@ -1627,7 +1753,9 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     });
     expect(DeepAgentsAdapter.invocations).toBe(0);
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(false);
     expect(core.habitat.getRun("t1")).toBeUndefined();
+    expect(core.habitat.activeWorker("t1")).toBeUndefined();
     expect(core.habitat.trailerExists("t1")).toBe(false);
   });
 
@@ -1666,6 +1794,14 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     };
     expect(onDisk.runs[0]?.talkingDidHeavyWork).toBe(false);
     expect(onDisk.runs[0]?.workerType).toBe("coder");
+    const booked = JSON.parse(readFileSync(computerRoot(dir, "t1").workersFile, "utf8")) as {
+      workers: Array<{ pid?: number }>;
+    };
+    expect(booked.workers[0]?.pid).toBeDefined();
+    expect(isPidAlive(booked.workers[0]?.pid)).toBe(true);
+    expect(new WorkerBook(dir).isLive("t1")).toBe(true);
+    await field.kill("stop");
+    expect(isPidAlive(booked.workers[0]?.pid)).toBe(false);
   });
 
   it("field-serve with no adapter option and no bind is ADAPTER_UNBOUND", async () => {
@@ -1697,6 +1833,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(DeepAgentsAdapter.lastModelId).toBeUndefined();
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
     expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(false);
+    expect(new WorkerBook(dir).get("t1")).toBeUndefined();
   });
 
   it("HTTP bind outside pack allow-list is ADAPTER_NOT_ALLOWED", async () => {
