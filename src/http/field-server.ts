@@ -38,7 +38,8 @@ export interface FieldHttpServerOptions {
 }
 
 /**
- * Field-only HTTP surface. Architect/admin is not callable here.
+ * Field HTTP surface. `/field` is field-only. Architect/admin is not callable on `/field`.
+ * GET `/architect/habitat` is the credential-gated habitat seat (off the field home).
  * Field users cannot configure models, prompts, Temporal, tools, or memory stores.
  */
 export class FieldHttpServer {
@@ -87,6 +88,11 @@ export class FieldHttpServer {
       }
       if (req.method === "GET" && (path === "/" || path === "/index.html")) {
         await this.servePage(res);
+        return;
+      }
+
+      if (req.method === "GET" && path === "/architect/habitat") {
+        this.routeArchitectHabitat(req, res);
         return;
       }
 
@@ -412,6 +418,36 @@ export class FieldHttpServer {
     const orch = this.opts.core.agents.list(this.opts.tenantId).find((a) => a.isOrchestrator);
     if (orch) return orch;
     throw new AvError("AGENT_REQUIRED", "No pack agent is bound for this tenant");
+  }
+
+  /**
+   * Architect habitat seat. Off `/field` and off the field HTML page.
+   * Field token is 403 SURFACE_VIOLATION. Not a named desktop or IDE.
+   */
+  private routeArchitectHabitat(req: IncomingMessage, res: ServerResponse): void {
+    const header = req.headers.authorization;
+    if (!header?.startsWith("Bearer ")) {
+      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
+      return;
+    }
+    const token = header.slice("Bearer ".length).trim();
+    if (!token) {
+      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
+      return;
+    }
+    const principal = this.opts.core.fieldTokens.lookup(token, this.opts.tenantId);
+    if (principal === "architect") {
+      this.json(res, 200, this.opts.core.architect.sit(this.opts.tenantId));
+      return;
+    }
+    if (principal === "field") {
+      this.json(res, 403, {
+        error: "SURFACE_VIOLATION",
+        message: "A field token cannot sit in the habitat",
+      });
+      return;
+    }
+    this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
   }
 
   private principalOf(req: IncomingMessage): PrincipalKind | undefined {

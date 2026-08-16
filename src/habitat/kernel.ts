@@ -59,6 +59,7 @@ import {
   type CognitiveAdapter,
   type CognitiveIntent,
   type LabeledMemory,
+  type HabitatIsolationRecord,
   type RunRecord,
   type SkillFile,
   type WakeEvent,
@@ -156,12 +157,43 @@ export class HabitatKernel {
     return this.runs.get(tenantId);
   }
 
+  /**
+   * Open (non-terminal) runs. One tenant, one goal: 0 or 1.
+   * Terminal completed/denied/killed runs are not sitting in the firm.
+   */
+  openRuns(tenantId: string): RunRecord[] {
+    const run = this.runs.get(tenantId);
+    if (!run || isTerminal(run.status)) return [];
+    return [run];
+  }
+
   listWakes(tenantId: string): ReturnType<WakeLog["list"]> {
     return this.wakeLog.list(tenantId);
   }
 
   activeWorker(tenantId: string): WorkerRecord | undefined {
     return this.workers.get(tenantId);
+  }
+
+  /** Booked workers on this tenant. 0 or 1. Leftover trailer without a book is not a worker. */
+  listWorkers(tenantId: string): WorkerRecord[] {
+    const worker = this.workers.get(tenantId);
+    return worker ? [worker] : [];
+  }
+
+  /**
+   * Trailer isolation as a record. Habitat isolation is trailer.
+   * `exists` is the directory; `live` is the booked pid.
+   */
+  isolation(tenantId: string): HabitatIsolationRecord {
+    const worker = this.workers.get(tenantId);
+    return {
+      isolation: "trailer",
+      ...(worker?.workerId ? { workerId: worker.workerId } : {}),
+      ...(worker?.trailerPath ? { trailerPath: worker.trailerPath } : {}),
+      exists: this.workers.trailerExists(tenantId),
+      live: this.workers.isLive(tenantId),
+    };
   }
 
   activeWorkerAgent(tenantId: string): AgentRecord | undefined {

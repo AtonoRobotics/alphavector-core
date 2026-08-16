@@ -1,3 +1,6 @@
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentRuntime } from "../src/agents/runtime.js";
 import { CardBook } from "../src/auth/cards.js";
@@ -5,9 +8,10 @@ import { DurableStore } from "../src/data/store.js";
 import { EffectExecutor } from "../src/effects/executor.js";
 import { AuthorizationRequiredError } from "../src/errors.js";
 import { GrantBook } from "../src/grants/store.js";
+import { DryStemAdapter } from "../src/habitat/adapter.js";
+import { AlphaVectorCore } from "../src/kernel.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { PolicyGateway } from "../src/policy/gateway.js";
-import { ArchitectSurface } from "../src/surfaces/architect.js";
 import { AskSurface } from "../src/surfaces/ask.js";
 import { FieldSurface } from "../src/surfaces/field.js";
 import { signedGenericPack } from "./helpers.js";
@@ -75,10 +79,37 @@ describe("three surfaces DEC-024", () => {
     expect(() => again.assertAllowed(loaded.loaded, ceiling)).toThrow(/Ask ceiling/);
   });
 
-  it("Architect home is not owner-auth and is not the field home", () => {
-    const home = new ArchitectSurface().home();
-    expect(home.grants).toBe(true);
-    expect(home.packLoad).toBe(true);
-    expect(home.fieldOwnerAuth).toBe(false);
+  it("Architect home is the habitat seat, not five booleans and not the field home", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-architect-home-"));
+    const { anchors, binding } = await signedGenericPack();
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: new DryStemAdapter(),
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const home = core.architect.home("t1");
+    const sit = core.architect.sit("t1");
+    expect(home).toEqual(sit);
+    expect(Array.isArray(home.org)).toBe(true);
+    expect(home.org.length).toBeGreaterThan(0);
+    expect(home.org.every((a) => a.agentId && a.name)).toBe(true);
+    expect(Array.isArray(home.runs)).toBe(true);
+    expect(Array.isArray(home.workers)).toBe(true);
+    expect(Array.isArray(home.grants)).toBe(true);
+    expect(Array.isArray(home.eval.fixtures)).toBe(true);
+    expect(home.eval.fixtures.length).toBeGreaterThan(0);
+    expect(home.isolation.isolation).toBe("trailer");
+    expect(home).not.toEqual({
+      grants: true,
+      packLoad: true,
+      evaluation: true,
+      connectors: true,
+      fieldOwnerAuth: false,
+    });
+    expect(home).not.toHaveProperty("architectControls");
+    expect(home).not.toHaveProperty("fieldOwnerAuth");
+    const field = new FieldSurface(core.cards, core.store, core.grants);
+    expect(field.home("t1").architectControls).toEqual([]);
   });
 });

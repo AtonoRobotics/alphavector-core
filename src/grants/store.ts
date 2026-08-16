@@ -22,6 +22,11 @@ export class GrantBook {
     return this.grants.get(this.key(tenantId, agentId, actionClass));
   }
 
+  /** Architect seat: live grant records for this tenant. Absence is empty, not a flag. */
+  list(tenantId: string): Grant[] {
+    return [...this.grants.values()].filter((grant) => grant.tenantId === tenantId);
+  }
+
   write(input: {
     actor: PrincipalKind;
     tenantId: string;

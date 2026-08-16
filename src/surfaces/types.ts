@@ -1,6 +1,8 @@
 import type { AgentRecord } from "../agents/types.js";
 import type { FieldCardView } from "../auth/types.js";
 import type { Journey } from "../data/types.js";
+import type { Grant } from "../grants/types.js";
+import type { HabitatIsolationRecord, RunRecord, WorkerTypeId } from "../habitat/types.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
 
 export type SurfaceName = "field" | "ask" | "architect";
@@ -164,10 +166,46 @@ export interface FieldRecordResult {
   attributes: Record<string, string>;
 }
 
-export interface ArchitectHome {
-  grants: true;
-  packLoad: true;
-  evaluation: true;
-  connectors: true;
-  fieldOwnerAuth: false;
+/** Live eval status as records (fixtures), not `evaluation: true`. */
+export interface ArchitectEvalFixtureView {
+  id: string;
+  kind: string;
+  countsAsIndependentOutcome: boolean;
 }
+
+export interface ArchitectEvalStatus {
+  passed: boolean;
+  failed: string[];
+  fixtures: ArchitectEvalFixtureView[];
+}
+
+/** Worker as a habitat record. Isolation is trailer, not a boolean. */
+export interface ArchitectWorkerView {
+  workerId: string;
+  tenantId: string;
+  runId: string;
+  type: WorkerTypeId;
+  isolation: "trailer";
+  trailerPath: string;
+  branch: string;
+  agentId: string;
+  createdAt: string;
+}
+
+/**
+ * Architect seat in the habitat. Org, open runs, workers, grants, eval,
+ * isolation as live records. Five booleans are not this seat.
+ * Not a named desktop, IDE, or consumer app (ROB-005).
+ */
+export interface ArchitectHabitatSeat {
+  tenantId: string;
+  org: AgentRecord[];
+  runs: RunRecord[];
+  workers: ArchitectWorkerView[];
+  grants: Grant[];
+  eval: ArchitectEvalStatus;
+  isolation: HabitatIsolationRecord;
+}
+
+/** @deprecated Product seat is ArchitectHabitatSeat. Kept as an alias. */
+export type ArchitectHome = ArchitectHabitatSeat;

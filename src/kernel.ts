@@ -48,7 +48,7 @@ export class AlphaVectorCore {
   readonly effects: EffectExecutor;
   readonly field: FieldSurface;
   readonly ask: AskSurface;
-  readonly architect = new ArchitectSurface();
+  readonly architect: ArchitectSurface;
   readonly journeys: JourneyRuntime;
   readonly eval = new EvalRunner();
   readonly connectors = new ConnectorBook();
@@ -92,6 +92,13 @@ export class AlphaVectorCore {
       adapter: opts?.adapter ?? new DeepAgentsAdapter(),
       now: opts?.now,
       tickMs: opts?.tickMs,
+    });
+    this.architect = new ArchitectSurface({
+      agents: this.agents,
+      habitat: this.habitat,
+      grants: this.grants,
+      eval: this.eval,
+      packs: this.packs,
     });
   }
 

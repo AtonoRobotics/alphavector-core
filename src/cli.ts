@@ -8,6 +8,7 @@ import { architectWriteDeadline } from "./auth/architect-deadlines.js";
 import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
 import { architectDeliverMail } from "./auth/architect-mail.js";
 import { architectWriteRoutine } from "./auth/architect-routines.js";
+import { architectSit } from "./auth/architect-habitat.js";
 import { architectWriteSkill } from "./auth/architect-skills.js";
 import { FieldClient } from "./http/field-client.js";
 import { startFieldServe } from "./http/field-listen.js";
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill",
+        "Architect (off the field home screen). Commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -111,11 +112,32 @@ async function main(): Promise<void> {
       console.log(
         "write-skill writes tenants/{id}/skills/{name}/SKILL.md (agentskills frontmatter + body). Field cannot add skills. Eval-gated promotion is HK-071.",
       );
+      console.log(
+        "habitat reads live org, open runs, workers, grants, eval, isolation. Not five booleans. Not a write. Field cannot sit.",
+      );
       return;
     }
     const dir = computerBaseDir();
     const tenantId = tenantIdOf(flags);
     const architectToken = architectTokenOf(flags);
+    if (sub === "habitat") {
+      const core = new AlphaVectorCore(
+        {
+          architectPublicKeyPem: "unused",
+          counselEvalPublicKeyPem: "unused",
+        },
+        path.join(dir, "state"),
+        dir,
+      );
+      const seat = architectSit({
+        tenantId,
+        computerBaseDir: dir,
+        surface: core.architect,
+        architectToken,
+      });
+      console.log(JSON.stringify(seat, null, 2));
+      return;
+    }
     if (sub === "issue-field-token") {
       const issued = architectIssueFieldToken({
         tenantId,
@@ -311,7 +333,7 @@ async function main(): Promise<void> {
       return;
     }
     throw new Error(
-      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill",
+      "architect commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill",
     );
   }
   if (cmd === "field-serve") {
