@@ -11,6 +11,7 @@ export interface StartFieldServeOptions {
 /**
  * Listen on the field surface. Does not issue a token.
  * A field user must present a token Architect already issued.
+ * Product boot is DeepAgentsAdapter (Architect bind required). No DryStem default.
  */
 export async function startFieldServe(opts: StartFieldServeOptions = {}): Promise<{
   server: FieldHttpServer;

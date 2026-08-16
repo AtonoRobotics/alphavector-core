@@ -7,6 +7,7 @@ import { computerRoot } from "../src/computer/paths.js";
 import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
 import { FactBook } from "../src/facts/book.js";
 import { RecordBook } from "../src/records/book.js";
+import { DryStemAdapter } from "../src/habitat/adapter.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
@@ -87,7 +88,10 @@ afterEach(async () => {
 
 async function liveField(tenantId = "t1", computerBaseDir?: string) {
   const dir = computerBaseDir ?? (await mkdtemp(path.join(os.tmpdir(), "av-field-http-")));
-  const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir: dir });
+  const { core, pack } = await bootFieldCore(tenantId, {
+    computerBaseDir: dir,
+    adapter: new DryStemAdapter(),
+  });
   const architectIssued = core.fieldTokens.issue({ tenantId, principal: "architect" });
   const fieldIssued = core.fieldTokens.issue({
     tenantId,
@@ -116,7 +120,9 @@ async function liveMutatedField(
   mutate: (unsigned: Omit<PackBinding, "signatures">) => void,
 ) {
   const { anchors, binding } = await signedRePackMutated(mutate);
-  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir);
+  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+    adapter: new DryStemAdapter(),
+  });
   const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
   if (!loaded.ok) throw new Error(loaded.message);
   if (core.agents.list(tenantId).length === 0) {

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CardBook } from "../src/auth/cards.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { AvError } from "../src/errors.js";
+import { DryStemAdapter } from "../src/habitat/adapter.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
@@ -34,7 +35,10 @@ async function liveDurable(
   computerBaseDir: string,
   issued?: { field: string },
 ) {
-  const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir });
+  const { core, pack } = await bootFieldCore(tenantId, {
+    computerBaseDir,
+    adapter: new DryStemAdapter(),
+  });
   let fieldToken = issued?.field;
   if (!fieldToken) {
     const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });

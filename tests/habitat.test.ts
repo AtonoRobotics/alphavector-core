@@ -8,9 +8,11 @@ import { computerRoot } from "../src/computer/paths.js";
 import { EvalRunner } from "../src/eval/runner.js";
 import { AvError } from "../src/errors.js";
 import { architectBindAdapter } from "../src/auth/architect-adapter-bind.js";
+import { architectIssueFieldToken } from "../src/auth/architect-field-token.js";
 import {
   createDeepAgent,
   DeepAgentsAdapter,
+  DryStemAdapter,
   HABITAT_OWNED,
   isPidAlive,
   resetDeepAgentsInvocations,
@@ -18,6 +20,7 @@ import {
 } from "../src/habitat/index.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
+import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import type { CognitiveAdapter } from "../src/habitat/types.js";
 import { AlphaVectorCore } from "../src/kernel.js";
@@ -56,7 +59,9 @@ afterEach(async () => {
 async function habitatStack(tenantId = "t1") {
   const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-habitat-"));
   const { anchors, binding } = await signedGenericPack();
-  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir);
+  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+    adapter: new DryStemAdapter(),
+  });
   const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
   if (!loaded.ok) throw new Error(loaded.message);
   const agents = core.agents.instantiateFromPack(loaded.loaded, "architect");
@@ -80,9 +85,7 @@ async function habitatThinkStack(
   const { anchors, binding } = mutate
     ? await signedGenericPackMutated(mutate)
     : await signedGenericPack();
-  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
-    adapter: new DeepAgentsAdapter(),
-  });
+  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir);
   const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
   if (!loaded.ok) throw new Error(loaded.message);
   const agents = core.agents.instantiateFromPack(loaded.loaded, "architect");
@@ -110,9 +113,41 @@ async function liveField(
   tenantId: string,
   computerBaseDir: string,
   issued?: { field: string; architect?: string },
-  adapter?: CognitiveAdapter,
+  adapter: CognitiveAdapter = new DryStemAdapter(),
 ) {
   const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir, adapter });
+  let fieldToken = issued?.field;
+  let architectToken = issued?.architect;
+  if (!fieldToken) {
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    architectToken = architect.token;
+    fieldToken = core.fieldTokens.issue({
+      tenantId,
+      principal: "field",
+      presented: architect.token,
+    }).token;
+  }
+  const server = new FieldHttpServer({ core, pack, tenantId });
+  servers.push(server);
+  const { url } = await server.listen(0, "127.0.0.1");
+  return {
+    core,
+    pack,
+    field: new FieldClient(url, fieldToken),
+    fieldToken,
+    architectToken,
+    url,
+    server,
+  };
+}
+
+/** Product boot: no adapter option. DeepAgentsAdapter is the field-serve default. */
+async function liveProductField(
+  tenantId: string,
+  computerBaseDir: string,
+  issued?: { field: string; architect?: string },
+) {
+  const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir });
   let fieldToken = issued?.field;
   let architectToken = issued?.architect;
   if (!fieldToken) {
@@ -1384,6 +1419,22 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
+  it("product boot defaults to DeepAgentsAdapter; DryStem is fixture-only", () => {
+    const bootSrc = readFileSync(path.join(process.cwd(), "src/http/field-boot.ts"), "utf8");
+    expect(bootSrc).toMatch(/opts\.adapter \?\? new DeepAgentsAdapter/);
+    expect(bootSrc).not.toMatch(/new DryStemAdapter/);
+    const listenSrc = readFileSync(path.join(process.cwd(), "src/http/field-listen.ts"), "utf8");
+    expect(listenSrc).not.toMatch(/DryStemAdapter/);
+    expect(listenSrc).toMatch(/bootFieldCore\(tenantId, \{ computerBaseDir: opts\.computerBaseDir \}\)/);
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    expect(kernelSrc).toMatch(/opts\.adapter \?\? new DeepAgentsAdapter/);
+    expect(kernelSrc).not.toMatch(/new DryStemAdapter/);
+    const coreSrc = readFileSync(path.join(process.cwd(), "src/kernel.ts"), "utf8");
+    expect(coreSrc).toMatch(/opts\?\.adapter \?\? new DeepAgentsAdapter/);
+    expect(coreSrc).not.toMatch(/DryStemAdapter/);
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+  });
+
   it("bound-model wake invokes the adapter think path without the field user setting a model", async () => {
     const stack = await habitatThinkStack();
     architectBindAdapter({
@@ -1541,9 +1592,9 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
   });
 
-  it("HTTP start with Architect-written bind invokes think; field does not set a model", async () => {
+  it("bootFieldCore with no adapter option and Architect bind invokes DeepAgentsAdapter think", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-bound-"));
-    const { core, field, architectToken } = await liveField("t1", dir, undefined, new DeepAgentsAdapter());
+    const { core, field, architectToken } = await liveProductField("t1", dir);
     expect(architectToken).toBeDefined();
     architectBindAdapter({
       tenantId: "t1",
@@ -1562,9 +1613,9 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(core.habitat.getRun("t1")?.talkingDidHeavyWork).toBe(false);
   });
 
-  it("HTTP unbound start is ADAPTER_UNBOUND and does not create runs.json", async () => {
+  it("bootFieldCore with no adapter option and no bind is ADAPTER_UNBOUND", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-unbound-"));
-    const { core, field } = await liveField("t1", dir, undefined, new DeepAgentsAdapter());
+    const { core, field } = await liveProductField("t1", dir);
     const rec = await field.createApprovedRecord(
       (await field.home()).recordKinds[0]?.id ?? "record",
       "Subject",
@@ -1580,14 +1631,80 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(core.habitat.trailerExists("t1")).toBe(false);
   });
 
+  it("field-serve with no adapter option and Architect bind invokes DeepAgentsAdapter think", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-serve-bound-"));
+    const architect = architectIssueFieldToken({
+      tenantId: "t1",
+      principal: "architect",
+      computerBaseDir: dir,
+    });
+    const issued = architectIssueFieldToken({
+      tenantId: "t1",
+      principal: "field",
+      computerBaseDir: dir,
+      architectToken: architect.token,
+    });
+    architectBindAdapter({
+      tenantId: "t1",
+      modelId: "ci-double",
+      computerBaseDir: dir,
+      architectToken: architect.token,
+    });
+    const started = await startFieldServe({ tenantId: "t1", computerBaseDir: dir, port: 0 });
+    servers.push(started.server);
+    const field = new FieldClient(started.url, issued.token);
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/adapter-bind|modelId|allowList|ci-double|pickAgent/);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(true);
+    expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(true);
+    const onDisk = JSON.parse(readFileSync(computerRoot(dir, "t1").runsFile, "utf8")) as {
+      runs: Array<{ talkingDidHeavyWork: boolean; workerType?: string }>;
+    };
+    expect(onDisk.runs[0]?.talkingDidHeavyWork).toBe(false);
+    expect(onDisk.runs[0]?.workerType).toBe("coder");
+  });
+
+  it("field-serve with no adapter option and no bind is ADAPTER_UNBOUND", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-serve-unbound-"));
+    const architect = architectIssueFieldToken({
+      tenantId: "t1",
+      principal: "architect",
+      computerBaseDir: dir,
+    });
+    const issued = architectIssueFieldToken({
+      tenantId: "t1",
+      principal: "field",
+      computerBaseDir: dir,
+      architectToken: architect.token,
+    });
+    const started = await startFieldServe({ tenantId: "t1", computerBaseDir: dir, port: 0 });
+    servers.push(started.server);
+    const field = new FieldClient(started.url, issued.token);
+    const rec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
+    await field.openApproved("buyer", rec.id);
+    await expect(field.start("buyer", "Work this buyer journey", rec.id)).rejects.toMatchObject({
+      status: 400,
+      code: "ADAPTER_UNBOUND",
+    });
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.lastModelId).toBeUndefined();
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(false);
+  });
+
   it("HTTP bind outside pack allow-list is ADAPTER_NOT_ALLOWED", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-denied-"));
     const { anchors, binding } = await signedRePackMutated((unsigned) => {
       unsigned.adapter = { allowList: ["ci-double"] };
     });
-    const core = new AlphaVectorCore(anchors, path.join(dir, "state"), dir, {
-      adapter: new DeepAgentsAdapter(),
-    });
+    const core = new AlphaVectorCore(anchors, path.join(dir, "state"), dir);
     const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
     if (!loaded.ok) throw new Error(loaded.message);
     core.agents.instantiateFromPack(loaded.loaded, "architect");
@@ -1664,7 +1781,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
 
   it("field SHALL NOT bind, see, or edit the adapter", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-field-"));
-    const { field, fieldToken, url } = await liveField("t1", dir, undefined, new DeepAgentsAdapter());
+    const { field, fieldToken, url } = await liveProductField("t1", dir);
     expect(() =>
       architectBindAdapter({
         tenantId: "t1",
