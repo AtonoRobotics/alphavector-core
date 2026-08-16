@@ -71,7 +71,7 @@ describe("alphavector-re pack load (pinned first slice)", () => {
     expect(active.binding.roles).toHaveLength(binding.roles.length);
   });
 
-  it("binds written REQUIRES PREFERS AVOIDS on generic slots; authored journeys stay id/label", async () => {
+  it("binds written REQUIRES PREFERS AVOIDS on generic slots; authored journeys declare them", async () => {
     const unsigned = await loadReUnsigned();
     expect(unsigned.recordPartyKnowledge.predicates).toEqual(
       expect.arrayContaining(["REQUIRES", "PREFERS", "AVOIDS"]),
@@ -79,9 +79,58 @@ describe("alphavector-re pack load (pinned first slice)", () => {
     expect(unsigned.recordPartyKnowledge.graphEdgeKinds).toEqual(
       expect.arrayContaining(["REQUIRES", "PREFERS", "AVOIDS"]),
     );
-    for (const journey of unsigned.journeyKinds) {
-      expect(Object.keys(journey).sort()).toEqual(["id", "label"]);
-    }
+
+    const journeys = Object.fromEntries(unsigned.journeyKinds.map((j) => [j.id, j]));
+    expect(journeys.buyer).toMatchObject({
+      id: "buyer",
+      label: "Buyer",
+      REQUIRES: ["journey.buyer"],
+      PREFERS: ["purpose.showing"],
+      AVOIDS: ["consent.dnc", "consent.quiet-hours"],
+    });
+    expect(journeys.seller).toMatchObject({
+      id: "seller",
+      label: "Seller",
+      REQUIRES: ["journey.seller"],
+      PREFERS: ["purpose.listing"],
+      AVOIDS: ["consent.dnc", "consent.quiet-hours"],
+    });
+    expect(journeys.listing).toMatchObject({
+      id: "listing",
+      label: "Listing",
+      REQUIRES: ["journey.listing"],
+      PREFERS: ["purpose.listing", "subject.listing"],
+      AVOIDS: ["consent.assumed-autonomy"],
+    });
+    expect(journeys.transaction).toMatchObject({
+      id: "transaction",
+      label: "Transaction",
+      REQUIRES: ["journey.transaction"],
+      PREFERS: ["purpose.transaction"],
+      AVOIDS: ["consent.assumed-autonomy"],
+    });
+    expect(journeys["past-client"]).toMatchObject({
+      id: "past-client",
+      label: "Past client",
+      REQUIRES: ["journey.past-client"],
+      PREFERS: ["purpose.follow-up"],
+      AVOIDS: ["consent.dnc", "consent.quiet-hours"],
+    });
+
+    const verbs = Object.fromEntries(unsigned.actionClassVerbs.map((v) => [v.id, v]));
+    expect(verbs.communicate).toMatchObject({
+      REQUIRES: ["purpose.follow-up"],
+      AVOIDS: [
+        "consent.dnc",
+        "consent.quiet-hours",
+        "consent.assumed-autonomy",
+        "consent.recovery",
+        "consent.scheduling",
+      ],
+    });
+    expect(verbs.internal_write).toMatchObject({
+      AVOIDS: ["consent.crm-update", "consent.assumed-autonomy"],
+    });
   });
 
   it("keeps Person/Household/Listing as pack kinds, not core schema columns", async () => {

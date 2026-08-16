@@ -12,7 +12,7 @@ import { FieldHttpServer } from "../src/http/field-server.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { ALPHAVECTOR_RE_PIN_SHA, signedRePack } from "./helpers.js";
 
-const RE_PIN = "84f1410e9735882551f3ec3e77dea94aa096bdf2";
+const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
@@ -58,6 +58,8 @@ async function liveDurable(
 }
 
 async function issueFollowUpCard(field: FieldClient): Promise<{ journeyId: string; cardId: string }> {
+  await field.recordApprovedFact("journey.buyer");
+  await field.recordApprovedFact("purpose.follow-up");
   const journey = await field.start("buyer", "Work this buyer journey");
   try {
     await field.progress(journey.id, {
@@ -76,7 +78,7 @@ async function issueFollowUpCard(field: FieldClient): Promise<{ journeyId: strin
 }
 
 describe("durable pending cards on tenant computer disk", () => {
-  it("keeps the RE fixture pin at 84f1410", () => {
+  it("keeps the RE fixture pin at 5091328", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
