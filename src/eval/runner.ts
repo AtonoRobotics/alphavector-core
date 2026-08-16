@@ -23,7 +23,9 @@ export class EvalRunner {
   replayFacilities(
     source: readonly WakeLogEntry[] | { computerBaseDir: string; tenantId: string },
   ): WakeLogReplayResult {
-    if (Array.isArray(source)) return replayWakeLog(source);
-    return replayWakeLogFromDisk(source.computerBaseDir, source.tenantId);
+    if ("computerBaseDir" in source) {
+      return replayWakeLogFromDisk(source.computerBaseDir, source.tenantId);
+    }
+    return replayWakeLog(source);
   }
 }
