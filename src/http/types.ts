@@ -45,6 +45,14 @@ export interface FieldRecordBody {
   label: string;
 }
 
+/** Generic record update. recordId required. Keys and values are strings. */
+export interface FieldRecordUpdateBody {
+  recordId?: string;
+  type?: string;
+  label?: string;
+  attributes?: Record<string, string>;
+}
+
 export interface FieldApproveResult {
   card: { cardId: string; status: string };
   journey?: Journey;

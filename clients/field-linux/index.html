@@ -28,7 +28,7 @@
 <body>
   <main>
     <h1>AV Dev Field</h1>
-    <p class="lead">Required field path. Create a record, open a pack journey, record a pack purpose or avoid on the selected record, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
+    <p class="lead">Required field path. Create a record, set a key and value on the selected record, open a pack journey, record a pack purpose or avoid on the selected record, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
     <div id="status"></div>
 
     <section>
@@ -63,6 +63,12 @@
       <label for="record-label">Label</label>
       <input id="record-label" autocomplete="off" spellcheck="false" placeholder="Record label" />
       <button id="create-record" type="button">Create record</button>
+      <label for="attr-key">Key</label>
+      <input id="attr-key" autocomplete="off" spellcheck="false" placeholder="Attribute key" />
+      <label for="attr-value">Value</label>
+      <input id="attr-value" autocomplete="off" spellcheck="false" placeholder="Attribute value" />
+      <button id="set-attribute" type="button">Set attribute</button>
+      <ul id="record-attributes"></ul>
     </section>
 
     <section>
@@ -168,7 +174,18 @@
       }
       renderList("records", home.records, (r) =>
         `<li><strong>${r.label}</strong><div class="meta">${r.type} · ${r.id}</div>
+         <div class="meta">${attributePairs(r.attributes)}</div>
          <button type="button" data-select-record="${r.id}">${r.id === selectedRecordId ? "Selected" : "Select"}</button></li>`
+      );
+      const selected = home.records.find((r) => r.id === selectedRecordId);
+      const attrRows = selected
+        ? Object.keys(selected.attributes || {}).map((key) => ({
+            key: key,
+            value: selected.attributes[key],
+          }))
+        : [];
+      renderList("record-attributes", attrRows, (a) =>
+        `<li><strong>${a.key}</strong><div class="meta">${a.value}</div></li>`
       );
       renderList("purpose-facts", home.purposeFacts, (p) =>
         `<li><strong>${p.label}</strong><div class="meta">${p.id}</div>
@@ -227,6 +244,14 @@
       return selectedRecordId || undefined;
     }
 
+    function attributePairs(attributes) {
+      const rows = [];
+      for (const key in attributes || {}) {
+        rows.push(key + "=" + attributes[key]);
+      }
+      return rows.length ? rows.join(" · ") : "No attributes";
+    }
+
     async function requestFactCard(id, path, recordId) {
       try {
         await api("POST", path, { id: id, recordId: recordId });
@@ -250,6 +275,32 @@
         try {
           await api("POST", "/field/records", { type: type, label: label });
           setStatus("Record create completed without a card");
+        } catch (err) {
+          if (err.cardId) setStatus("Card required: " + err.cardId);
+          else throw err;
+        }
+        await refresh();
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    };
+
+    document.getElementById("set-attribute").onclick = async () => {
+      try {
+        if (!selectedRecord()) {
+          setStatus("Select a record before setting an attribute", true);
+          return;
+        }
+        const key = document.getElementById("attr-key").value.trim();
+        const value = document.getElementById("attr-value").value;
+        const attributes = {};
+        attributes[key] = value;
+        try {
+          await api("POST", "/field/records/update", {
+            recordId: selectedRecord(),
+            attributes: attributes,
+          });
+          setStatus("Record update completed without a card");
         } catch (err) {
           if (err.cardId) setStatus("Card required: " + err.cardId);
           else throw err;

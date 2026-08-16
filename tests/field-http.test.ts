@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { computerRoot } from "../src/computer/paths.js";
 import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
 import { FactBook } from "../src/facts/book.js";
+import { RecordBook } from "../src/records/book.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
@@ -360,9 +361,18 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/id="records"/);
     expect(html).toMatch(/id="create-record"/);
     expect(html).toMatch(/\/field\/records/);
+    expect(html).toMatch(/\/field\/records\/update/);
+    expect(html).toMatch(/id="attr-key"/);
+    expect(html).toMatch(/id="attr-value"/);
+    expect(html).toMatch(/id="set-attribute"/);
+    expect(html).toMatch(/id="record-attributes"/);
+    expect(html).toMatch(/Select a record before setting an attribute/);
     expect(html).toMatch(/home\.recordKinds/);
     expect(html).toMatch(/home\.records/);
     expect(html).toMatch(/data-select-record=/);
+    expect(html).not.toMatch(/id="phone"|id="email"|id="mls"/);
+    expect(html).not.toMatch(/for="phone"|for="email"|for="mls"/);
+    expect(html).not.toMatch(/>Phone<|>Email<|>MLS</);
     expect(html).not.toMatch(/purpose\.follow-up/);
     expect(html).not.toMatch(/purpose\.showing|purpose\.listing|purpose\.transaction/);
     expect(html).not.toMatch(/consent\.dnc/);
@@ -391,6 +401,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(clientSrc).toMatch(/requestFactCard/);
     expect(clientSrc).toMatch(/recordApprovedFact/);
     expect(clientSrc).toMatch(/createApprovedRecord/);
+    expect(clientSrc).toMatch(/updateApprovedRecord/);
+    expect(clientSrc).toMatch(/requestRecordUpdateCard/);
+    expect(clientSrc).toMatch(/\/field\/records\/update/);
     expect(clientSrc).toMatch(/home\.recordKinds/);
     expect(clientSrc).toMatch(/openApproved\(kind\.id, subject\.id\)/);
     expect(clientSrc).toMatch(/start\(kind\.id, `Work this \$\{kind\.label\} journey`, subject\.id\)/);
@@ -404,6 +417,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(fieldSrc).not.toMatch(/consent\.dnc/);
     expect(fieldSrc).toMatch(/avoidFactsFromBinding/);
     expect(fieldSrc).toMatch(/recordKindsFromBinding/);
+    expect(fieldSrc).toMatch(/assertRecordUpdatePatch/);
+    expect(fieldSrc).toMatch(/actionClass === "update"/);
     expect(fieldSrc).toMatch(/verb\.AVOIDS/);
     expect(fieldSrc).toMatch(/kind\.AVOIDS/);
     expect(fieldSrc).toMatch(/RECORD_ID_REQUIRED/);
@@ -1100,7 +1115,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(existsSync(paths.recordsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
     expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records).toEqual([
-      { id: createdA.record!.id, type: type.id, label: "A" },
+      { id: createdA.record!.id, type: type.id, label: "A", attributes: {} },
     ]);
 
     const recA = createdA.record!;
@@ -1362,6 +1377,83 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
       expect.arrayContaining([field.journeyFactId(kind.id), purpose.id]),
+    );
+  });
+
+  it("updates record attributes only after approve and survives RecordBook restart", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-http-attrs-"));
+    const { field, architect, tenantId, url, tokens, pack } = await liveField("records-attrs", dir);
+    const paths = computerRoot(dir, tenantId);
+    const type = (await field.home()).recordKinds[0];
+    const rec = await field.createApprovedRecord(type.id, "A");
+    expect(rec.attributes).toEqual({});
+    expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records[0].attributes).toEqual({});
+
+    await expect(architect.update(rec.id, { attributes: { note: "x" } })).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    const unauthed = await fetch(`${url}/field/records/update`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ recordId: rec.id, attributes: { note: "x" } }),
+    });
+    expect(unauthed.status).toBe(401);
+
+    const missing = await fetch(`${url}/field/records/update`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.field}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ attributes: { note: "x" } }),
+    });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: "RECORD_ID_REQUIRED" });
+
+    await expect(field.update("rec_unknown", { attributes: { note: "x" } })).rejects.toMatchObject({
+      status: 404,
+      code: "RECORD_NOT_FOUND",
+    });
+
+    const unapproved = await field.requestRecordUpdateCard(rec.id, { attributes: { note: "hello" } });
+    expect(unapproved).toMatch(/^card_/);
+    expect(new RecordBook(dir).get(tenantId, rec.id)?.attributes).toEqual({});
+    expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records[0].attributes).toEqual({});
+
+    const denied = await field.requestRecordUpdateCard(rec.id, { attributes: { other: "no" } });
+    await field.deny(denied);
+    expect(new RecordBook(dir).get(tenantId, rec.id)?.attributes).toEqual({});
+
+    const approved = await field.approve(unapproved);
+    expect(approved.record).toMatchObject({
+      id: rec.id,
+      type: type.id,
+      label: "A",
+      attributes: { note: "hello" },
+    });
+    expect(new RecordBook(dir).get(tenantId, rec.id)).toEqual({
+      id: rec.id,
+      type: type.id,
+      label: "A",
+      attributes: { note: "hello" },
+    });
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+
+    const renamed = await field.updateApprovedRecord(rec.id, { label: "Renamed" });
+    expect(renamed.label).toBe("Renamed");
+    expect(renamed.attributes).toEqual({ note: "hello" });
+    expect(new RecordBook(dir).get(tenantId, rec.id)?.label).toBe("Renamed");
+
+    const home = await field.home();
+    const listed = home.records.find((r) => r.id === rec.id);
+    expect(listed?.attributes).toEqual({ note: "hello" });
+    expect(listed?.label).toBe("Renamed");
+
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
+    expect(pack.binding.recordPartyKnowledge.recordKinds[0]).not.toMatch(
+      /listing_id|person_id|household_id|buyer_id/i,
     );
   });
 

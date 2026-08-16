@@ -71,6 +71,17 @@ export class FieldClient {
   }
 
   /**
+   * Issues an owner_instance card to update a known record. Persist happens
+   * only after approve. Missing recordId fails closed.
+   */
+  update(
+    recordId: string,
+    patch: { type?: string; label?: string; attributes?: Record<string, string> },
+  ): Promise<{ id: string; type: string; label: string; attributes: Record<string, string> }> {
+    return this.request("POST", "/field/records/update", { recordId, ...patch });
+  }
+
+  /**
    * Page path: POST /field/facts or /field/facts/retract, then approve the
    * owner_instance card. Persist happens only after approve.
    */
@@ -116,6 +127,38 @@ export class FieldClient {
     const approved = await this.approve(cardId);
     if (!approved.record) {
       throw new Error("record create approve did not persist");
+    }
+    return approved.record;
+  }
+
+  /**
+   * Page path: POST /field/records/update, then approve the owner_instance card.
+   * Persist happens only after approve. Missing recordId fails closed.
+   */
+  async requestRecordUpdateCard(
+    recordId: string,
+    patch: { type?: string; label?: string; attributes?: Record<string, string> },
+  ): Promise<string> {
+    try {
+      await this.update(recordId, patch);
+      throw new Error("expected authorization card before record update");
+    } catch (err) {
+      if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
+        throw err;
+      }
+      return err.cardId;
+    }
+  }
+
+  /** Same update path the Linux page uses, then approve. */
+  async updateApprovedRecord(
+    recordId: string,
+    patch: { type?: string; label?: string; attributes?: Record<string, string> },
+  ): Promise<NonNullable<FieldApproveResult["record"]>> {
+    const cardId = await this.requestRecordUpdateCard(recordId, patch);
+    const approved = await this.approve(cardId);
+    if (!approved.record) {
+      throw new Error("record update approve did not persist");
     }
     return approved.record;
   }
