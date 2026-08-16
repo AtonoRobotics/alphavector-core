@@ -3371,6 +3371,102 @@ describe("D10 deadline wakes", () => {
     expect(fieldSrc).toMatch(/deadlines\?/);
     expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/deadlines/);
     expect(fieldSrc).toMatch(/stopDueTicker\(/);
+    const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(cliSrc).toMatch(/architectWriteDeadline/);
+    expect(cliSrc).toMatch(/bind-deadline writes tenants\/\{id\}\/deadlines\.json/);
+    expect(cliSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+  });
+
+  it("Architect CLI bind-deadline writes tenants/{id}/deadlines.json; habitat clock still fires kind deadline", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-deadline-cli-"));
+    const { core, field, architectToken } = await liveField("t1", dir);
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.runId).toMatch(/^run_/);
+    const worker = core.habitat.activeWorker("t1");
+    const goalsBefore = core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective);
+
+    const dueAt = new Date(0).toISOString();
+    const out = runArchitectCli(
+      [
+        "architect",
+        "bind-deadline",
+        "--tenant",
+        "t1",
+        "--deadline-id",
+        "follow-up-due",
+        "--due-at",
+        dueAt,
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(out.status).toBe(0);
+    expect(out.stdout).toMatch(/"deadlineId": "follow-up-due"/);
+    expect(out.stdout).toMatch(/"boundBy": "architect"/);
+
+    const paths = computerRoot(dir, "t1");
+    expect(paths.deadlinesFile).toBe(path.join(dir, "tenants", "t1", "deadlines.json"));
+    expect(existsSync(paths.deadlinesFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "deadlines.json"))).toBe(false);
+    const raw = JSON.parse(readFileSync(paths.deadlinesFile, "utf8")) as {
+      deadlines: Array<{ deadlineId: string; boundBy: string; dueAt: string }>;
+    };
+    expect(raw.deadlines).toHaveLength(1);
+    expect(raw.deadlines[0]).toMatchObject({
+      deadlineId: "follow-up-due",
+      boundBy: "architect",
+      dueAt,
+    });
+
+    await core.habitat.advanceClock(new Date().toISOString());
+
+    expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
+    expect(core.habitat.getRun("t1")?.goal).toBe(started.journey.objective);
+    expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker?.workerId);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "deadline" && w.runId === run!.runId)).toBe(true);
+    expect(core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective)).toEqual(goalsBefore);
+  });
+
+  it("Architect CLI bind-deadline with no open run is NO_OPEN_RUN and does not mint a goal", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-deadline-cli-no-run-"));
+    const { core, architectToken } = await liveField("t1", dir);
+    const dueAt = new Date(0).toISOString();
+    const out = runArchitectCli(
+      [
+        "architect",
+        "bind-deadline",
+        "--tenant",
+        "t1",
+        "--deadline-id",
+        "lonely-due",
+        "--due-at",
+        dueAt,
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(out.status).toBe(0);
+    expect(existsSync(computerRoot(dir, "t1").deadlinesFile)).toBe(true);
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    await expect(
+      core.habitat.wake({
+        kind: "deadline",
+        tenantId: "t1",
+        deadlineId: "lonely-due",
+      }),
+    ).rejects.toThrow(/NO_OPEN_RUN|no implicit start/);
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+    expect(core.habitat.listWakes("t1")).toEqual([]);
+    expect(core.store.journeys.filter((j) => j.tenantId === "t1")).toEqual([]);
+
+    await core.habitat.advanceClock(new Date().toISOString());
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+    expect(core.habitat.listWakes("t1")).toEqual([]);
   });
 
   it("Architect-written due deadline on disk + open run + advanceClock attaches with kind deadline, same runId, labeled memory, no new goal or worker", async () => {
@@ -3537,6 +3633,38 @@ describe("D10 deadline wakes", () => {
         architectToken: fieldToken,
       }),
     ).toThrow(/cannot bind|field token|deadline/i);
+    const fieldCli = runArchitectCli(
+      [
+        "architect",
+        "bind-deadline",
+        "--tenant",
+        "t1",
+        "--deadline-id",
+        "field-due",
+        "--due-at",
+        new Date(0).toISOString(),
+        "--architect-token",
+        fieldToken,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(fieldCli.status).not.toBe(0);
+    expect(`${fieldCli.stdout}\n${fieldCli.stderr}`).toMatch(/cannot bind|field token|deadline/i);
+    const shellCli = runArchitectCli(
+      [
+        "architect",
+        "bind-deadline",
+        "--tenant",
+        "t1",
+        "--deadline-id",
+        "field-due",
+        "--due-at",
+        new Date(0).toISOString(),
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(shellCli.status).not.toBe(0);
+    expect(`${shellCli.stdout}\n${shellCli.stderr}`).toMatch(/Shell is not Architect/);
     expect(existsSync(computerRoot(dir, "t1").deadlinesFile)).toBe(false);
 
     const home = await field.home();

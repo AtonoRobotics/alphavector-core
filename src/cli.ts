@@ -4,6 +4,7 @@ import path from "node:path";
 import { architectBindAdapter } from "./auth/architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "./auth/architect-adapter-credentials.js";
 import { architectBindConnector } from "./auth/architect-connectors.js";
+import { architectWriteDeadline } from "./auth/architect-deadlines.js";
 import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
 import { architectWriteRoutine } from "./auth/architect-routines.js";
 import { FieldClient } from "./http/field-client.js";
@@ -79,7 +80,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector",
+        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | bind-deadline",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -95,6 +96,9 @@ async function main(): Promise<void> {
       );
       console.log(
         "bind-connector writes tenants/{id}/connector-bind.json. Field cannot bind, see, or edit. Temporal is not the bus.",
+      );
+      console.log(
+        "bind-deadline writes tenants/{id}/deadlines.json. Field cannot author, see, or edit. Temporal is not the bus.",
       );
       return;
     }
@@ -182,8 +186,30 @@ async function main(): Promise<void> {
       );
       return;
     }
+    if (sub === "bind-deadline") {
+      const deadlineId = flag(flags, "--deadline-id");
+      const dueAt = flag(flags, "--due-at");
+      if (!deadlineId || !dueAt) {
+        throw new Error("architect bind-deadline requires --deadline-id and --due-at");
+      }
+      const written = architectWriteDeadline({
+        tenantId,
+        deadlineId,
+        dueAt,
+        computerBaseDir: dir,
+        architectToken,
+      });
+      console.log(
+        JSON.stringify(
+          { ok: true, tenantId: written.tenantId, deadlineId: written.deadlineId, boundBy: written.boundBy },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     throw new Error(
-      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector",
+      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | bind-deadline",
     );
   }
   if (cmd === "field-serve") {
