@@ -57,6 +57,32 @@ export function purposeFactsFromBinding(binding: PackBinding): Array<{ id: strin
   return ids.map((id) => ({ id, label: map[id] ?? id }));
 }
 
+/**
+ * Unique AVOIDS ids from loaded pack bindings (journeyKinds and actionClassVerbs).
+ * Does not collect REQUIRES/PREFERS. Does not invent ids. Label from fieldLanguageMap, else id.
+ */
+export function avoidFactsFromBinding(binding: PackBinding): Array<{ id: string; label: string }> {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const take = (values: readonly string[] | undefined) => {
+    for (const id of values ?? []) {
+      if (typeof id === "string" && id.length > 0 && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  };
+  // Action verbs first so communicate AVOIDS are on the list for the field path.
+  for (const verb of binding.actionClassVerbs) {
+    take(verb.AVOIDS);
+  }
+  for (const kind of binding.journeyKinds) {
+    take(kind.AVOIDS);
+  }
+  const map = binding.fieldLanguageMap;
+  return ids.map((id) => ({ id, label: map[id] ?? id }));
+}
+
 const FORBIDDEN_FIELD = [
   "model",
   "prompt",
@@ -93,6 +119,7 @@ export class FieldSurface {
         ? pack.binding.journeyKinds.map((k) => ({ id: k.id, label: k.label }))
         : [],
       purposeFacts: pack ? purposeFactsFromBinding(pack.binding) : [],
+      avoidFacts: pack ? avoidFactsFromBinding(pack.binding) : [],
     };
   }
 

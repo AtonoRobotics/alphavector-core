@@ -40,6 +40,38 @@ function collectPurposeFactIds(binding: PackBinding): string[] {
   return ids;
 }
 
+/** Unique AVOIDS from pack journeyKinds and actionClassVerbs. Does not read REQUIRES/PREFERS. */
+function collectAvoidFactIds(binding: PackBinding): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const take = (values: string[] | undefined) => {
+    for (const id of values ?? []) {
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  };
+  for (const verb of binding.actionClassVerbs) {
+    take(verb.AVOIDS);
+  }
+  for (const kind of binding.journeyKinds) {
+    take(kind.AVOIDS);
+  }
+  return ids;
+}
+
+function communicateAvoidFromHome(
+  home: { avoidFacts: Array<{ id: string; label: string }> },
+  pack: { binding: PackBinding },
+): { id: string; label: string } {
+  const communicateAvoids =
+    pack.binding.actionClassVerbs.find((v) => v.id === "communicate")?.AVOIDS ?? [];
+  const avoided = home.avoidFacts.find((f) => f.id === communicateAvoids[0]);
+  if (!avoided) throw new Error("loaded pack has no communicate AVOIDS on home");
+  return avoided;
+}
+
 afterEach(async () => {
   while (servers.length) {
     await servers.pop()?.close();
@@ -145,6 +177,17 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       ]),
     );
     expect(home.purposeFacts).toHaveLength(4);
+    expect(home.avoidFacts.map((f) => f.id)).toEqual(
+      expect.arrayContaining([
+        "consent.dnc",
+        "consent.quiet-hours",
+        "consent.assumed-autonomy",
+        "consent.crm-update",
+        "consent.recovery",
+        "consent.scheduling",
+      ]),
+    );
+    expect(home.avoidFacts).toHaveLength(6);
   });
 
   it("approves an owner card then executes", async () => {
@@ -282,8 +325,18 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/home\.purposeFacts/);
     expect(html).toMatch(/data-purpose=/);
     expect(html).toMatch(/t\.dataset\.purpose/);
+    expect(html).toMatch(/id="avoid-facts"/);
+    expect(html).toMatch(/home\.avoidFacts/);
+    expect(html).toMatch(/data-avoid=/);
+    expect(html).toMatch(/data-avoid-retract=/);
+    expect(html).toMatch(/t\.dataset\.avoid/);
+    expect(html).toMatch(/t\.dataset\.avoidRetract/);
     expect(html).not.toMatch(/purpose\.follow-up/);
     expect(html).not.toMatch(/purpose\.showing|purpose\.listing|purpose\.transaction/);
+    expect(html).not.toMatch(/consent\.dnc/);
+    expect(html).not.toMatch(
+      /consent\.quiet-hours|consent\.assumed-autonomy|consent\.crm-update|consent\.recovery|consent\.scheduling/,
+    );
     expect(html).not.toMatch(/journey\.buyer/);
     expect(html).not.toMatch(/k\.id === ["']buyer["']/);
     expect(html).not.toContain("Work this buyer journey");
@@ -300,8 +353,16 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const clientSrc = await readFile(path.join(REPO_ROOT, "src/http/field-client.ts"), "utf8");
     expect(clientSrc).not.toMatch(/purpose\.follow-up/);
+    expect(clientSrc).not.toMatch(/consent\.dnc/);
     expect(clientSrc).toMatch(/home\.purposeFacts/);
     expect(clientSrc).toMatch(/recordApprovedFact\(purpose\.id\)/);
+    expect(clientSrc).toMatch(/requestFactCard/);
+    expect(clientSrc).toMatch(/recordApprovedFact/);
+    const fieldSrc = await readFile(path.join(REPO_ROOT, "src/surfaces/field.ts"), "utf8");
+    expect(fieldSrc).not.toMatch(/consent\.dnc/);
+    expect(fieldSrc).toMatch(/avoidFactsFromBinding/);
+    expect(fieldSrc).toMatch(/verb\.AVOIDS/);
+    expect(fieldSrc).toMatch(/kind\.AVOIDS/);
 
     const home = await field.home();
     expect(home.journeyKinds.map((k) => k.id)).toEqual(pack.binding.journeyKinds.map((k) => k.id));
@@ -321,6 +382,21 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(home.purposeFacts.find((f) => f.id === "purpose.follow-up")?.label).toBe(
       pack.binding.fieldLanguageMap["purpose.follow-up"],
     );
+    expect(home.avoidFacts.map((f) => f.id).sort()).toEqual(collectAvoidFactIds(pack.binding).sort());
+    expect(home.avoidFacts.map((f) => f.id)).toEqual(
+      expect.arrayContaining([
+        "consent.dnc",
+        "consent.quiet-hours",
+        "consent.assumed-autonomy",
+        "consent.crm-update",
+        "consent.recovery",
+        "consent.scheduling",
+      ]),
+    );
+    expect(home.avoidFacts.every((f) => f.id && f.label)).toBe(true);
+    expect(home.avoidFacts.find((f) => f.id === "consent.dnc")?.label).toBe(
+      pack.binding.fieldLanguageMap["consent.dnc"] ?? "consent.dnc",
+    );
     const communicateRequires = pack.binding.actionClassVerbs.find((v) => v.id === "communicate")
       ?.REQUIRES;
     expect(communicateRequires?.some((id) => id.startsWith("purpose."))).toBe(true);
@@ -329,6 +405,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const done = await field.completeBuyerJourneyAndCard();
     expect(done.journey.journeyKind).toBe("buyer");
     expect(done.effect.executed).toBe(true);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    for (const id of collectAvoidFactIds(pack.binding)) {
+      expect(new FactBook(dir).presentIds(tenantId)).not.toContain(id);
+    }
 
     // Same POSTs the page script issues: record/retract then existing card approve.
     const paths = computerRoot(dir, tenantId);
@@ -692,6 +774,158 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     }
 
     await expect(architect.record(purpose.id)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    await expect(architect.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+  });
+
+  it("records a pack AVOIDS fact from home and fail-closes communicate after approve", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-avoid-list-"));
+    const { field, architect, tenantId, pack } = await liveField("avoid-list", dir);
+    const paths = computerRoot(dir, tenantId);
+    const kind = pack.binding.journeyKinds[0];
+    const home = await field.home();
+    expect(home.avoidFacts).toEqual(
+      pack.binding.actionClassVerbs
+        .flatMap((v) => v.AVOIDS ?? [])
+        .concat(pack.binding.journeyKinds.flatMap((k) => k.AVOIDS ?? []))
+        .filter((id, i, all) => id && all.indexOf(id) === i)
+        .map((id) => ({ id, label: pack.binding.fieldLanguageMap[id] ?? id })),
+    );
+    expect(home.avoidFacts.map((f) => f.id)).toEqual(
+      expect.arrayContaining([
+        "consent.dnc",
+        "consent.quiet-hours",
+        "consent.assumed-autonomy",
+        "consent.crm-update",
+        "consent.recovery",
+        "consent.scheduling",
+      ]),
+    );
+    expect(home.avoidFacts.map((f) => f.id).join(" ")).not.toMatch(/purpose\./);
+    expect(home.purposeFacts.map((f) => f.id).join(" ")).not.toMatch(/consent\./);
+    expect(JSON.stringify(home)).not.toMatch(/listing_id|person_id|household_id|buyer_id/i);
+    expect(JSON.stringify(home)).not.toMatch(/Desk|Shape|Director|Play|Plant|HIL|Thor/);
+
+    const avoided = communicateAvoidFromHome(home, pack);
+    expect(pack.binding.actionClassVerbs.find((v) => v.id === "communicate")?.AVOIDS).toContain(
+      avoided.id,
+    );
+    expect(avoided.id).toBe("consent.dnc");
+
+    await field.openApproved(kind.id);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+
+    const avoidCardId = await field.requestFactCard(avoided.id);
+    expect(avoidCardId).toMatch(/^card_/);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(existsSync(paths.factsFile)).toBe(true);
+    expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([{ id: "journey.buyer" }]);
+
+    const recordedAvoid = await field.approve(avoidCardId);
+    expect(recordedAvoid.fact).toEqual({ id: avoided.id, present: true });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
+      expect.arrayContaining(["journey.buyer", avoided.id]),
+    );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+
+    const retractId = await field.requestFactCard(avoided.id, "retract");
+    const retracted = await field.approve(retractId);
+    expect(retracted.fact).toEqual({ id: avoided.id, present: false });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+
+    const purpose = field.communicateRequiresPurpose(home);
+    await field.recordApprovedFact(purpose.id);
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`);
+
+    try {
+      await field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: kind.id,
+      });
+      throw new Error("expected authorization card before execute");
+    } catch (err) {
+      expect(err).toMatchObject({ status: 409, code: "AUTHORIZATION_REQUIRED" });
+    }
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+
+    const unapprovedAvoid = await field.requestFactCard(avoided.id);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+    try {
+      await field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: kind.id,
+      });
+      throw new Error("expected authorization card before execute");
+    } catch (err) {
+      expect(err).toMatchObject({ status: 409, code: "AUTHORIZATION_REQUIRED" });
+    }
+
+    const approvedAvoid = await field.approve(unapprovedAvoid);
+    expect(approvedAvoid.fact).toEqual({ id: avoided.id, present: true });
+    await expect(
+      field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: kind.id,
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/AVOIDS present/),
+    });
+
+    const restoreId = await field.requestFactCard(avoided.id, "retract");
+    await expect(
+      field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: kind.id,
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/AVOIDS present/),
+    });
+    const restored = await field.approve(restoreId);
+    expect(restored.fact).toEqual({ id: avoided.id, present: false });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
+      expect.arrayContaining(["journey.buyer", purpose.id]),
+    );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+
+    try {
+      await field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: kind.id,
+      });
+      throw new Error("expected authorization card before execute");
+    } catch (err) {
+      expect(err).toMatchObject({ status: 409, code: "AUTHORIZATION_REQUIRED" });
+      if (!(err instanceof FieldHttpError) || !err.cardId) throw err;
+      const executed = await field.approve(err.cardId);
+      expect(executed.effect?.executed).toBe(true);
+    }
+
+    await expect(architect.record(avoided.id)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    await expect(architect.retract(avoided.id)).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
