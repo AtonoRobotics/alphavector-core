@@ -24,6 +24,32 @@ import {
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
 
+function pidAlive(pid: number | undefined): boolean {
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2).charAt(0);
+    return state !== "Z";
+  } catch {
+    return false;
+  }
+}
+
+/** HTTP start does not hold. Wait until the booked pid is gone (or a zombie). */
+function waitForPidDead(pid: number | undefined, ms = 2000): boolean {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (!pidAlive(pid)) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  return !pidAlive(pid);
+}
+
 afterEach(async () => {
   while (servers.length) {
     await servers.pop()?.close();
@@ -698,14 +724,16 @@ describe("D10 §6 field verbs", () => {
     expect(second.habitat.getRun("t1")?.status).toBe("awaiting_card");
   });
 
-  it("restart on the same computerBaseDir still sees the HTTP-started worker; follow-up does not relaunch", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-worker-restart-"));
+  it("HTTP start, process restart, leftover trailer dir, same-goal field start relaunches the same workerId", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-leftover-dir-"));
     const first = await liveField("t1", dir);
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const run = first.core.habitat.getRun("t1")!;
     const worker = first.core.habitat.activeWorker("t1")!;
     expect(worker.workerId).toBe(run.workerId);
     expect(worker.type).toBe("coder");
+    expect(existsSync(worker.trailerPath)).toBe(true);
+    expect(waitForPidDead(worker.pid)).toBe(true);
     const paths = computerRoot(dir, "t1");
     expect(existsSync(paths.workersFile)).toBe(true);
     expect(paths.workersFile).toBe(path.join(dir, "tenants", "t1", "workers.json"));
@@ -714,22 +742,85 @@ describe("D10 §6 field verbs", () => {
 
     const second = await liveField("t1", dir, { field: first.fieldToken });
     const again = second.core.habitat.getRun("t1");
-    const live = second.core.habitat.activeWorker("t1");
+    const booked = second.core.habitat.activeWorker("t1");
     expect(again?.runId).toBe(run.runId);
     expect(again?.workerId).toBe(worker.workerId);
-    expect(live?.workerId).toBe(worker.workerId);
-    expect(live?.type).toBe("coder");
-    expect(live?.trailerPath).toBe(worker.trailerPath);
-    expect(live?.branch).toBe(worker.branch);
+    expect(booked?.workerId).toBe(worker.workerId);
+    expect(booked?.trailerPath).toBe(worker.trailerPath);
+    expect(booked?.branch).toBe(worker.branch);
+    expect(existsSync(worker.trailerPath)).toBe(true);
     expect(second.core.habitat.trailerExists("t1")).toBe(true);
+    expect(pidAlive(booked?.pid)).toBe(false);
 
     const follow = await second.field.start("buyer", started.journey.objective, started.record.id);
     expect(follow.id).toBeDefined();
+    const live = second.core.habitat.activeWorker("t1");
+    expect(second.core.habitat.getRun("t1")?.runId).toBe(run.runId);
+    expect(second.core.habitat.getRun("t1")?.workerId).toBe(worker.workerId);
+    expect(live?.workerId).toBe(worker.workerId);
+    expect(live?.trailerPath).toBe(worker.trailerPath);
+    expect(live?.branch).toBe(worker.branch);
+    expect(live?.pid).toBeDefined();
+    expect(live?.pid).not.toBe(worker.pid);
+    expect(second.core.habitat.trailerExists("t1")).toBe(true);
+  });
+
+  it("live pid: same-goal field start does not relaunch", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-live-pid-"));
+    const first = await liveField("t1", dir);
+    const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
+    const run = first.core.habitat.getRun("t1")!;
+    const worker = first.core.habitat.activeWorker("t1")!;
+    expect(existsSync(worker.trailerPath)).toBe(true);
+    expect(waitForPidDead(worker.pid)).toBe(true);
+    await first.server.close();
+
+    const held = new WorkerBook(dir).launch({ tenantId: "t1", runId: run.runId, hold: true });
+    expect(held.workerId).toBe(worker.workerId);
+    expect(held.trailerPath).toBe(worker.trailerPath);
+    expect(pidAlive(held.pid)).toBe(true);
+
+    const second = await liveField("t1", dir, { field: first.fieldToken });
+    expect(second.core.habitat.activeWorker("t1")?.pid).toBe(held.pid);
+    expect(pidAlive(second.core.habitat.activeWorker("t1")?.pid)).toBe(true);
+
+    await second.field.start("buyer", started.journey.objective, started.record.id);
     expect(second.core.habitat.getRun("t1")?.runId).toBe(run.runId);
     expect(second.core.habitat.getRun("t1")?.workerId).toBe(worker.workerId);
     expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
-    expect(second.core.habitat.activeWorker("t1")?.trailerPath).toBe(worker.trailerPath);
-    expect(second.core.habitat.activeWorker("t1")?.branch).toBe(worker.branch);
+    expect(second.core.habitat.activeWorker("t1")?.pid).toBe(held.pid);
+    expect(pidAlive(second.core.habitat.activeWorker("t1")?.pid)).toBe(true);
+
+    await second.field.kill("stop");
+    expect(second.core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(pidAlive(held.pid)).toBe(false);
+  });
+
+  it("field kill after dead-pid relaunch tears the trailer down and clears the book", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-dead-pid-kill-"));
+    const first = await liveField("t1", dir);
+    const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
+    const worker = first.core.habitat.activeWorker("t1")!;
+    expect(existsSync(worker.trailerPath)).toBe(true);
+    expect(waitForPidDead(worker.pid)).toBe(true);
+    await first.server.close();
+
+    const second = await liveField("t1", dir, { field: first.fieldToken });
+    await second.field.start("buyer", started.journey.objective, started.record.id);
+    const live = second.core.habitat.activeWorker("t1");
+    expect(live?.workerId).toBe(worker.workerId);
+    expect(live?.pid).not.toBe(worker.pid);
+    expect(second.core.habitat.trailerExists("t1")).toBe(true);
+    await second.field.kill("stop");
+    expect(second.core.habitat.trailerExists("t1")).toBe(false);
+    expect(second.core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(existsSync(worker.trailerPath)).toBe(false);
+    expect(second.core.habitat.getRun("t1")?.status).toBe("killed");
+    await second.server.close();
+
+    const third = await liveField("t1", dir, { field: first.fieldToken });
+    expect(third.core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(third.core.habitat.trailerExists("t1")).toBe(false);
   });
 
   it("field kill after HTTP start and restart tears the trailer down and the book is empty on a third core", async () => {
@@ -804,6 +895,7 @@ describe("D10 §6 field verbs", () => {
     const cardId = run.pendingCardId;
     expect(run.status).toBe("awaiting_card");
     expect(existsSync(worker.trailerPath)).toBe(true);
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -837,6 +929,7 @@ describe("D10 §6 field verbs", () => {
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const run = first.core.habitat.getRun("t1")!;
     const worker = first.core.habitat.activeWorker("t1")!;
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -859,6 +952,7 @@ describe("D10 §6 field verbs", () => {
     const first = await liveField("t1", dir);
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const worker = first.core.habitat.activeWorker("t1")!;
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -885,6 +979,7 @@ describe("D10 §6 field verbs", () => {
     const runId = first.core.habitat.getRun("t1")!.runId;
     const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
     const worker = first.core.habitat.activeWorker("t1")!;
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -909,6 +1004,7 @@ describe("D10 §6 field verbs", () => {
     const runId = first.core.habitat.getRun("t1")!.runId;
     const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
     const worker = first.core.habitat.activeWorker("t1")!;
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 

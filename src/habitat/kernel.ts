@@ -156,13 +156,15 @@ export class HabitatKernel {
       throw new AvError("ONE_GOAL", "Orchestrator SHALL dispatch one goal at a time");
     }
     if (existing && existing.status === "awaiting_card" && existing.goal === event.goal) {
-      // Book live + trailer gone (typical after process restart): same-id relaunch.
-      // Do not return here as a no-op — launch() recreates the process, not a new id.
-      if (this.workers.get(event.tenantId) && !this.workers.trailerExists(event.tenantId)) {
+      // Book live + pid missing/dead (typical after process restart; leftover trailer
+      // is not live): launch() recreates the process for the same workerId.
+      // A live pid returns existing. Do not no-op because the directory exists.
+      if (this.workers.get(event.tenantId) && !this.workers.isLive(event.tenantId)) {
         this.workers.launch({
           tenantId: event.tenantId,
           runId: existing.runId,
           skills: writeSkillFiles(this.opts.computerBaseDir, pack),
+          hold: holdWorker,
         });
       }
       const memory = this.injectMemory(
@@ -248,7 +250,7 @@ export class HabitatKernel {
     const run = this.requireRun(event.tenantId);
     const followUp = Boolean(run.workerId && this.workers.getById(event.tenantId, run.workerId));
     const worker =
-      followUp && this.workers.trailerExists(event.tenantId)
+      followUp && this.workers.isLive(event.tenantId)
         ? this.workers.get(event.tenantId)!
         : this.workers.launch({
             tenantId: event.tenantId,

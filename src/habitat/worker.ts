@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentRecord } from "../agents/types.js";
 import { computerRoot } from "../computer/paths.js";
@@ -28,6 +28,7 @@ export interface TenantWorkerStore {
 /**
  * Thin coder book. One live worker per tenant, persisted beside runs.json.
  * Control state, not a business fact. Hydrate from disk; do not invent a worker id.
+ * Liveness is pid, not the trailer directory. A leftover trailer is not a live worker.
  */
 export class WorkerBook {
   private readonly workers = new Map<string, WorkerRecord>();
@@ -46,6 +47,11 @@ export class WorkerBook {
     return worker?.workerId === workerId ? worker : undefined;
   }
 
+  /** True only when the booked pid is still running. Directory presence is not liveness. */
+  isLive(tenantId: string): boolean {
+    return isPidAlive(this.get(tenantId)?.pid);
+  }
+
   launch(input: {
     tenantId: string;
     runId: string;
@@ -57,7 +63,7 @@ export class WorkerBook {
     }
     const existing = this.get(input.tenantId);
     if (existing) {
-      if (existsSync(existing.trailerPath)) return existing;
+      if (isPidAlive(existing.pid)) return existing;
       return this.spawnTrailer(existing, input.skills, input.hold);
     }
     const workerId = newId("worker");
@@ -155,6 +161,7 @@ export class WorkerBook {
         AV_CODER_HOLD: hold ? "1" : "0",
       },
     });
+    child.on("exit", () => {});
     child.unref();
     const next: WorkerRecord = { ...record, pid: child.pid };
     this.workers.set(record.tenantId, next);
@@ -285,6 +292,28 @@ function parseAgent(raw: unknown, tenantId: string): AgentRecord {
     isOrchestrator: raw.isOrchestrator,
     createdAt: raw.createdAt,
   };
+}
+
+function isPidAlive(pid: number | undefined): boolean {
+  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  // kill(0) succeeds for zombies. HTTP start does not hold; the exited
+  // child is not a live worker even if the parent has not reaped it.
+  return !isZombiePid(pid);
+}
+
+function isZombiePid(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2).charAt(0);
+    return state === "Z";
+  } catch {
+    return false;
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
