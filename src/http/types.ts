@@ -64,6 +64,12 @@ export interface FieldRecordUpdateBody {
   attributes?: Record<string, string>;
 }
 
+/** Retract one attribute key. recordId and key required. Missing fails closed. */
+export interface FieldRecordAttributeRetractBody {
+  recordId?: string;
+  key?: string;
+}
+
 export interface FieldApproveResult {
   card: { cardId: string; status: string };
   journey?: Journey;

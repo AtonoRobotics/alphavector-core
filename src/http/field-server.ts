@@ -12,6 +12,7 @@ import type {
   FieldAskBody,
   FieldFactBody,
   FieldProgressBody,
+  FieldRecordAttributeRetractBody,
   FieldRecordBody,
   FieldRecordUpdateBody,
   FieldStartBody,
@@ -239,6 +240,17 @@ export class FieldHttpServer {
       return;
     }
 
+    if (method === "POST" && path === "/field/records/attributes/retract") {
+      const body = (await readJson(req)) as FieldRecordAttributeRetractBody;
+      core.field.retractAttribute({
+        actor,
+        pack,
+        recordId: body.recordId ? String(body.recordId) : "",
+        key: body.key ? String(body.key) : "",
+      });
+      return;
+    }
+
     if (method === "POST" && path === "/field/ask") {
       const body = (await readJson(req)) as FieldAskBody;
       core.field.ask({
@@ -422,7 +434,8 @@ export class FieldHttpServer {
         err.code === "JOURNEY_NOT_FOUND" ||
           err.code === "CARD_NOT_FOUND" ||
           err.code === "AGENT_NOT_FOUND" ||
-          err.code === "RECORD_NOT_FOUND"
+          err.code === "RECORD_NOT_FOUND" ||
+          err.code === "RECORD_ATTRIBUTE_NOT_FOUND"
           ? 404
           : err.code === "POLICY_DENIED" ||
               err.code === "DENY_IS_TERMINAL" ||

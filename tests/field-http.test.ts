@@ -388,6 +388,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/id="set-attribute"/);
     expect(html).toMatch(/id="record-attributes"/);
     expect(html).toMatch(/Select a record before setting an attribute/);
+    expect(html).toMatch(/\/field\/records\/attributes\/retract/);
+    expect(html).toMatch(/data-attr-retract=/);
+    expect(html).toMatch(/Select a record before retracting an attribute/);
     expect(html).toMatch(/home\.recordKinds/);
     expect(html).toMatch(/home\.records/);
     expect(html).toMatch(/data-select-record=/);
@@ -1481,6 +1484,95 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(pack.binding.recordPartyKnowledge.recordKinds[0]).not.toMatch(
       /listing_id|person_id|household_id|buyer_id/i,
     );
+  });
+
+  it("retracts a record attribute key only after approve and survives RecordBook restart", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-http-attr-retract-"));
+    const { field, architect, tenantId, url, tokens } = await liveField("records-attr-retract", dir);
+    const paths = computerRoot(dir, tenantId);
+    const type = (await field.home()).recordKinds[0];
+    const rec = await field.createApprovedRecord(type.id, "A");
+    const set = await field.updateApprovedRecord(rec.id, { attributes: { note: "hello", keep: "yes" } });
+    expect(set.attributes).toEqual({ note: "hello", keep: "yes" });
+
+    await expect(architect.retractAttribute(rec.id, "note")).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    const unauthed = await fetch(`${url}/field/records/attributes/retract`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ recordId: rec.id, key: "note" }),
+    });
+    expect(unauthed.status).toBe(401);
+
+    const missingRecord = await fetch(`${url}/field/records/attributes/retract`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.field}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ key: "note" }),
+    });
+    expect(missingRecord.status).toBe(400);
+    expect(await missingRecord.json()).toMatchObject({ error: "RECORD_ID_REQUIRED" });
+
+    const missingKey = await fetch(`${url}/field/records/attributes/retract`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.field}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ recordId: rec.id }),
+    });
+    expect(missingKey.status).toBe(400);
+    expect(await missingKey.json()).toMatchObject({ error: "RECORD_ATTRIBUTE_KEY_REQUIRED" });
+
+    await expect(field.retractAttribute("rec_unknown", "note")).rejects.toMatchObject({
+      status: 404,
+      code: "RECORD_NOT_FOUND",
+    });
+    await expect(field.retractAttribute(rec.id, "missing")).rejects.toMatchObject({
+      status: 404,
+      code: "RECORD_ATTRIBUTE_NOT_FOUND",
+    });
+
+    const unapproved = await field.requestRecordAttributeRetractCard(rec.id, "note");
+    expect(unapproved).toMatch(/^card_/);
+    expect(new RecordBook(dir).get(tenantId, rec.id)?.attributes).toEqual({
+      note: "hello",
+      keep: "yes",
+    });
+    expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records[0].attributes).toEqual({
+      note: "hello",
+      keep: "yes",
+    });
+
+    const denied = await field.requestRecordAttributeRetractCard(rec.id, "keep");
+    await field.deny(denied);
+    expect(new RecordBook(dir).get(tenantId, rec.id)?.attributes).toEqual({
+      note: "hello",
+      keep: "yes",
+    });
+    await expect(field.retractAttribute(rec.id, "keep")).rejects.toMatchObject({
+      status: 403,
+      code: "DENY_IS_TERMINAL",
+    });
+
+    const approved = await field.approve(unapproved);
+    expect(approved.record).toMatchObject({
+      id: rec.id,
+      type: type.id,
+      label: "A",
+      attributes: { keep: "yes" },
+    });
+    expect(new RecordBook(dir).get(tenantId, rec.id)?.attributes).toEqual({ keep: "yes" });
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+
+    const restarted = new RecordBook(dir).get(tenantId, rec.id);
+    expect(restarted?.attributes).toEqual({ keep: "yes" });
+    const home = await field.home();
+    expect(home.records.find((r) => r.id === rec.id)?.attributes).toEqual({ keep: "yes" });
   });
 
   it("keeps RE types out of core schema and migrations", async () => {

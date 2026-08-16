@@ -24,6 +24,7 @@ import type {
   FieldHome,
   FieldProgressInput,
   FieldProgressResult,
+  FieldRecordAttributeRetractInput,
   FieldRecordInput,
   FieldRecordUpdateInput,
   FieldStartInput,
@@ -363,6 +364,34 @@ export class FieldSurface {
   }
 
   /**
+   * Request to retract one attribute key on a known record.
+   * Issues an owner_instance card. Does not write records.json until approved.
+   * Missing or unknown recordId / key fails closed.
+   */
+  retractAttribute(input: FieldRecordAttributeRetractInput): void {
+    this.assertActorIsField(input.actor);
+    const recordId = this.assertKnownRecord(input.pack.tenantId, input.recordId);
+    const key = this.assertKnownAttributeKey(input.pack.tenantId, recordId, input.key);
+    if (this.cards.wasDenied(input.pack.tenantId, FACT_AGENT, "retract", key, RECORD_CHANNEL)) {
+      throw new AvError(
+        "DENY_IS_TERMINAL",
+        "Deny is terminal; the same action cannot be silently resubmitted",
+      );
+    }
+    const card = this.cards.issue({
+      tenantId: input.pack.tenantId,
+      kind: "owner_instance",
+      actionClass: "retract",
+      agentId: FACT_AGENT,
+      purpose: recordId,
+      subject: key,
+      channel: RECORD_CHANNEL,
+      pack: input.pack,
+    });
+    throw new AuthorizationRequiredError(card.cardId, "Authorization card required before attribute retract");
+  }
+
+  /**
    * Persist or retract only after the owner_instance card is approved.
    * Pending and denied cards do not write. Non-fact/record cards return undefined
    * so communicate approve-then-execute can continue.
@@ -381,6 +410,11 @@ export class FieldSurface {
       const recordId = this.assertKnownRecord(card.tenantId, card.purpose);
       const patch = decodeRecordUpdatePatch(card.subject);
       const record = this.records.update(card.tenantId, recordId, patch);
+      return { id: record.id, present: true };
+    }
+    if (card.channel === RECORD_CHANNEL && card.actionClass === "retract") {
+      const recordId = this.assertKnownRecord(card.tenantId, card.purpose);
+      const record = this.records.retractAttribute(card.tenantId, recordId, card.subject);
       return { id: record.id, present: true };
     }
     if (card.channel !== FACT_CHANNEL) return undefined;
@@ -542,5 +576,17 @@ export class FieldSurface {
       throw new AvError("RECORD_UPDATE_EMPTY", "Record update requires type, label, or attributes");
     }
     return patch;
+  }
+
+  private assertKnownAttributeKey(tenantId: string, recordId: string, key?: string): string {
+    if (!key) {
+      throw new AvError("RECORD_ATTRIBUTE_KEY_REQUIRED", "Attribute key is required");
+    }
+    this.assertFieldSafe(key);
+    const record = this.records.get(tenantId, recordId);
+    if (!record || !(key in record.attributes)) {
+      throw new AvError("RECORD_ATTRIBUTE_NOT_FOUND", `Unknown attribute key ${key}`);
+    }
+    return key;
   }
 }
