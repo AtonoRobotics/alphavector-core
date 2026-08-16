@@ -139,8 +139,9 @@ export class FieldClient {
   /**
    * Completes one pack journey and one owner card approve against a live field API.
    * Used by the Linux client so a reviewer can finish the required path today.
-   * Opens the buyer kind through the Open path, then records purpose.follow-up
-   * separately before communicate. Does not mint tokens or skip the card.
+   * Opens the first pack journey kind, then records the communicate REQUIRES
+   * purpose from home.purposeFacts (not a typed fact id). Does not mint tokens
+   * or skip the card. Opening does not record purpose.* facts.
    */
   async completeBuyerJourneyAndCard(): Promise<{
     journey: Journey;
@@ -151,14 +152,15 @@ export class FieldClient {
     const kind = home.journeyKinds[0];
     if (!kind) throw new Error("loaded pack has no journey kinds");
     await this.openApproved(kind.id);
-    await this.recordApprovedFact("purpose.follow-up");
+    const purpose = this.communicateRequiresPurpose(home);
+    await this.recordApprovedFact(purpose.id);
     const journey = await this.start(kind.id, `Work this ${kind.label} journey`);
     let cardId = "";
     try {
       await this.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
-        purpose: "follow-up",
+        purpose: purpose.id.slice("purpose.".length),
         subject: kind.id,
       });
       throw new Error("expected authorization card before execute");
@@ -173,6 +175,17 @@ export class FieldClient {
       throw new Error("card approve did not execute");
     }
     return { journey, cardId, effect: approved.effect };
+  }
+
+  /**
+   * Communicate REQUIRES purpose from the loaded pack list on field home.
+   * Matches purpose.* on home.purposeFacts (verbs REQUIRES are collected first).
+   * Does not type a raw purpose fact id.
+   */
+  communicateRequiresPurpose(home: FieldHome): { id: string; label: string } {
+    const purpose = home.purposeFacts.find((f) => f.id.startsWith("purpose."));
+    if (!purpose) throw new Error("loaded pack has no purpose facts");
+    return purpose;
   }
 
   private async request<T>(method: string, pathname: string, body?: unknown): Promise<T> {

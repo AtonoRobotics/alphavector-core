@@ -12,6 +12,8 @@ export interface FieldHome {
   killSwitch: { available: true };
   architectControls: never[];
   journeyKinds: Array<{ id: string; label: string }>;
+  /** Pack-local purpose.* facts from loaded bindings. Not a core constant. */
+  purposeFacts: Array<{ id: string; label: string }>;
 }
 
 export interface AskRequest {
