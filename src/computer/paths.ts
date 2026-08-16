@@ -36,6 +36,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     routinesFile: path.join(root, "routines.json"),
     // Habitat inter-agent mail. Same class as routines / adapter-bind: not field UI, not on disk/.
     mailFile: path.join(root, "mail.json"),
+    // Architect- or habitat-written deadlines. Same class as routines / mail: not field UI, not Temporal.
+    deadlinesFile: path.join(root, "deadlines.json"),
   };
 }
 

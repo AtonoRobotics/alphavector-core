@@ -49,6 +49,12 @@ export interface ComputerPaths {
    * In-process AgentMail is not this store.
    */
   mailFile: string;
+  /**
+   * Architect- or habitat-written deadlines. Same class as routines / mail:
+   * beside the disk, never inside the bind-mounted /home, never a field file.
+   * Not Temporal. The habitat clock fires due rows.
+   */
+  deadlinesFile: string;
 }
 
 export interface TenantComputer {

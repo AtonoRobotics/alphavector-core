@@ -29,6 +29,15 @@ import {
   upsertRoutine,
   type RoutineRecord,
 } from "./routine-store.js";
+import {
+  deadlinesFile,
+  findStoredDeadline,
+  isDeadlineDue,
+  readTenantDeadlines,
+  saveDeadlineStore,
+  upsertDeadline,
+  type DeadlineRecord,
+} from "./deadline-store.js";
 import { RunStore } from "./run-store.js";
 import { writeSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
@@ -200,6 +209,9 @@ export class HabitatKernel {
     if (event.kind === "mail") {
       return this.mailWake(event, decision);
     }
+    if (event.kind === "deadline") {
+      return this.deadlineWake(event, decision);
+    }
     if (event.kind !== "field_start") {
       const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
       this.wakeLog.append({
@@ -258,17 +270,50 @@ export class HabitatKernel {
   }
 
   /**
-   * Product ticker body. Habitat owns this clock. Calls fireDue per tenant.
-   * Typed fail (ONE_GOAL, ADAPTER_UNBOUND, ROUTINE_STORE_CORRUPT, ...) is
-   * swallowed so the interval keeps ticking. Does not invent routines.
+   * Product ticker body. Habitat owns this clock. Calls fireDue (routines)
+   * and fireDueDeadlines per tenant. Same clock — not a second Temporal-like bus.
+   * Typed fail (ONE_GOAL, ADAPTER_UNBOUND, NO_OPEN_RUN, *_STORE_CORRUPT, ...) is
+   * swallowed so the interval keeps ticking. Does not invent routines or deadlines.
    */
   private tickDue(): void {
     if (!this.opts.computerBaseDir) return;
+    const now = this.now();
     for (const tenantId of this.tickerTenantIds()) {
       try {
-        this.fireDue(tenantId, { now: this.now() });
+        this.fireDue(tenantId, { now });
       } catch {
         // keep ticking
+      }
+      try {
+        this.fireDueDeadlines(tenantId, { now });
+      } catch {
+        // keep ticking
+      }
+    }
+  }
+
+  /**
+   * Fire stored deadlines that are due. Reads tenants/{id}/deadlines.json only.
+   * Missing file is empty (no invent). Corrupt store fails closed.
+   * Each due deadline calls wake({ kind: "deadline" }). Kernel-owned; not Temporal.
+   * Called from tickDue / advanceClock — not a field-configured bus.
+   */
+  private fireDueDeadlines(tenantId: string, opts?: { now?: string }): void {
+    const store = readTenantDeadlines(this.opts.computerBaseDir, tenantId);
+    const now = opts?.now ?? this.now();
+    const due = store.deadlines.filter((row) => row.tenantId === tenantId && isDeadlineDue(row, now));
+    let next = store;
+    for (const deadline of due) {
+      this.wake({
+        kind: "deadline",
+        tenantId,
+        pack: this.packs.get(tenantId),
+        deadlineId: deadline.deadlineId,
+        runId: this.runs.get(tenantId)?.runId,
+      });
+      next = upsertDeadline(next, { ...deadline, lastFiredAt: now });
+      if (this.opts.computerBaseDir) {
+        saveDeadlineStore(deadlinesFile(this.opts.computerBaseDir, tenantId), next);
       }
     }
   }
@@ -510,6 +555,62 @@ export class HabitatKernel {
     const found = findStoredMail(store, event.tenantId, mailId);
     if (!found) {
       throw new AvError("MAIL_STORE_MISSING", "Mail is not stored on the tenant computer; refusing to invent");
+    }
+    return found;
+  }
+
+  /**
+   * Deadline: a wake on the open run. Does not mint a run or a goal.
+   * Talking stays thin — no pickAgent, no coder launch. No implicit start
+   * (unlike routine, which may start one goal). Attach only, like mail / field_ask.
+   */
+  private deadlineWake(event: WakeEvent, decision: ReturnType<typeof stem>): WakeResult {
+    const stored = this.requireStoredDeadline(event);
+    const run = this.runs.get(event.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Deadline requires an open run; no implicit start");
+    }
+    const creature = this.requireOrchestrator(event.tenantId);
+    const memory = this.injectMemory(event.tenantId, creature.agentId);
+    this.assertLabeled(memory);
+    const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const talking = this.adapter.think({
+      pass: "talking",
+      event,
+      run,
+      memory,
+      skills: [],
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    this.validateTalking(talking);
+    this.wakeLog.append({
+      kind: "deadline",
+      tenantId: event.tenantId,
+      runId: run.runId,
+      at: nowIso(),
+      decision,
+      detail: { deadlineId: stored.deadlineId, attached: true },
+    });
+    return {
+      run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory,
+    };
+  }
+
+  private requireStoredDeadline(event: WakeEvent): DeadlineRecord {
+    const deadlineId = event.deadlineId?.trim();
+    if (!deadlineId) {
+      throw new AvError("DEADLINE_STORE_MISSING", "Deadline wake requires a stored deadline; refusing to invent");
+    }
+    const store = readTenantDeadlines(this.opts.computerBaseDir, event.tenantId);
+    const found = findStoredDeadline(store, event.tenantId, deadlineId);
+    if (!found) {
+      throw new AvError("DEADLINE_STORE_MISSING", "Deadline is not stored on the tenant computer; refusing to invent");
     }
     return found;
   }

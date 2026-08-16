@@ -10,6 +10,7 @@ export * from "./adapter-bind.js";
 export * from "./adapter-credentials.js";
 export * from "./routine-store.js";
 export * from "./mail-store.js";
+export * from "./deadline-store.js";
 export * from "./vendor-think.js";
 export * from "./deep-agents.js";
 export * from "./stem.js";

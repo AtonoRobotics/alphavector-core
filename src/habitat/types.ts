@@ -2,7 +2,7 @@ import type { AgentRecord } from "../agents/types.js";
 import type { LoadedPack } from "../packs/types.js";
 import type { StemDecision } from "./stem.js";
 
-/** Wake kinds. Deadline / connector are types only. Routine and mail are live wakes. */
+/** Wake kinds. Connector is type only. Deadline, routine, and mail are live wakes. */
 export type WakeKind =
   | "field_start"
   | "field_ask"
@@ -55,6 +55,8 @@ export interface WakeEvent {
   mailId?: string;
   /** Sender agent id, or "architect". Field cannot forge this. */
   fromAgentId?: string;
+  /** Stored deadline id. Required for kind "deadline"; refusing to invent. */
+  deadlineId?: string;
 }
 
 export interface PendingEffect {
