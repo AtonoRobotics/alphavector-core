@@ -7,6 +7,7 @@ import type { EffectExecutor, EffectResult } from "../effects/executor.js";
 import { newId, nowIso } from "../ids.js";
 import type { LoadedPack } from "../packs/types.js";
 import { readTenantAdapterBind } from "./adapter-bind.js";
+import { readTenantAdapterCredentials } from "./adapter-credentials.js";
 import { DeepAgentsAdapter } from "./deep-agents.js";
 import { HabitatMemoryStore } from "./memory-store.js";
 import { RunStore } from "./run-store.js";
@@ -16,6 +17,7 @@ import {
   CODER_TYPE,
   HABITAT_OWNED,
   type AdapterBind,
+  type AdapterCredentials,
   type CognitiveAdapter,
   type CognitiveIntent,
   type LabeledMemory,
@@ -164,14 +166,15 @@ export class HabitatKernel {
     const creature = this.requireOrchestrator(event.tenantId);
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
-    const bind = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
     const talking = this.adapter.think({
       pass: "talking",
       event,
       run,
       memory,
       skills: [],
-      bind,
+      bind: resolved.bind,
+      credentials: resolved.credentials,
     });
     this.validateTalking(talking);
     this.wakeLog.append({
@@ -204,7 +207,7 @@ export class HabitatKernel {
     if (existing && !isTerminal(existing.status) && existing.goal !== event.goal) {
       throw new AvError("ONE_GOAL", "Orchestrator SHALL dispatch one goal at a time");
     }
-    const bind = this.requireThinkBind(event.tenantId, pack);
+    const resolved = this.requireThinkBind(event.tenantId, pack);
     if (existing && existing.status === "awaiting_card" && existing.goal === event.goal) {
       // Book live + pid missing/dead (typical after process restart; leftover trailer
       // is not live): launch() recreates the process for the same workerId.
@@ -271,7 +274,8 @@ export class HabitatKernel {
       run,
       memory,
       skills,
-      bind,
+      bind: resolved.bind,
+      credentials: resolved.credentials,
     });
     this.validateTalking(talking);
     this.runs.put({
@@ -301,7 +305,7 @@ export class HabitatKernel {
     until: "talking" | "card" | "done",
   ): WakeResult {
     const run = this.requireRun(event.tenantId);
-    const bind = this.requireThinkBind(event.tenantId, pack);
+    const resolved = this.requireThinkBind(event.tenantId, pack);
     const followUp = Boolean(run.workerId && this.workers.getById(event.tenantId, run.workerId));
     const worker =
       followUp && this.workers.isLive(event.tenantId)
@@ -335,7 +339,8 @@ export class HabitatKernel {
       run: this.requireRun(event.tenantId),
       memory,
       skills,
-      bind,
+      bind: resolved.bind,
+      credentials: resolved.credentials,
     });
     if (intent.act !== "propose_effect") {
       throw new AvError("WORKER_INTENT", "Worker pass must propose the one external effect");
@@ -544,10 +549,15 @@ export class HabitatKernel {
    * Architect bind is required for DeepAgentsAdapter think (HK-055).
    * Pack defaultModelId is not live. Missing bind is ADAPTER_UNBOUND.
    * Bind outside a declared allow-list is ADAPTER_NOT_ALLOWED.
+   * Product think also requires Architect-written provider credentials
+   * (ADAPTER_CREDENTIALS_MISSING). An explicit CI thinkFn double does not.
    * Dry-stem (explicit eval / test fixture) does not require a bind.
    */
-  private requireThinkBind(tenantId: string, pack: LoadedPack | undefined): AdapterBind | undefined {
-    if (!this.adapter.requiresBind) return undefined;
+  private requireThinkBind(
+    tenantId: string,
+    pack: LoadedPack | undefined,
+  ): { bind?: AdapterBind; credentials?: AdapterCredentials } {
+    if (!this.adapter.requiresBind) return {};
     const record = readTenantAdapterBind(this.opts.computerBaseDir, tenantId);
     if (!record) {
       throw new AvError(
@@ -562,7 +572,17 @@ export class HabitatKernel {
         `Bound model ${record.modelId} is not on the pack allow-list`,
       );
     }
-    return { modelId: record.modelId };
+    if (!this.adapter.requiresCredentials) {
+      return { bind: { modelId: record.modelId } };
+    }
+    const creds = readTenantAdapterCredentials(this.opts.computerBaseDir, tenantId);
+    if (!creds) {
+      throw new AvError(
+        "ADAPTER_CREDENTIALS_MISSING",
+        "Architect must write provider credentials before think; no CI mapper default",
+      );
+    }
+    return { bind: { modelId: record.modelId }, credentials: { apiKey: creds.apiKey } };
   }
 
   private validateTalking(intent: CognitiveIntent): void {

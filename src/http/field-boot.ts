@@ -14,8 +14,9 @@ export interface BootFieldCoreOptions {
   computerBaseDir?: string;
   /**
    * Cognitive adapter. Omit for the product default DeepAgentsAdapter
-   * (requires an Architect bind). DryStemAdapter is fixture-only — pass it
-   * explicitly in eval / envelope tests.
+   * (requires an Architect bind and Architect-written provider credentials).
+   * DryStemAdapter is fixture-only — pass it explicitly in eval / envelope tests.
+   * An explicit thinkFn on DeepAgentsAdapter is the CI double, not the product default.
    */
   adapter?: CognitiveAdapter;
 }
