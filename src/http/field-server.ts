@@ -337,7 +337,9 @@ export class FieldHttpServer {
       });
       return;
     }
-    const agent = core.agents.list(this.opts.tenantId).find((a) => a.agentId === pending.agentId);
+    const listed = core.agents.list(this.opts.tenantId).find((a) => a.agentId === pending.agentId);
+    const worker = core.habitat.activeWorkerAgent(this.opts.tenantId);
+    const agent = listed ?? (worker?.agentId === pending.agentId ? worker : undefined);
     const result = core.field.progress({
       actor,
       pack,
