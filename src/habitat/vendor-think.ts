@@ -22,6 +22,8 @@ export interface VendorThinkHandles {
   kind: AdapterInput["event"]["kind"];
   runId: string;
   recordId?: string;
+  /** Loaded skill bodies. Omitted when the store is empty. */
+  skills?: Array<{ name: string; description: string; body: string }>;
 }
 
 /** OpenAI-compatible chat-completions body. Secret is never in this object. */
@@ -37,6 +39,9 @@ const INTENT_SYSTEM =
   "Return only a JSON object with keys pass, act, and optional workerType, actionClass, channel, purpose, subject.";
 
 export function vendorThinkHandles(input: AdapterInput): VendorThinkHandles {
+  const skills = input.skills
+    .filter((skill) => skill.body.trim().length > 0)
+    .map((skill) => ({ name: skill.name, description: skill.description, body: skill.body }));
   return {
     pass: input.pass,
     kind: input.event.kind,
@@ -44,6 +49,7 @@ export function vendorThinkHandles(input: AdapterInput): VendorThinkHandles {
     ...(input.run.recordId ?? input.event.recordId
       ? { recordId: input.run.recordId ?? input.event.recordId }
       : {}),
+    ...(skills.length ? { skills } : {}),
   };
 }
 

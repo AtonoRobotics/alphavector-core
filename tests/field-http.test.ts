@@ -338,6 +338,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/mail",
       "/field/deadlines",
       "/field/connectors",
+      "/field/skills",
     ]) {
       const res = await fetch(`${url}${path}`, { headers });
       expect(res.status).toBe(403);
