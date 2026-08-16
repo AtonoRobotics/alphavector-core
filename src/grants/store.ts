@@ -3,6 +3,7 @@ import { newId, nowIso } from "../ids.js";
 import type { PrincipalKind } from "../packs/types.js";
 import {
   grantBoundsRefusal,
+  grantExpiryRefusal,
   type GraduationNotice,
   type Grant,
   type GrantBounds,
@@ -21,7 +22,7 @@ export class GrantBook {
   state(tenantId: string, agentId: string, actionClass: string, use?: GrantUse): GrantState {
     const grant = this.grants.get(this.key(tenantId, agentId, actionClass));
     if (!grant) return "requires_authorization";
-    if (grant.expiresAt && grant.expiresAt < nowIso()) return "requires_authorization";
+    if (grantExpiryRefusal(grant.expiresAt, nowIso())) return "requires_authorization";
     if (grant.state === "authorized" && use && grantBoundsRefusal(grant.bounds, use)) {
       return "requires_authorization";
     }
@@ -41,7 +42,7 @@ export class GrantBook {
       (grant) => grant.tenantId === tenantId && grant.actionClass === actionClass,
     );
     if (matches.length === 0) return "requires_authorization";
-    const live = matches.filter((grant) => !grant.expiresAt || grant.expiresAt >= now);
+    const live = matches.filter((grant) => !grantExpiryRefusal(grant.expiresAt, now));
     const authorized = live.filter((grant) => grant.state === "authorized");
     if (use) {
       if (authorized.some((grant) => !grantBoundsRefusal(grant.bounds, use))) return "authorized";
@@ -60,8 +61,24 @@ export class GrantBook {
         grant.tenantId === tenantId &&
         grant.actionClass === actionClass &&
         grant.state === "authorized" &&
-        (!grant.expiresAt || grant.expiresAt >= now) &&
+        !grantExpiryRefusal(grant.expiresAt, now) &&
         (!use || !grantBoundsRefusal(grant.bounds, use)),
+    );
+  }
+
+  /**
+   * Authorized grant for this class whose set expiry has passed.
+   * Missing expiry is open-ended and is not returned here.
+   * A live covering grant still authorizes — this is the expired record, not a silent yes.
+   */
+  expiredAuthorizedForClass(tenantId: string, actionClass: string): Grant | undefined {
+    const now = nowIso();
+    return [...this.grants.values()].find(
+      (grant) =>
+        grant.tenantId === tenantId &&
+        grant.actionClass === actionClass &&
+        grant.state === "authorized" &&
+        Boolean(grantExpiryRefusal(grant.expiresAt, now)),
     );
   }
 
@@ -85,6 +102,7 @@ export class GrantBook {
     evidenceIds: string[];
     evalIds: string[];
     fieldNotice?: string;
+    expiresAt?: string;
   }): Grant {
     if (input.actor === "field") {
       throw new SurfaceViolationError("Field user cannot create, widen, or graduate grants");
@@ -125,6 +143,7 @@ export class GrantBook {
       evalIds: input.evalIds,
       owner: input.owner,
       issuedAt: nowIso(),
+      expiresAt: input.expiresAt,
       fieldNoticeIssuedAt: input.state === "authorized" ? nowIso() : undefined,
     };
     this.grants.set(this.key(input.tenantId, input.agentId, input.actionClass), grant);
