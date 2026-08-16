@@ -17,6 +17,7 @@ import {
   ALPHAVECTOR_RE_PIN_SHA,
   createOpenStart,
   expectPresentIdsDeniedWithoutRecord,
+  makeAnchors,
   signedGenericPack,
 } from "./helpers.js";
 
@@ -79,8 +80,9 @@ describe("D10 §6 habitat kernel", () => {
     expect(existsSync(path.join(computerRoot(dir, "t1").disk, "runs.json"))).toBe(false);
     const wakes = core.habitat.listWakes("t1");
     expect(wakes.some((w) => w.kind === "field_start")).toBe(true);
-    expect(core.habitat.trailerExists("t1")).toBe(false);
+    expect(core.habitat.trailerExists("t1")).toBe(true);
     expect(run!.talkingDidHeavyWork).toBe(false);
+    expect(run!.status).toBe("awaiting_card");
   });
 
   it("fixture start wakes stem, talking does not do heavy work, worker is the coder", async () => {
@@ -316,6 +318,9 @@ describe("D10 §6 habitat kernel", () => {
     expect(fieldSrc).toMatch(/observeFieldStart/);
     expect(fieldSrc).toMatch(/\/field\/ask/);
     expect(fieldSrc).toMatch(/\/field\/kill/);
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    expect(kernelSrc).toMatch(/return this\.wake\(\{ \.\.\.event, kind: "field_start" \}\);/);
+    expect(kernelSrc).not.toMatch(/wake\(\{ \.\.\.event, kind: "field_start" \},\s*\{\s*until:\s*["']talking["']/);
   });
 
   it("follow-up sticks to the same worker; relaunch after kill is not follow-up", async () => {
@@ -500,19 +505,99 @@ describe("D10 §6 field verbs", () => {
 
   it("field kill tears the worker down", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-kill-"));
-    const { core, pack, field } = await liveField("t1", dir);
-    const rec = core.records.put("t1", {
-      type: pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record",
-      label: "Subject",
-    });
-    core.habitat.wake(
-      { kind: "field_start", tenantId: "t1", pack, goal: "one goal", recordId: rec.id },
-      { holdWorker: true },
-    );
+    const { core, field } = await liveField("t1", dir);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
     expect(core.habitat.trailerExists("t1")).toBe(true);
     await field.kill("stop");
     expect(core.habitat.trailerExists("t1")).toBe(false);
     expect(core.habitat.getRun("t1")?.status).toBe("killed");
+  });
+
+  it("POST field start creates runs.json, a run id, and labeled memory", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-start-"));
+    const { core, field } = await liveField("t1", dir);
+    const orchId = core.agents.list("t1").find((a) => a.isOrchestrator)!.agentId;
+    core.habitat.memory.writeProfile({ tenantId: "t1", agentId: orchId, note: "http-start-profile" });
+    const { journey } = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.runId).toMatch(/^run_/);
+    expect(run?.goal).toBe(journey.objective);
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(true);
+    const memory = core.habitat.memory.labeled("t1", orchId);
+    expect(memory.profile.label).toBe("profile");
+    expect(memory.logs.label).toBe("logs");
+    expect(memory.recall.label).toBe("recall");
+    expect(memory.profile.body?.notes).toContain("http-start-profile");
+    expect(JSON.stringify(memory)).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
+  });
+
+  it("POST field start launches the thin coder unless already awaiting a card for the same goal", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-coder-"));
+    const { core, field } = await liveField("t1", dir);
+    const first = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.talkingDidHeavyWork).toBe(false);
+    expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
+    expect(run?.status).toBe("awaiting_card");
+    expect(run?.pendingCardId).toMatch(/^card_/);
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    expect(core.habitat.waitForExecutor("t1")).toBe(true);
+    const worker = core.habitat.activeWorker("t1");
+    expect(worker?.type).toBe("coder");
+    expect(worker?.isolation).toBe("trailer");
+    expect(existsSync(path.join(worker!.trailerPath, ".branch"))).toBe(true);
+    expect(readFileSync(path.join(worker!.trailerPath, ".branch"), "utf8")).toContain("coder/");
+    const cards = await field.cards();
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.cardId).toBe(run!.pendingCardId);
+
+    const follow = await field.start("buyer", first.journey.objective, first.record.id);
+    expect(follow.id).toBeDefined();
+    const again = core.habitat.getRun("t1");
+    expect(again?.runId).toBe(run!.runId);
+    expect(again?.workerId).toBe(run!.workerId);
+    expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker!.workerId);
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    expect(again?.talkingDidHeavyWork).toBe(false);
+    expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
+  });
+
+  it("approve via field card resumes the same run id from HTTP start", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-approve-"));
+    const { core, field } = await liveField("t1", dir);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    const runId = core.habitat.getRun("t1")!.runId;
+    const cardId = core.habitat.getRun("t1")!.pendingCardId!;
+    const approved = await field.approve(cardId);
+    expect(approved.card.status).toBe("approved");
+    expect(approved.effect?.executed).toBe(true);
+    expect(approved.runId).toBe(runId);
+    expect(core.habitat.getRun("t1")?.runId).toBe(runId);
+    expect(core.habitat.getRun("t1")?.status).toBe("completed");
+  });
+
+  it("kill via field after HTTP start tears the trailer down", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-kill-"));
+    const { core, field } = await liveField("t1", dir);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    await field.kill("stop");
+    expect(core.habitat.trailerExists("t1")).toBe(false);
+    expect(core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(core.habitat.getRun("t1")?.status).toBe("killed");
+  });
+
+  it("restart on the same computerBaseDir still sees the HTTP-started run", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-restart-"));
+    const first = await liveField("t1", dir);
+    await createOpenStart(first.field, "buyer", "Work this buyer journey");
+    const runId = first.core.habitat.getRun("t1")!.runId;
+    const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
+
+    const second = new AlphaVectorCore(makeAnchors().anchors, path.join(dir, "state"), dir);
+    expect(second.habitat.getRun("t1")?.runId).toBe(runId);
+    expect(second.habitat.getRun("t1")?.pendingCardId).toBe(cardId);
+    expect(second.habitat.getRun("t1")?.status).toBe("awaiting_card");
   });
 
   it("field ask stays available and does not pick an agent", async () => {

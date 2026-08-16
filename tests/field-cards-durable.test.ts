@@ -58,22 +58,13 @@ async function liveDurable(
 }
 
 async function issueFollowUpCard(field: FieldClient): Promise<{ journeyId: string; cardId: string }> {
-  const { journey, record } = await createOpenStart(field, "buyer", "Work this buyer journey");
-  await field.recordApprovedFact("purpose.follow-up", record.id);
-  try {
-    await field.progress(journey.id, {
-      actionClass: "communicate",
-      channel: "email",
-      purpose: "follow-up",
-      subject: record.id,
-    });
-    throw new Error("expected authorization card before execute");
-  } catch (err) {
-    if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
-      throw err;
-    }
-    return { journeyId: journey.id, cardId: err.cardId };
+  const { journey } = await createOpenStart(field, "buyer", "Work this buyer journey");
+  const inbox = await field.cards();
+  const cardId = inbox[0]?.cardId;
+  if (!cardId) {
+    throw new Error("field start must require a card for the one external effect");
   }
+  return { journeyId: journey.id, cardId };
 }
 
 describe("durable pending cards on tenant computer disk", () => {

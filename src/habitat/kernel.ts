@@ -88,14 +88,18 @@ export class HabitatKernel {
   }
 
   /**
-   * Field journey start: wake the habitat through talking only.
-   * Does not launch a worker (existing envelope progress tests stay additive).
-   * A second journey start does not throw ONE_GOAL.
+   * Field journey start: the product wake, same as
+   * `HabitatKernel.wake({ kind: "field_start" })`.
+   * Creates or resumes the run, injects labeled memory, and launches the thin
+   * coder (executor + branch, trailer isolation). Talking stays thin.
+   * A second start with the same goal is follow-up (same worker / same run).
+   * A second start with a different goal does not throw ONE_GOAL so existing
+   * envelope journeys stay additive.
    */
   observeFieldStart(event: Omit<WakeEvent, "kind"> & { pack: LoadedPack; goal: string }): WakeResult {
     this.packs.set(event.tenantId, event.pack);
     const existing = this.runs.get(event.tenantId);
-    if (existing && !isTerminal(existing.status)) {
+    if (existing && !isTerminal(existing.status) && existing.goal !== event.goal) {
       this.bus.emit({ ...event, kind: "field_start" });
       this.wakeLog.append({
         kind: "field_start",
@@ -114,7 +118,7 @@ export class HabitatKernel {
         memory,
       };
     }
-    return this.wake({ ...event, kind: "field_start" }, { until: "talking" });
+    return this.wake({ ...event, kind: "field_start" });
   }
 
   wake(event: WakeEvent, opts?: { until?: "talking" | "card" | "done"; holdWorker?: boolean }): WakeResult {
