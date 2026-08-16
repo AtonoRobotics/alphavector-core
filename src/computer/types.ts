@@ -28,6 +28,12 @@ export interface ComputerPaths {
    * reads them. Beside the disk, never inside the bind-mounted /home.
    */
   skillsDir: string;
+  /**
+   * Habitat-written skill/strategy proposals (HK-071). Not live skills.
+   * Not policy. Beside the disk, never inside the bind-mounted /home.
+   * loadSkillFiles does not read this directory.
+   */
+  proposalsDir: string;
   /** Worker trailer isolation. Torn down on worker_done / kill. */
   trailersDir: string;
   /**

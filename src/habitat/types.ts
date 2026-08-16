@@ -151,6 +151,23 @@ export interface SkillFile {
   path: string;
 }
 
+/** Habitat-written proposal kinds. A strategy note is not a skill draft. */
+export type ProposalKind = "skill_draft" | "strategy";
+
+/**
+ * Habitat-written proposal on tenant disk (HK-071).
+ * Not a skill. Not loaded on the next wake. Not policy.
+ */
+export interface ProposalFile {
+  name: string;
+  kind: ProposalKind;
+  description: string;
+  body: string;
+  path: string;
+  isSkill: false;
+  isPolicy: false;
+}
+
 export type AdapterPass = "talking" | "worker";
 
 /** Live bind resolved by the kernel from Architect-written adapter-bind.json. */

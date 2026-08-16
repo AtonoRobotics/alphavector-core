@@ -12,7 +12,8 @@ import type { SkillFile } from "./types.js";
  *
  * Same class as other tenant files beside disk/: never inside the
  * bind-mounted /home. Field SHALL NOT add, author, or upload.
- * Eval-gated promotion is HK-071 — not this store.
+ * Habitat self-improve writes a proposal (HK-071), not this store.
+ * Eval-gated promotion copies a complete proposal here after Architect + eval.
  */
 
 export function skillFilePath(computerBaseDir: string, tenantId: string, name: string): string {
