@@ -26,6 +26,7 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     workersFile: path.join(root, "workers.json"),
     wakeLogFile: path.join(root, "wake-log.json"),
     memoryDir: path.join(root, "memory"),
+    // Architect-written skill files. Same class as memory / cards: not on agent disk/.
     skillsDir: path.join(root, "skills"),
     trailersDir: path.join(root, "trailers"),
     // Architect adapter bind. Same reason as field-tokens: not field UI, not on agent disk/.

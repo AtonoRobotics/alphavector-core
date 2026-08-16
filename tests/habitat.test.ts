@@ -17,10 +17,12 @@ import { architectBindConnector, architectWriteConnectorCredentials } from "../s
 import { architectWriteDeadline } from "../src/auth/architect-deadlines.js";
 import { architectDeliverMail } from "../src/auth/architect-mail.js";
 import { architectMaterializePackRoutines, architectWriteRoutine } from "../src/auth/architect-routines.js";
+import { architectWriteSkill } from "../src/auth/architect-skills.js";
 import {
   adapterThink,
   createDeepAgent,
   DeepAgentsAdapter,
+  dryThink,
   DryStemAdapter,
   HABITAT_OWNED,
   HABITAT_ROUTINE_TICK_MS,
@@ -29,6 +31,8 @@ import {
   readTenantDeadlines,
   readTenantMail,
   reapHeldCoders,
+  loadSkillFiles,
+  readSkillFile,
   resetDeepAgentsInvocations,
   WorkerBook,
 } from "../src/habitat/index.js";
@@ -36,7 +40,7 @@ import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
-import type { CognitiveAdapter, CognitiveIntent } from "../src/habitat/types.js";
+import type { AdapterInput, CognitiveAdapter, CognitiveIntent, SkillFile } from "../src/habitat/types.js";
 import { VENDOR_BASE_URL_ENV, VENDOR_THINK_PATH } from "../src/habitat/vendor-think.js";
 import { AlphaVectorCore } from "../src/kernel.js";
 import type { PackBinding } from "../src/packs/types.js";
@@ -988,19 +992,57 @@ describe("D10 §6 habitat kernel", () => {
     expect(relaunch.launchedWorker).toBe(true);
   });
 
-  it("skill files are real files the worker can read", async () => {
-    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+  it("skill files are Architect-written SKILL.md the worker loads, not pack labels", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-skill-load-"));
+    const seen: AdapterInput[] = [];
+    const { anchors, binding } = await signedGenericPack();
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: {
+        name: "skill-capture",
+        owns: ["think"],
+        think(input) {
+          seen.push(input);
+          return dryThink(input);
+        },
+      },
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    const architect = core.fieldTokens.issue({ tenantId: "t1", principal: "architect" });
+    const marker = "HK-070-loadable-body-dispatch-once";
+    architectWriteSkill({
+      tenantId: "t1",
+      name: "dispatch",
+      description: "How the worker dispatches one goal",
+      body: `# Dispatch\n\n${marker}\n`,
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    expect(existsSync(path.join(computerRoot(computerBaseDir, "t1").skillsDir, "dispatch.md"))).toBe(false);
+    expect(existsSync(path.join(computerRoot(computerBaseDir, "t1").skillsDir, "dispatch", "SKILL.md"))).toBe(
+      true,
+    );
+
     await core.habitat.wake({
       kind: "field_start",
-      tenantId,
-      pack,
+      tenantId: "t1",
+      pack: loaded.loaded,
       goal: "one goal",
       recordId: record.id,
     });
-    const skillsDir = computerRoot(computerBaseDir, tenantId).skillsDir;
-    expect(existsSync(path.join(skillsDir, "dispatch.md"))).toBe(true);
-    const worker = core.habitat.activeWorker(tenantId);
-    expect(existsSync(path.join(worker!.trailerPath, "skills", "dispatch.md"))).toBe(true);
+    const talking = seen.find((s) => s.pass === "talking");
+    const working = seen.find((s) => s.pass === "worker");
+    expect(talking?.skills[0]?.body).toContain(marker);
+    expect(working?.skills[0]?.body).toContain(marker);
+    expect(talking?.skills[0]?.name).toBe("dispatch");
+    expect(working?.skills[0]?.path).toMatch(/SKILL\.md$/);
+    const worker = core.habitat.activeWorker("t1");
+    const trailerSkill = path.join(worker!.trailerPath, "skills", "dispatch", "SKILL.md");
+    expect(readFileSync(trailerSkill, "utf8")).toContain(marker);
+    expect(readFileSync(trailerSkill, "utf8")).toMatch(/^---\nname: dispatch\n/);
+    expect(core.agents.list("t1")[0]?.skills).toEqual(["dispatch", "freeze"]);
   });
 });
 
@@ -4869,6 +4911,263 @@ describe("HK-073 approved external effect calls the world", () => {
       { computerBaseDir: dir },
     );
     expect(fieldCli.status).not.toBe(0);
+  });
+});
+
+describe("HK-070 skills are loadable files", () => {
+  it("keeps the RE fixture pin at 5091328 and does not hardcode a public vendor host", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const skillSrc = readFileSync(path.join(process.cwd(), "src/habitat/skills.ts"), "utf8");
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
+    const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
+    expect(skillSrc).toMatch(/SKILL\.md/);
+    expect(skillSrc).toMatch(/loadSkillFiles/);
+    expect(skillSrc).not.toMatch(/writeSkillFiles/);
+    expect(skillSrc).not.toMatch(/Pack skill file\. Readable by the worker/);
+    expect(kernelSrc).toMatch(/injectSkills/);
+    expect(kernelSrc).toMatch(/loadSkillFiles/);
+    expect(kernelSrc).not.toMatch(/writeSkillFiles/);
+    expect(cliSrc).toMatch(/architectWriteSkill/);
+    expect(cliSrc).toMatch(/write-skill writes tenants\/\{id\}\/skills\/\{name\}\/SKILL\.md/);
+    expect(cliSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+    expect(vendorSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+    expect(skillSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
+    expect(skillSrc).not.toMatch(/Mission-Control|\bDesk\b|\bShape\b|\bPlay\b|\bPlant\b|\bHIL\b|\bThor\b/);
+    expect(skillSrc).not.toMatch(/evalRunner|promotion exam|T0|T1|T2|T3/);
+  });
+
+  it("Architect-written SKILL.md is loaded into think; pack role strings are not the skill", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-skill-think-"));
+    const seen: AdapterInput[] = [];
+    const { anchors, binding } = await signedGenericPack();
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: {
+        name: "skill-think",
+        owns: ["think"],
+        think(input) {
+          seen.push(input);
+          return dryThink(input);
+        },
+      },
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    const architect = core.fieldTokens.issue({ tenantId: "t1", principal: "architect" });
+    const marker = "UNIQUE-SKILL-BODY-LOADED-INTO-THINK";
+    architectWriteSkill({
+      tenantId: "t1",
+      name: "dispatch",
+      description: "Dispatch one goal",
+      body: marker,
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+
+    await core.habitat.wake({
+      kind: "field_start",
+      tenantId: "t1",
+      pack: loaded.loaded,
+      goal: "one goal",
+      recordId: record.id,
+    });
+
+    const talking = seen.find((s) => s.pass === "talking");
+    const working = seen.find((s) => s.pass === "worker");
+    expect(talking?.skills).toHaveLength(1);
+    expect(working?.skills).toHaveLength(1);
+    expect(talking?.skills[0]?.body).toBe(marker);
+    expect(working?.skills[0]?.body).toBe(marker);
+    expect(talking?.skills[0]?.description).toBe("Dispatch one goal");
+    const onDisk = loadSkillFiles(computerBaseDir, "t1");
+    expect(onDisk[0]?.body).toBe(marker);
+    expect(onDisk[0]?.path).toBe(path.join(computerRoot(computerBaseDir, "t1").skillsDir, "dispatch", "SKILL.md"));
+    expect(core.agents.list("t1").find((a) => a.isOrchestrator)?.skills).toEqual(["dispatch", "freeze"]);
+    expect(readFileSync(onDisk[0]!.path, "utf8")).toContain(marker);
+    const trailer = path.join(core.habitat.activeWorker("t1")!.trailerPath, "skills", "dispatch", "SKILL.md");
+    expect(readFileSync(trailer, "utf8")).toContain(marker);
+  });
+
+  it("vendor think receives loaded skill bodies, not only a path", async () => {
+    const double = await useVendorHttp();
+    const stack = await habitatThinkStack();
+    bindAndCredential({
+      tenantId: stack.tenantId,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    const marker = "VENDOR-THINK-MUST-SEE-THIS-SKILL-BODY";
+    architectWriteSkill({
+      tenantId: stack.tenantId,
+      name: "dispatch",
+      description: "Dispatch",
+      body: marker,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    await stack.core.habitat.wake({
+      kind: "field_start",
+      tenantId: stack.tenantId,
+      pack: stack.pack,
+      goal: "one goal",
+      recordId: stack.record.id,
+    });
+    expect(double.requests.length).toBeGreaterThan(0);
+    const handles = double.requests.map((r) => thinkHandlesFromChatBody(r.body));
+    expect(JSON.stringify(double.requests.map((r) => r.body))).toContain(marker);
+    expect(handles.some((h) => JSON.stringify(h).includes(marker))).toBe(true);
+    expect(handles.some((h) => JSON.stringify(h).includes("dispatch"))).toBe(true);
+  });
+
+  it("missing or corrupt skill files fail closed (typed)", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    architectWriteSkill({
+      tenantId,
+      name: "dispatch",
+      description: "Dispatch",
+      body: "live body",
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    const file = path.join(computerRoot(computerBaseDir, tenantId).skillsDir, "dispatch", "SKILL.md");
+    expect(readSkillFile(computerBaseDir, tenantId, "dispatch").body).toBe("live body");
+
+    writeFileSync(file, "not a skill file\n", "utf8");
+    expect(() => loadSkillFiles(computerBaseDir, tenantId)).toThrow(AvError);
+    expect(() => loadSkillFiles(computerBaseDir, tenantId)).toThrow(/corrupt/);
+    await expect(
+      core.habitat.wake({
+        kind: "field_start",
+        tenantId,
+        pack,
+        goal: "one goal",
+        recordId: record.id,
+      }),
+    ).rejects.toMatchObject({ code: "SKILL_STORE_CORRUPT", closed: true });
+
+    rmSync(file);
+    expect(() => readSkillFile(computerBaseDir, tenantId, "dispatch")).toThrow(AvError);
+    expect(() => loadSkillFiles(computerBaseDir, tenantId)).toThrow(AvError);
+    await expect(
+      core.habitat.wake({
+        kind: "field_start",
+        tenantId,
+        pack,
+        goal: "corrupt-missing",
+        recordId: record.id,
+      }),
+    ).rejects.toMatchObject({ code: "SKILL_MISSING", closed: true });
+
+    expect(() => readSkillFile(computerBaseDir, tenantId, "never-written")).toThrow(
+      expect.objectContaining({ code: "SKILL_MISSING", closed: true }),
+    );
+  });
+
+  it("field cannot add or author skills; home has no authoring; POST /field/skills is 403", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-skill-field-"));
+    const { field, fieldToken, url, core } = await liveField("t1", dir);
+    expect(() =>
+      architectWriteSkill({
+        tenantId: "t1",
+        name: "dispatch",
+        description: "Field must not write this",
+        body: "field-authored",
+        computerBaseDir: dir,
+        architectToken: fieldToken,
+      }),
+    ).toThrow(/cannot bind|field token|skills/i);
+    expect(existsSync(path.join(computerRoot(dir, "t1").skillsDir, "dispatch", "SKILL.md"))).toBe(false);
+
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/SKILL\.md|write-skill|skill promotion/i);
+    expect(home.architectControls).toEqual([]);
+
+    const blocked = await fetch(`${url}/field/skills`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ name: "dispatch", body: "field-authored" }),
+    });
+    expect(blocked.status).toBe(403);
+    const body = (await blocked.json()) as { error: string };
+    expect(body.error).toBe("SURFACE_VIOLATION");
+    expect(existsSync(path.join(computerRoot(dir, "t1").skillsDir, "dispatch", "SKILL.md"))).toBe(false);
+
+    const html = await (await fetch(url)).text();
+    expect(html).not.toMatch(/id="skill"|id="skills"|write-skill|author skill/i);
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    expect(fieldSrc).not.toMatch(/pickAgent/);
+    expect(fieldSrc).toMatch(/skills\?/);
+    expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/skills/);
+    const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/HomeView.swift"), "utf8");
+    expect(ios).not.toMatch(/skill/i);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+
+    const cli = runArchitectCli(
+      [
+        "architect",
+        "write-skill",
+        "--tenant",
+        "t1",
+        "--name",
+        "dispatch",
+        "--description",
+        "Dispatch",
+        "--body",
+        "cli-written-body",
+        "--architect-token",
+        fieldToken,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(cli.status).not.toBe(0);
+    expect(existsSync(path.join(computerRoot(dir, "t1").skillsDir, "dispatch", "SKILL.md"))).toBe(false);
+  });
+
+  it("Architect CLI write-skill lands a loadable file; empty store does not invent pack labels", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-skill-cli-"));
+    const { core, pack, architectToken } = await liveField("t1", dir);
+    expect(loadSkillFiles(dir, "t1")).toEqual([]);
+    const rec = core.records.put("t1", { type: "case", label: "Subject" });
+    const seen: SkillFile[] = [];
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId: "t1",
+      pack,
+      goal: "one goal",
+      recordId: rec.id,
+    });
+    expect(started.launchedWorker).toBe(true);
+    expect(loadSkillFiles(dir, "t1")).toEqual([]);
+    expect(existsSync(path.join(computerRoot(dir, "t1").skillsDir, "dispatch.md"))).toBe(false);
+
+    const written = runArchitectCli(
+      [
+        "architect",
+        "write-skill",
+        "--tenant",
+        "t1",
+        "--name",
+        "dispatch",
+        "--description",
+        "Dispatch one goal",
+        "--body",
+        "CLI-SKILL-BODY",
+      ],
+      { computerBaseDir: dir, architectToken },
+    );
+    expect(written.status).toBe(0);
+    const loaded = loadSkillFiles(dir, "t1");
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.body).toBe("CLI-SKILL-BODY");
+    expect(loaded[0]?.name).toBe("dispatch");
+    seen.push(...loaded);
+    expect(seen[0]?.path).toMatch(/skills\/dispatch\/SKILL\.md$/);
   });
 });
 

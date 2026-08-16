@@ -23,7 +23,10 @@ export interface ComputerPaths {
   wakeLogFile: string;
   /** CS-012 disk memory (profile, dated logs, scoped recall). Not the in-process MemoryTiers array. */
   memoryDir: string;
-  /** Pack skill files the worker or role-agent can read. */
+  /**
+   * Architect-written skill files (agentskills SKILL.md). Worker or role-agent
+   * reads them. Beside the disk, never inside the bind-mounted /home.
+   */
   skillsDir: string;
   /** Worker trailer isolation. Torn down on worker_done / kill. */
   trailersDir: string;

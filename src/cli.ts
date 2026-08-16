@@ -8,6 +8,7 @@ import { architectWriteDeadline } from "./auth/architect-deadlines.js";
 import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
 import { architectDeliverMail } from "./auth/architect-mail.js";
 import { architectWriteRoutine } from "./auth/architect-routines.js";
+import { architectWriteSkill } from "./auth/architect-skills.js";
 import { FieldClient } from "./http/field-client.js";
 import { startFieldServe } from "./http/field-listen.js";
 import { PRODUCT } from "./identity.js";
@@ -81,7 +82,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail",
+        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -106,6 +107,9 @@ async function main(): Promise<void> {
       );
       console.log(
         "deliver-mail writes tenants/{id}/mail.json then habitat wake kind mail. Mail SHALL NOT confer authority. Field cannot deliver.",
+      );
+      console.log(
+        "write-skill writes tenants/{id}/skills/{name}/SKILL.md (agentskills frontmatter + body). Field cannot add skills. Eval-gated promotion is HK-071.",
       );
       return;
     }
@@ -243,6 +247,30 @@ async function main(): Promise<void> {
       );
       return;
     }
+    if (sub === "write-skill") {
+      const name = flag(flags, "--name");
+      const description = flag(flags, "--description");
+      const body = flag(flags, "--body");
+      if (!name || !description || body === undefined) {
+        throw new Error("architect write-skill requires --name, --description, and --body");
+      }
+      const written = architectWriteSkill({
+        tenantId,
+        name,
+        description,
+        body,
+        computerBaseDir: dir,
+        architectToken,
+      });
+      console.log(
+        JSON.stringify(
+          { ok: true, tenantId, name: written.name, path: written.path, writtenBy: "architect" },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     if (sub === "deliver-mail") {
       const addresseeId = flag(flags, "--addressee-id");
       const body = flag(flags, "--body");
@@ -283,7 +311,7 @@ async function main(): Promise<void> {
       return;
     }
     throw new Error(
-      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail",
+      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill",
     );
   }
   if (cmd === "field-serve") {

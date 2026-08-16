@@ -49,7 +49,7 @@ import {
 } from "./connector-credentials.js";
 import { invokeConnectorWorld } from "./connector-world.js";
 import { RunStore } from "./run-store.js";
-import { writeSkillFiles } from "./skills.js";
+import { loadSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
 import {
   CODER_TYPE,
@@ -398,12 +398,13 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, event.pack ?? this.packs.get(event.tenantId));
+    const skills = this.injectSkills(event.tenantId);
     const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
       memory,
-      skills: [],
+      skills,
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
@@ -512,12 +513,13 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, addresseeId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const skills = this.injectSkills(event.tenantId);
     const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
       memory,
-      skills: [],
+      skills,
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
@@ -591,12 +593,13 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const skills = this.injectSkills(event.tenantId);
     const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
       memory,
-      skills: [],
+      skills,
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
@@ -672,12 +675,13 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const skills = this.injectSkills(event.tenantId);
     const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
       memory,
-      skills: [],
+      skills,
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
@@ -757,12 +761,13 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const skills = this.injectSkills(event.tenantId);
     const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
       memory,
-      skills: [],
+      skills,
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
@@ -806,7 +811,7 @@ export class HabitatKernel {
         this.workers.launch({
           tenantId: event.tenantId,
           runId: existing.runId,
-          skills: writeSkillFiles(this.opts.computerBaseDir, pack),
+          skills: this.injectSkills(event.tenantId),
           hold: holdWorker,
         });
       }
@@ -833,7 +838,7 @@ export class HabitatKernel {
       };
     }
     const orch = this.requireOrchestrator(event.tenantId);
-    const skills = writeSkillFiles(this.opts.computerBaseDir, pack);
+    const skills = this.injectSkills(event.tenantId);
     const run =
       existing && existing.goal === event.goal
         ? existing
@@ -1216,6 +1221,14 @@ export class HabitatKernel {
     if (intent.act === "propose_effect") {
       throw new AvError("TALKING_PASS", "Talking pass must not do heavy work");
     }
+  }
+
+  /**
+   * Load Architect-written skill files for think. Empty store is no skills.
+   * Missing or corrupt files fail closed. Does not invent stubs from pack labels.
+   */
+  private injectSkills(tenantId: string): SkillFile[] {
+    return loadSkillFiles(this.opts.computerBaseDir, tenantId);
   }
 
   private injectMemory(tenantId: string, agentId: string): LabeledMemory {

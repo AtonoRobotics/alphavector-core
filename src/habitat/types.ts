@@ -130,8 +130,11 @@ export interface LabeledMemory {
   recall: { label: "recall"; scope: string; items: RecallItem[] };
 }
 
+/** Loaded agentskills file. Path alone is not a skill — body was read. */
 export interface SkillFile {
   name: string;
+  description: string;
+  body: string;
   path: string;
 }
 
