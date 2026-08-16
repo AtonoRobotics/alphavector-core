@@ -1161,8 +1161,10 @@ export class HabitatKernel {
         `Bound model ${record.modelId} is not on the pack allow-list`,
       );
     }
+    const bind: AdapterBind = { modelId: record.modelId };
+    if (record.vendorBaseUrl) bind.vendorBaseUrl = record.vendorBaseUrl;
     if (!this.adapter.requiresCredentials) {
-      return { bind: { modelId: record.modelId } };
+      return { bind };
     }
     const creds = readTenantAdapterCredentials(this.opts.computerBaseDir, tenantId);
     if (!creds) {
@@ -1171,7 +1173,7 @@ export class HabitatKernel {
         "Architect must write provider credentials before think; no CI mapper default",
       );
     }
-    return { bind: { modelId: record.modelId }, credentials: { apiKey: creds.apiKey } };
+    return { bind, credentials: { apiKey: creds.apiKey } };
   }
 
   private validateTalking(intent: CognitiveIntent): void {

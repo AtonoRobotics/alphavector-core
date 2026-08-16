@@ -11,6 +11,8 @@ import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 export interface AdapterBindRecord {
   tenantId: string;
   modelId: string;
+  /** Hosted-model base URL. Same class as modelId. Not a credential. Not field-writable. */
+  vendorBaseUrl?: string;
   boundBy: "architect";
   boundAt: string;
 }
@@ -72,9 +74,18 @@ function parseBind(raw: unknown): AdapterBindRecord {
   ) {
     throw new AvError("ADAPTER_BIND_CORRUPT", "Adapter bind is corrupt; refusing to invent a model");
   }
+  let vendorBaseUrl: string | undefined;
+  if ("vendorBaseUrl" in raw) {
+    if (typeof raw.vendorBaseUrl !== "string") {
+      throw new AvError("ADAPTER_BIND_CORRUPT", "Adapter bind is corrupt; refusing to invent a model");
+    }
+    const trimmed = raw.vendorBaseUrl.trim();
+    if (trimmed) vendorBaseUrl = trimmed;
+  }
   return {
     tenantId: raw.tenantId,
     modelId: raw.modelId.trim(),
+    ...(vendorBaseUrl ? { vendorBaseUrl } : {}),
     boundBy: "architect",
     boundAt: raw.boundAt,
   };

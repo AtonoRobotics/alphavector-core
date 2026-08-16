@@ -7,9 +7,9 @@ import type { AdapterCredentials, AdapterInput, CognitiveIntent } from "./types.
  * or the returned intent and are not model context.
  *
  * Product path is live HTTP to the hosted model using the OpenAI-compatible
- * chat-completions request/response. Tests inject a base URL that points at
- * a local HTTP double. There is no canned in-process return. The host is
- * never hardcoded; ops/tests inject AV_VENDOR_BASE_URL or vendorBaseUrl.
+ * chat-completions request/response. The host is never hardcoded. Product
+ * reads the Architect-written bind on tenant disk. AV_VENDOR_BASE_URL and
+ * injected vendorBaseUrl are CI/fixture fallbacks when the bind has no URL.
  */
 export interface VendorThinkClient {
   readonly name: string;
@@ -86,7 +86,7 @@ async function hostedVendorComplete(
       "Architect must write provider credentials before think; no CI mapper default",
     );
   }
-  const url = thinkUrl(resolveVendorBaseUrl(baseUrl));
+  const url = thinkUrl(resolveVendorBaseUrl(baseUrl, input.bind?.vendorBaseUrl));
   const body = vendorThinkBody(input);
   let res: Response;
   try {
@@ -119,8 +119,8 @@ async function hostedVendorComplete(
   return parseVendorIntent(raw);
 }
 
-export function resolveVendorBaseUrl(explicit?: string): string {
-  const raw = (explicit ?? process.env[VENDOR_BASE_URL_ENV] ?? "").trim();
+export function resolveVendorBaseUrl(explicit?: string, bindUrl?: string): string {
+  const raw = (bindUrl ?? explicit ?? process.env[VENDOR_BASE_URL_ENV] ?? "").trim();
   if (!raw) {
     throw new AvError(
       "ADAPTER_VENDOR_URL_MISSING",

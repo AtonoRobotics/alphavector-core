@@ -14,8 +14,8 @@ export interface DeepAgentsAdapterOptions {
   /** Explicit hosted-model HTTP client. Tests inject a local base URL. */
   vendor?: VendorThinkClient;
   /**
-   * Hosted-model base URL. Tests inject a local HTTP double.
-   * Product reads AV_VENDOR_BASE_URL. Not a field setter. Not on bind.
+   * Hosted-model base URL. CI/fixture override only.
+   * Product reads the Architect bind. Not a field setter.
    */
   vendorBaseUrl?: string;
 }
