@@ -923,7 +923,7 @@ describe("required field path against pinned alphavector-re", () => {
 
     let openA = "";
     try {
-      field.record({ actor: "field", pack, id: "journey.buyer", recordId: recA.id });
+      field.record({ actor: "field", pack, id: "journey.buyer", recordId: recA });
       throw new Error("should have required a card");
     } catch (err) {
       expect(err).toBeInstanceOf(AuthorizationRequiredError);
