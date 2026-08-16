@@ -83,7 +83,9 @@ async function main(): Promise<void> {
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
       console.log("The last Architect credential cannot be revoked. Bootstrap stays once.");
-      console.log("bind-adapter writes tenants/{id}/adapter-bind.json. Field cannot bind, see, or edit.");
+      console.log(
+        "bind-adapter writes tenants/{id}/adapter-bind.json including optional --vendor-base-url. Field cannot bind, see, or edit.",
+      );
       console.log(
         "set-adapter-credentials writes tenants/{id}/adapter-credentials.json. Not on the bind. Field cannot set credentials.",
       );
@@ -116,9 +118,11 @@ async function main(): Promise<void> {
     if (sub === "bind-adapter") {
       const modelId = flag(flags, "--model");
       if (!modelId) throw new Error("architect bind-adapter requires --model");
+      const vendorBaseUrl = flag(flags, "--vendor-base-url");
       const bound = architectBindAdapter({
         tenantId,
         modelId,
+        vendorBaseUrl,
         computerBaseDir: dir,
         architectToken,
       });

@@ -15,6 +15,7 @@ import { requireArchitect } from "./require-architect.js";
 export function architectBindAdapter(input: {
   tenantId: string;
   modelId: string;
+  vendorBaseUrl?: string;
   computerBaseDir: string;
   architectToken?: string;
 }): AdapterBindRecord {
@@ -22,10 +23,12 @@ export function architectBindAdapter(input: {
   if (!modelId) {
     throw new AvError("ADAPTER_BIND_REQUIRED", "Architect bind requires a model id");
   }
+  const vendorBaseUrl = input.vendorBaseUrl?.trim();
   requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
   const record: AdapterBindRecord = {
     tenantId: input.tenantId,
     modelId,
+    ...(vendorBaseUrl ? { vendorBaseUrl } : {}),
     boundBy: "architect",
     boundAt: nowIso(),
   };

@@ -140,6 +140,8 @@ export type AdapterPass = "talking" | "worker";
 /** Live bind resolved by the kernel from Architect-written adapter-bind.json. */
 export interface AdapterBind {
   modelId: string;
+  /** Hosted-model base URL from the Architect bind. Not process env. Not a field setter. */
+  vendorBaseUrl?: string;
 }
 
 /**

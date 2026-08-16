@@ -315,6 +315,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/adapter-credentials",
       "/field/credentials",
       "/field/api-key",
+      "/field/vendor-base-url",
+      "/field/base-url",
       "/field/routines",
       "/field/mail",
       "/field/deadlines",

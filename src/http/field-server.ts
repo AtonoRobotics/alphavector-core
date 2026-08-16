@@ -23,7 +23,7 @@ const CORS = {
   "access-control-allow-methods": "GET, POST, OPTIONS",
 } as const;
 
-const CONFIG_PATH = /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?/i;
+const CONFIG_PATH = /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|vendor-base-url|base-?url/i;
 
 type PendingProgress = PendingProgressRecord;
 
