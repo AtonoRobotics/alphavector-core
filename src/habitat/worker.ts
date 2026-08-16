@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentRecord } from "../agents/types.js";
@@ -111,6 +111,7 @@ export class WorkerBook {
     const worker = this.get(tenantId);
     if (!worker) return;
     if (worker.pid) {
+      forgetHeldCoder(worker.pid);
       try {
         process.kill(worker.pid, "SIGTERM");
       } catch {
@@ -153,8 +154,9 @@ export class WorkerBook {
     const execFile = path.join(record.trailerPath, "coder-exec.mjs");
     writeFileSync(execFile, CODER_EXEC_SOURCE, "utf8");
     const env = { ...process.env, AV_CODER_HOLD: hold ? "1" : "0" };
-    // Not detached: an exited HTTP-start child must be reaped so kill(0) is ESRCH.
-    // HTTP start does not hold — spawnSync waits for the executor to write and exit.
+    // Product field start holds via spawn() (not spawnSync). Fixture/eval may
+    // omit hold and spawnSync so the executor writes and exits. Not detached
+    // and not unref: reap on kill / worker_done, not on start.
     let pid: number | undefined;
     if (hold) {
       const child = spawn(process.execPath, [execFile], {
@@ -162,7 +164,7 @@ export class WorkerBook {
         stdio: "ignore",
         env,
       });
-      child.on("exit", () => {});
+      rememberHeldCoder(child);
       pid = child.pid;
     } else {
       const child = spawnSync(process.execPath, [execFile], {
@@ -309,6 +311,39 @@ function parseAgent(raw: unknown, tenantId: string): AgentRecord {
     isOrchestrator: raw.isOrchestrator,
     createdAt: raw.createdAt,
   };
+}
+
+const heldCoders = new Set<ChildProcess>();
+
+function rememberHeldCoder(child: ChildProcess): void {
+  heldCoders.add(child);
+  child.on("exit", () => {
+    heldCoders.delete(child);
+  });
+}
+
+function forgetHeldCoder(pid: number): void {
+  for (const child of heldCoders) {
+    if (child.pid === pid) heldCoders.delete(child);
+  }
+}
+
+/** SIGTERM leftover held coder children. Tests use this so HTTP-start hold does not leak. */
+export function reapHeldCoders(): void {
+  for (const child of [...heldCoders]) {
+    if (child.pid && isPidAlive(child.pid)) {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        try {
+          process.kill(child.pid, "SIGTERM");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }
+  heldCoders.clear();
 }
 
 /** Live only if the pid is running and not a zombie. Directory presence is irrelevant. */

@@ -7,6 +7,7 @@ import { CardBook } from "../src/auth/cards.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { AvError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
+import { reapHeldCoders } from "../src/habitat/index.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
@@ -17,6 +18,7 @@ const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
+  reapHeldCoders();
   while (servers.length) {
     await servers.pop()?.close();
   }
