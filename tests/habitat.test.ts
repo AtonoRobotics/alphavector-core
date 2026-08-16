@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -3762,7 +3762,9 @@ describe("D10 connector wakes", () => {
     expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/connectors/);
     const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
     expect(cliSrc).toMatch(/architectBindConnector/);
+    expect(cliSrc).toMatch(/architectWriteConnectorCredentials/);
     expect(cliSrc).toMatch(/bind-connector writes tenants\/\{id\}\/connector-bind\.json/);
+    expect(cliSrc).toMatch(/set-connector-credentials writes tenants\/\{id\}\/connector-credentials\.json/);
     expect(cliSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
   });
 
@@ -3837,6 +3839,87 @@ describe("D10 connector wakes", () => {
     });
     expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
     expect(core.habitat.listWakes("t1").some((w) => w.kind === "connector")).toBe(false);
+  });
+
+  it("Architect CLI set-connector-credentials writes tenants/{id}/connector-credentials.json; bind + secret + open run attaches", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-connector-cli-secret-"));
+    const { core, field, architectToken } = await liveField("t1", dir);
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.runId).toMatch(/^run_/);
+    const worker = core.habitat.activeWorker("t1");
+    const goalsBefore = core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective);
+    const secret = "crm-cli-secret";
+
+    const bindOut = runArchitectCli(
+      [
+        "architect",
+        "bind-connector",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "crm",
+        "--requires-credentials",
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(bindOut.status).toBe(0);
+    expect(existsSync(computerRoot(dir, "t1").connectorCredentialsFile)).toBe(false);
+    await expect(core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "crm" })).rejects.toMatchObject({
+      code: "CONNECTOR_CREDENTIALS_MISSING",
+      closed: true,
+    });
+
+    const out = runArchitectCli(
+      [
+        "architect",
+        "set-connector-credentials",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "crm",
+        "--secret",
+        secret,
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(out.status).toBe(0);
+    expect(out.stdout).toMatch(/"connectorId": "crm"/);
+    expect(out.stdout).toMatch(/"writtenBy": "architect"/);
+    expect(out.stdout).not.toContain(secret);
+    expect(`${out.stdout}\n${out.stderr}`).not.toMatch(/crm-cli-secret/);
+
+    const paths = computerRoot(dir, "t1");
+    expect(paths.connectorCredentialsFile).toBe(path.join(dir, "tenants", "t1", "connector-credentials.json"));
+    expect(existsSync(paths.connectorCredentialsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "connector-credentials.json"))).toBe(false);
+    expect(statSync(paths.connectorCredentialsFile).mode & 0o777).toBe(0o600);
+    const creds = JSON.parse(readFileSync(paths.connectorCredentialsFile, "utf8")) as {
+      credentials: Array<{ connectorId: string; secret: string; writtenBy: string }>;
+    };
+    expect(creds.credentials).toHaveLength(1);
+    expect(creds.credentials[0]).toMatchObject({
+      connectorId: "crm",
+      secret,
+      writtenBy: "architect",
+    });
+    const bindRaw = readFileSync(paths.connectorBindFile, "utf8");
+    expect(bindRaw).not.toContain(secret);
+    expect(bindRaw).not.toMatch(/apiKey|secret|credential|password/);
+
+    const delivered = await core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "crm" });
+    expect(delivered.run?.runId).toBe(run!.runId);
+    expect(delivered.launchedWorker).toBe(false);
+    expect(delivered.talkingDidHeavyWork).toBe(false);
+    expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
+    expect(core.habitat.getRun("t1")?.goal).toBe(started.journey.objective);
+    expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker?.workerId);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "connector" && w.runId === run!.runId)).toBe(true);
+    expect(core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective)).toEqual(goalsBefore);
   });
 
   it("Architect-written bind + open run + connector event attaches with kind connector, same runId, labeled memory, no new goal or worker", async () => {
@@ -4053,15 +4136,52 @@ describe("D10 connector wakes", () => {
     );
     expect(fieldCli.status).not.toBe(0);
     expect(`${fieldCli.stdout}\n${fieldCli.stderr}`).toMatch(/cannot bind|field token|connector/i);
+    const fieldCredsCli = runArchitectCli(
+      [
+        "architect",
+        "set-connector-credentials",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "mls",
+        "--secret",
+        "field-must-not-write",
+        "--architect-token",
+        fieldToken,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(fieldCredsCli.status).not.toBe(0);
+    expect(`${fieldCredsCli.stdout}\n${fieldCredsCli.stderr}`).toMatch(/cannot bind|field token|connector/i);
+    expect(`${fieldCredsCli.stdout}\n${fieldCredsCli.stderr}`).not.toContain("field-must-not-write");
     const shellCli = runArchitectCli(["architect", "bind-connector", "--tenant", "t1", "--connector-id", "mls"], {
       computerBaseDir: dir,
     });
     expect(shellCli.status).not.toBe(0);
     expect(`${shellCli.stdout}\n${shellCli.stderr}`).toMatch(/Shell is not Architect/);
+    const shellCredsCli = runArchitectCli(
+      [
+        "architect",
+        "set-connector-credentials",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "mls",
+        "--secret",
+        "shell-must-not-write",
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(shellCredsCli.status).not.toBe(0);
+    expect(`${shellCredsCli.stdout}\n${shellCredsCli.stderr}`).toMatch(/Shell is not Architect/);
+    expect(`${shellCredsCli.stdout}\n${shellCredsCli.stderr}`).not.toContain("shell-must-not-write");
     expect(existsSync(computerRoot(dir, "t1").connectorBindFile)).toBe(false);
+    expect(existsSync(computerRoot(dir, "t1").connectorCredentialsFile)).toBe(false);
 
     const home = await field.home();
-    expect(JSON.stringify(home)).not.toMatch(/connector-bind|connectorId|bind-connector|author connector/i);
+    expect(JSON.stringify(home)).not.toMatch(
+      /connector-bind|connector-credentials|connectorId|bind-connector|set-connector-credentials|author connector/i,
+    );
     expect(home.architectControls).toEqual([]);
 
     const blocked = await fetch(`${url}/field/connectors`, {
@@ -4075,6 +4195,28 @@ describe("D10 connector wakes", () => {
     expect(blocked.status).toBe(403);
     expect(((await blocked.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
 
+    const credsBlocked = await fetch(`${url}/field/connector-credentials`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ connectorId: "mls", secret: "field-must-not-write" }),
+    });
+    expect(credsBlocked.status).toBe(403);
+    expect(((await credsBlocked.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+
+    const modelsBlocked = await fetch(`${url}/field/models`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ modelId: "mls" }),
+    });
+    expect(modelsBlocked.status).toBe(403);
+    expect(((await modelsBlocked.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+
     const temporal = await fetch(`${url}/field/temporal`, {
       method: "POST",
       headers: {
@@ -4087,8 +4229,9 @@ describe("D10 connector wakes", () => {
     expect(((await temporal.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
 
     expect(existsSync(computerRoot(dir, "t1").connectorBindFile)).toBe(false);
+    expect(existsSync(computerRoot(dir, "t1").connectorCredentialsFile)).toBe(false);
     const html = await (await fetch(url)).text();
-    expect(html).not.toMatch(/id="connector"|id="connectors"|bind-connector|author connector/i);
+    expect(html).not.toMatch(/id="connector"|id="connectors"|bind-connector|set-connector-credentials|author connector/i);
     const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
     expect(fieldSrc).not.toMatch(/pickAgent/);
     expect(fieldSrc).toMatch(/\/field\/ask/);
