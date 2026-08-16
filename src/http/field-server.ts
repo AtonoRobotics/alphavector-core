@@ -23,7 +23,7 @@ const CORS = {
   "access-control-allow-methods": "GET, POST, OPTIONS",
 } as const;
 
-const CONFIG_PATH = /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?/i;
+const CONFIG_PATH = /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -439,7 +439,8 @@ export class FieldHttpServer {
                 err.code === "ADAPTER_CREDENTIALS_CORRUPT" ||
                 err.code === "ROUTINE_STORE_CORRUPT" ||
                 err.code === "MAIL_STORE_CORRUPT" ||
-                err.code === "DEADLINE_STORE_CORRUPT"
+                err.code === "DEADLINE_STORE_CORRUPT" ||
+                err.code === "CONNECTOR_STORE_CORRUPT"
               ? 500
               : 400;
       this.json(res, status, { error: err.code, message: err.message });

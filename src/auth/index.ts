@@ -10,3 +10,4 @@ export * from "./architect-adapter-credentials.js";
 export * from "./architect-routines.js";
 export * from "./architect-mail.js";
 export * from "./architect-deadlines.js";
+export * from "./architect-connectors.js";

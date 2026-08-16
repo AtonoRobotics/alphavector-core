@@ -38,6 +38,10 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     mailFile: path.join(root, "mail.json"),
     // Architect- or habitat-written deadlines. Same class as routines / mail: not field UI, not Temporal.
     deadlinesFile: path.join(root, "deadlines.json"),
+    // Architect connector bind. Same class as adapter-bind / mail: not field UI, not on disk/.
+    connectorBindFile: path.join(root, "connector-bind.json"),
+    // Connector credentials. Same class as adapter-credentials: not on bind, not on disk/, not a pack.
+    connectorCredentialsFile: path.join(root, "connector-credentials.json"),
   };
 }
 
