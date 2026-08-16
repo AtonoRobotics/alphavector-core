@@ -261,7 +261,11 @@ export class FieldSurface {
       }
       if (input.purpose) this.assertFieldSafe(input.purpose);
       if (input.subject) this.assertFieldSafe(input.subject);
-      effect = await this.executeApprovedProgress(this.effects, input, journey.journeyKind);
+      effect = await this.executeApprovedProgress(
+        this.effects,
+        { ...input, actionClass: input.actionClass, agent: input.agent },
+        journey.journeyKind,
+      );
     }
 
     this.journeys.progress(journey.id);
