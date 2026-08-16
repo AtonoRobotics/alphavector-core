@@ -291,6 +291,7 @@ afterEach(async () => {
   }
 });
 
+/** DryStem fixture stack. Envelope / eval only. Not the D10 §6 living proof. */
 async function habitatStack(tenantId = "t1") {
   const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-habitat-"));
   const { anchors, binding } = await signedGenericPack();
@@ -326,6 +327,52 @@ async function habitatStackWithWorld(tenantId = "t1") {
   return { ...stack, world, architectToken: architect.token };
 }
 
+/**
+ * D10 §6 living proof: Architect bind + DeepAgentsAdapter with an explicit
+ * thinkFn double. Not DryStem. Not a live vendor call. Habitat still owns
+ * wake, run, admission, worker, and coder.
+ */
+async function habitatProofStack(tenantId = "t1") {
+  const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-habitat-proof-"));
+  const { anchors, binding } = await signedGenericPack();
+  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+    adapter: new DeepAgentsAdapter(adapterThink),
+  });
+  const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
+  if (!loaded.ok) throw new Error(loaded.message);
+  const agents = core.agents.instantiateFromPack(loaded.loaded, "architect");
+  const record = core.records.put(tenantId, { type: "case", label: "Subject" });
+  const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+  bindAdapter({
+    tenantId,
+    computerBaseDir,
+    architectToken: architect.token,
+  });
+  return {
+    computerBaseDir,
+    anchors,
+    core,
+    pack: loaded.loaded,
+    tenantId,
+    agents,
+    record,
+    architectToken: architect.token,
+  };
+}
+
+async function habitatProofStackWithWorld(tenantId = "t1") {
+  const stack = await habitatProofStack(tenantId);
+  const world = await useWorldHttp();
+  bindWorldForPack({
+    tenantId,
+    computerBaseDir: stack.computerBaseDir,
+    architectToken: stack.architectToken,
+    pack: stack.pack,
+    baseUrl: world.url,
+  });
+  return { ...stack, world };
+}
+
 async function habitatThinkStack(
   tenantId = "t1",
   mutate?: (unsigned: Omit<PackBinding, "signatures">) => void,
@@ -358,6 +405,7 @@ async function habitatThinkStack(
   };
 }
 
+/** DryStem fixture field. Envelope / eval only. Not the D10 §6 living proof. */
 async function liveField(
   tenantId: string,
   computerBaseDir: string,
@@ -409,6 +457,24 @@ async function liveFieldWithWorld(
     baseUrl: world.url,
   });
   return { ...stack, world, architectToken };
+}
+
+/** D10 §6 living proof field: DeepAgentsAdapter thinkFn + Architect bind. */
+async function liveProofField(
+  tenantId: string,
+  computerBaseDir: string,
+  issued?: { field: string; architect?: string },
+) {
+  const stack = await liveField(tenantId, computerBaseDir, issued, new DeepAgentsAdapter(adapterThink));
+  const architectToken =
+    stack.architectToken ??
+    stack.core.fieldTokens.issue({ tenantId, principal: "architect" }).token;
+  bindAdapter({
+    tenantId,
+    computerBaseDir,
+    architectToken,
+  });
+  return { ...stack, architectToken };
 }
 
 function runArchitectCli(
@@ -513,8 +579,12 @@ describe("D10 §6 habitat kernel", () => {
 
   it("field start creates a durable run on disk and wakes the orchestrator", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-field-"));
-    const { core, field } = await liveField("t1", dir);
+    const { core, field } = await liveProofField("t1", dir);
+    expect(DeepAgentsAdapter.invocations).toBe(0);
     const { journey } = await createOpenStart(field, "buyer", "Work this buyer journey");
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("double");
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
     const run = core.habitat.getRun("t1");
     expect(run).toBeDefined();
     expect(run!.goal).toBe(journey.objective);
@@ -535,7 +605,7 @@ describe("D10 §6 habitat kernel", () => {
   });
 
   it("fixture start wakes stem, talking does not do heavy work, worker is the coder", async () => {
-    const { core, pack, tenantId, record } = await habitatStack();
+    const { core, pack, tenantId, record } = await habitatProofStack();
     const talking = await core.habitat.wake(
       {
         kind: "field_start",
@@ -546,6 +616,8 @@ describe("D10 §6 habitat kernel", () => {
       },
       { until: "talking" },
     );
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("double");
     expect(talking.wokeOrchestrator).toBe(true);
     expect(talking.launchedWorker).toBe(false);
     expect(talking.talkingDidHeavyWork).toBe(false);
@@ -574,15 +646,15 @@ describe("D10 §6 habitat kernel", () => {
     expect(working.talkingDidHeavyWork).toBe(false);
   });
 
-  it("Deep Agents is imported as adapter and does not own the loop", async () => {
+  it("Deep Agents thinks on the path and does not own the loop", async () => {
     expect(typeof createDeepAgent).toBe("function");
     expect(DeepAgentsAdapter.sdkEntry).toBe(createDeepAgent);
     expect(DeepAgentsAdapter.invocations).toBe(0);
-    const adapter = new DeepAgentsAdapter();
+    const adapter = new DeepAgentsAdapter(adapterThink);
     expect(adapter.owns).toEqual(["think"]);
     expect(adapter.name).toBe("deepagents");
 
-    const { core, pack, tenantId, record } = await habitatStack();
+    const { core, pack, tenantId, record } = await habitatProofStack();
     expect(core.habitat.owns).toEqual([...HABITAT_OWNED]);
     await core.habitat.wake({
       kind: "field_start",
@@ -591,9 +663,13 @@ describe("D10 §6 habitat kernel", () => {
       goal: "one goal",
       recordId: record.id,
     });
-    expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("double");
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
     expect(core.habitat.getRun(tenantId)?.runId).toMatch(/^run_/);
     expect(core.habitat.listWakes(tenantId).length).toBeGreaterThan(0);
+    expect(core.habitat.getRun(tenantId)?.workerType).toBe("coder");
     const src = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(src).not.toMatch(/createDeepAgent\s*\(/);
     expect(src).not.toMatch(/from ["']dcode["']/);
@@ -605,10 +681,45 @@ describe("D10 §6 habitat kernel", () => {
     expect(adapterSrc).toMatch(/\.invoke\(/);
     expect(adapterSrc).toMatch(/owns = \["think"\]/);
     expect(adapterSrc).not.toMatch(/owns = \["wake"/);
+    const workerSrc = readFileSync(path.join(process.cwd(), "src/habitat/worker.ts"), "utf8");
+    expect(workerSrc).not.toMatch(/spawn\(process\.execPath/);
+    expect(workerSrc).toMatch(/spawnHeld|execInMachine/);
+    const proofSrc = readFileSync(path.join(process.cwd(), "tests/habitat.test.ts"), "utf8");
+    expect(proofSrc).toMatch(/async function habitatProofStack/);
+    expect(proofSrc).toMatch(/new DeepAgentsAdapter\(adapterThink\)/);
+    expect(proofSrc).toMatch(/adapter: new DryStemAdapter\(\)/);
+  });
+
+  it("unbound product think is ADAPTER_UNBOUND", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-habitat-unbound-"));
+    const { anchors, binding } = await signedGenericPack();
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: new DeepAgentsAdapter(adapterThink),
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    await expect(
+      core.habitat.wake({
+        kind: "field_start",
+        tenantId: "t1",
+        pack: loaded.loaded,
+        goal: "one goal",
+        recordId: record.id,
+      }),
+    ).rejects.toMatchObject({
+      code: "ADAPTER_UNBOUND",
+      closed: true,
+      message: expect.stringMatching(/no silent default/i),
+    });
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+    expect(core.habitat.trailerExists("t1")).toBe(false);
   });
 
   it("worker_done wakes ops and one card is required for one external effect", async () => {
-    const { core, pack, tenantId, record } = await habitatStackWithWorld();
+    const { core, pack, tenantId, record } = await habitatProofStackWithWorld();
     const started = await core.habitat.wake({
       kind: "field_start",
       tenantId,
@@ -616,6 +727,8 @@ describe("D10 §6 habitat kernel", () => {
       goal: "one goal",
       recordId: record.id,
     });
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("double");
     expect(started.cardId).toBeDefined();
     expect(started.effect).toBeUndefined();
     expect(core.cards.get(started.cardId!)?.status).toBe("pending");
@@ -637,7 +750,7 @@ describe("D10 §6 habitat kernel", () => {
   });
 
   it("unapproved and denied effects do not persist; deny is terminal", async () => {
-    const { core, pack, tenantId, record } = await habitatStack();
+    const { core, pack, tenantId, record } = await habitatProofStack();
     const started = await core.habitat.wake({
       kind: "field_start",
       tenantId,
@@ -645,6 +758,7 @@ describe("D10 §6 habitat kernel", () => {
       goal: "one goal",
       recordId: record.id,
     });
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
     expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
     core.cards.resolve({ cardId: started.cardId!, decision: "denied", actor: "field" });
     const denied = await core.habitat.wake({
@@ -664,7 +778,7 @@ describe("D10 §6 habitat kernel", () => {
   });
 
   it("approve resumes the same run id on disk", async () => {
-    const { core, pack, tenantId, record } = await habitatStackWithWorld();
+    const { core, pack, tenantId, record } = await habitatProofStackWithWorld();
     const started = await core.habitat.wake({
       kind: "field_start",
       tenantId,
@@ -672,6 +786,7 @@ describe("D10 §6 habitat kernel", () => {
       goal: "one goal",
       recordId: record.id,
     });
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
     const runId = started.run!.runId;
     core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
     const approved = await core.habitat.wake({
@@ -686,7 +801,7 @@ describe("D10 §6 habitat kernel", () => {
   });
 
   it("restart of core objects on the same computerBaseDir still sees the same run and pending card", async () => {
-    const first = await habitatStack("restart");
+    const first = await habitatProofStack("restart");
     first.core.habitat.memory.writeProfile({
       tenantId: "restart",
       agentId: first.agents[0]!.agentId,
@@ -699,6 +814,7 @@ describe("D10 §6 habitat kernel", () => {
       goal: "one goal",
       recordId: first.record.id,
     });
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
     const runId = started.run!.runId;
     const cardId = started.cardId!;
 
@@ -727,7 +843,7 @@ describe("D10 §6 habitat kernel", () => {
   });
 
   it("kill tears the worker down (trailer gone)", async () => {
-    const { core, pack, tenantId, record } = await habitatStack();
+    const { core, pack, tenantId, record } = await habitatProofStack();
     await core.habitat.wake(
       {
         kind: "field_start",
@@ -738,6 +854,7 @@ describe("D10 §6 habitat kernel", () => {
       },
       { holdWorker: true },
     );
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
     expect(core.habitat.trailerExists(tenantId)).toBe(true);
     const killed = await core.habitat.wake({ kind: "kill", tenantId, reason: "stop" });
     expect(killed.run?.status).toBe("killed");
@@ -746,7 +863,7 @@ describe("D10 §6 habitat kernel", () => {
   });
 
   it("wake log can be replayed with no model", async () => {
-    const { core, pack, tenantId, record } = await habitatStack();
+    const { core, pack, tenantId, record } = await habitatProofStack();
     await core.habitat.wake(
       {
         kind: "field_start",
@@ -757,19 +874,25 @@ describe("D10 §6 habitat kernel", () => {
       },
       { until: "talking" },
     );
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    const before = DeepAgentsAdapter.invocations;
     const replayed = core.habitat.replay(tenantId);
     expect(replayed.passed).toBe(true);
     expect(replayed.kinds).toContain("field_start");
     const evalReplay = new EvalRunner().replayFacilities(core.habitat.listWakes(tenantId));
     expect(evalReplay.passed).toBe(true);
     expect(evalReplay.kinds).toEqual(replayed.kinds);
+    expect(DeepAgentsAdapter.invocations).toBe(before);
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
   });
 
   it("HTTP start then ask, replayFacilities on tenant disk log passes without a model", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-http-"));
-    const { core, field } = await liveField("t1", dir);
+    const { core, field } = await liveProofField("t1", dir);
     expect(DeepAgentsAdapter.invocations).toBe(0);
     await createOpenStart(field, "buyer", "Work this buyer journey");
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("double");
     const run = core.habitat.getRun("t1");
     expect(run?.runId).toMatch(/^run_/);
     await field.ask("status?", "read");
