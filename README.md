@@ -58,6 +58,7 @@ node dist/cli.js architect issue-field-token --principal architect
 AV_ARCHITECT_TOKEN=<architect-token> node dist/cli.js architect issue-field-token
 npm run field:serve
 # Open the printed URL, paste the token, and complete one journey + one card.
+# Record or retract a generic fact the same way (approve, then persist).
 # Same API: clients/field-ios (SwiftUI, DEC-009). This host cannot compile iOS.
 AV_FIELD_TOKEN=<issued-token> npm run field:client -- --complete-demo
 ```

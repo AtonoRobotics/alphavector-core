@@ -28,7 +28,7 @@
 <body>
   <main>
     <h1>AV Dev Field</h1>
-    <p class="lead">Required field path. Start a pack journey, then approve or deny a card. Architect is not on this surface.</p>
+    <p class="lead">Required field path. Start a pack journey, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
     <div id="status"></div>
 
     <section>
@@ -50,6 +50,14 @@
     <section>
       <h2>Open journeys</h2>
       <ul id="journeys"></ul>
+    </section>
+
+    <section>
+      <h2>Facts</h2>
+      <label for="fact-id">Fact id</label>
+      <input id="fact-id" autocomplete="off" spellcheck="false" placeholder="Generic fact id" />
+      <button id="record" type="button">Record</button>
+      <button id="retract" type="button" class="secondary">Retract</button>
     </section>
 
     <section>
@@ -142,6 +150,33 @@
         });
         setStatus("Started " + journey.journeyKind + " " + journey.id);
         await refresh();
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    };
+
+    async function requestFact(path) {
+      try {
+        await api("POST", path, { id: document.getElementById("fact-id").value.trim() });
+        setStatus("Fact request completed without a card");
+      } catch (err) {
+        if (err.cardId) setStatus("Card required: " + err.cardId);
+        else throw err;
+      }
+      await refresh();
+    }
+
+    document.getElementById("record").onclick = async () => {
+      try {
+        await requestFact("/field/facts");
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    };
+
+    document.getElementById("retract").onclick = async () => {
+      try {
+        await requestFact("/field/facts/retract");
       } catch (err) {
         setStatus(err.message, true);
       }

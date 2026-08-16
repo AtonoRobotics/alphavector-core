@@ -66,6 +66,45 @@ export class FieldClient {
   }
 
   /**
+   * Page path: POST /field/facts or /field/facts/retract, then approve the
+   * owner_instance card. Persist happens only after approve.
+   */
+  async requestFactCard(id: string, op: "record" | "retract" = "record"): Promise<string> {
+    try {
+      if (op === "record") await this.record(id);
+      else await this.retract(id);
+      throw new Error("expected authorization card before fact write");
+    } catch (err) {
+      if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
+        throw err;
+      }
+      return err.cardId;
+    }
+  }
+
+  /**
+   * Same routes the Linux page uses: record → card → approve → retract → card → approve.
+   */
+  async completeFactRecordAndRetract(id: string): Promise<{
+    recordCardId: string;
+    retractCardId: string;
+    recorded: NonNullable<FieldApproveResult["fact"]>;
+    retracted: NonNullable<FieldApproveResult["fact"]>;
+  }> {
+    const recordCardId = await this.requestFactCard(id, "record");
+    const recorded = await this.approve(recordCardId);
+    if (!recorded.fact?.present) {
+      throw new Error("fact record approve did not persist");
+    }
+    const retractCardId = await this.requestFactCard(id, "retract");
+    const retracted = await this.approve(retractCardId);
+    if (!retracted.fact || retracted.fact.present) {
+      throw new Error("fact retract approve did not remove");
+    }
+    return { recordCardId, retractCardId, recorded: recorded.fact, retracted: retracted.fact };
+  }
+
+  /**
    * Completes one pack journey and one owner card approve against a live field API.
    * Used by the Linux client so a reviewer can finish the required path today.
    */
