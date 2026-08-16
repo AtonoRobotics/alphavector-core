@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { AgentRecord } from "../agents/types.js";
@@ -120,6 +121,13 @@ export class HabitatKernel {
   private computer?: ComputerHost;
   /** Tenants whose worker teardown is expected (done / fail / kill). Not a crash. */
   private readonly expectedTeardown = new Set<string>();
+  /**
+   * In-flight pass context. Nested wake() from the same pass (worker_done after
+   * an effect) dispatches now. An external wake for that tenant queues (HK-013).
+   */
+  private readonly passAls = new AsyncLocalStorage<{ tenantId: string }>();
+  /** Per-tenant arrival chain. The next wake runs after the in-flight pass. */
+  private readonly passTail = new Map<string, Promise<void>>();
 
   constructor(private readonly opts: HabitatKernelOptions) {
     this.runs = new RunStore(opts.computerBaseDir);
@@ -276,16 +284,55 @@ export class HabitatKernel {
     return this.wake({ ...event, kind: "field_start" }, { holdWorker: true });
   }
 
+  /**
+   * Kill short-circuits first (HK-060). Any other wake that arrives during an
+   * in-flight talking/worker pass queues and drains in arrival order (HK-013).
+   * Nested wake() from the same pass still dispatches now (stem / admission).
+   */
   async wake(event: WakeEvent, opts?: { until?: "talking" | "card" | "done"; holdWorker?: boolean }): Promise<WakeResult> {
     this.bus.emit(event);
     if (event.pack) this.packs.set(event.tenantId, event.pack);
-    const pack = event.pack ?? this.packs.get(event.tenantId);
-    const decision = stem(event);
-    const until = opts?.until ?? defaultUntil(event.kind);
 
     if (event.kind === "kill") {
       return this.kill(event);
     }
+    if (this.passAls.getStore()?.tenantId === event.tenantId) {
+      return this.dispatchWake(event, opts);
+    }
+    return this.serializeWake(event, opts);
+  }
+
+  /**
+   * Queue behind the in-flight pass. Each item is a real kernel wake — not dropped,
+   * not a new kind. Previous-pass failure still drains the rest.
+   */
+  private serializeWake(
+    event: WakeEvent,
+    opts: { until?: "talking" | "card" | "done"; holdWorker?: boolean } | undefined,
+  ): Promise<WakeResult> {
+    const tenantId = event.tenantId;
+    const prev = this.passTail.get(tenantId) ?? Promise.resolve();
+    const result = prev
+      .catch(() => undefined)
+      .then(() => this.passAls.run({ tenantId }, () => this.dispatchWake(event, opts)));
+    this.passTail.set(
+      tenantId,
+      result.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return result;
+  }
+
+  private async dispatchWake(
+    event: WakeEvent,
+    opts?: { until?: "talking" | "card" | "done"; holdWorker?: boolean },
+  ): Promise<WakeResult> {
+    const pack = event.pack ?? this.packs.get(event.tenantId);
+    const decision = stem(event);
+    const until = opts?.until ?? defaultUntil(event.kind);
+
     if (event.kind === "card_decide") {
       return this.cardDecide(event, pack, until);
     }
@@ -336,6 +383,29 @@ export class HabitatKernel {
     }
 
     return this.fieldStart(event, pack, decision, until, opts?.holdWorker === true);
+  }
+
+  /**
+   * Kill already took effect (HK-060). Stop the in-flight pass from un-killing
+   * the run or launching another coder. Tear down a worker launched after kill.
+   */
+  private ifKilled(tenantId: string): WakeResult | undefined {
+    const run = this.runs.get(tenantId);
+    if (run?.status !== "killed") return undefined;
+    this.expectedTeardown.add(tenantId);
+    try {
+      this.workers.teardown(tenantId);
+    } finally {
+      this.expectedTeardown.delete(tenantId);
+    }
+    return {
+      run,
+      wokeOrchestrator: false,
+      wokeOps: false,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory: this.injectMemory(tenantId, this.orchestratorId(tenantId)),
+    };
   }
 
   /**
@@ -1165,6 +1235,8 @@ export class HabitatKernel {
       // A live pid returns existing. Do not no-op because the directory exists.
       if (this.workers.get(event.tenantId) && !this.workers.isLive(event.tenantId)) {
         await this.ensureComputer(event.tenantId);
+        const stoppedLaunch = this.ifKilled(event.tenantId);
+        if (stoppedLaunch) return stoppedLaunch;
         await this.workers.launch({
           tenantId: event.tenantId,
           runId: existing.runId,
@@ -1172,6 +1244,8 @@ export class HabitatKernel {
           hold: holdWorker,
         });
       }
+      const stoppedFollow = this.ifKilled(event.tenantId);
+      if (stoppedFollow) return stoppedFollow;
       const memory = this.injectMemory(
         event.tenantId,
         this.workers.get(event.tenantId)?.agent.agentId ?? this.orchestratorId(event.tenantId),
@@ -1230,6 +1304,8 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
+    const stopped = this.ifKilled(event.tenantId);
+    if (stopped) return stopped;
     this.runs.put({
       ...run,
       status: "talking",
@@ -1266,6 +1342,8 @@ export class HabitatKernel {
     holdWorker: boolean,
     until: "talking" | "card" | "done",
   ): Promise<WakeResult> {
+    const stoppedAtStart = this.ifKilled(event.tenantId);
+    if (stoppedAtStart) return stoppedAtStart;
     const run = this.requireRun(event.tenantId);
     const resolved = this.requireThinkBind(event.tenantId, pack);
     const followUp = Boolean(run.workerId && this.workers.getById(event.tenantId, run.workerId));
@@ -1273,6 +1351,8 @@ export class HabitatKernel {
       followUp && this.workers.isLive(event.tenantId)
         ? this.workers.get(event.tenantId)!
         : await this.launchOnComputer(event.tenantId, run.runId, skills, holdWorker);
+    const stoppedAfterLaunch = this.ifKilled(event.tenantId);
+    if (stoppedAfterLaunch) return stoppedAfterLaunch;
     if (!followUp) {
       this.opts.orchestrator.dispatch({
         orchestrator: orch,
@@ -1302,7 +1382,11 @@ export class HabitatKernel {
     if (intent.act !== "propose_effect") {
       throw new AvError("WORKER_INTENT", "Worker pass must propose the one external effect");
     }
+    const stoppedAfterThink = this.ifKilled(event.tenantId);
+    if (stoppedAfterThink) return stoppedAfterThink;
     const proposed = await this.admit(pack, worker.agent, intent);
+    const stoppedAfterAdmit = this.ifKilled(event.tenantId);
+    if (stoppedAfterAdmit) return stoppedAfterAdmit;
     if (until === "done" && proposed.effect) {
       return this.finishAfterEffect(event.tenantId, proposed);
     }
