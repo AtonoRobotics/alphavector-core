@@ -55,6 +55,17 @@ export interface ComputerPaths {
    * Not Temporal. The habitat clock fires due rows.
    */
   deadlinesFile: string;
+  /**
+   * Architect connector bind. Same class as adapter-bind / mail:
+   * beside the disk, never inside the bind-mounted /home, never a field file.
+   * In-process ConnectorBook is not this store. Not Temporal.
+   */
+  connectorBindFile: string;
+  /**
+   * Architect connector credentials. Same class as adapter-credentials:
+   * beside the disk, never on connector-bind.json, never a field file.
+   */
+  connectorCredentialsFile: string;
 }
 
 export interface TenantComputer {

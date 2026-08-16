@@ -38,6 +38,15 @@ import {
   upsertDeadline,
   type DeadlineRecord,
 } from "./deadline-store.js";
+import {
+  findStoredConnectorBind,
+  readTenantConnectorBinds,
+  type ConnectorBindRecord,
+} from "./connector-bind.js";
+import {
+  findStoredConnectorCredentials,
+  readTenantConnectorCredentials,
+} from "./connector-credentials.js";
 import { RunStore } from "./run-store.js";
 import { writeSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
@@ -211,6 +220,9 @@ export class HabitatKernel {
     }
     if (event.kind === "deadline") {
       return this.deadlineWake(event, decision);
+    }
+    if (event.kind === "connector") {
+      return this.connectorWake(event, decision);
     }
     if (event.kind !== "field_start") {
       const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
@@ -600,6 +612,107 @@ export class HabitatKernel {
       talkingDidHeavyWork: false,
       memory,
     };
+  }
+
+  /**
+   * Admit a connector event (DEC-020). Requires an Architect bind on
+   * tenants/{id}/connector-bind.json. In-process ConnectorBook is not this store.
+   * Attach only — no second goal, no coder. Connector SHALL NOT confer authority.
+   * Temporal is not the bus.
+   */
+  deliverConnectorEvent(input: {
+    tenantId: string;
+    connectorId: string;
+  }): WakeResult {
+    return this.admitConnector(input);
+  }
+
+  /**
+   * Same as deliverConnectorEvent. Architect bind, then wake({ kind: "connector" }).
+   * Unbound → CONNECTOR_UNBOUND. Missing required creds → CONNECTOR_CREDENTIALS_MISSING.
+   * No open run → NO_OPEN_RUN. Does not mint a run or a goal.
+   */
+  admitConnector(input: { tenantId: string; connectorId: string }): WakeResult {
+    const connectorId = input.connectorId.trim();
+    if (!connectorId) {
+      throw new AvError("CONNECTOR_UNBOUND", "Connector admit requires an Architect bind; refusing to invent");
+    }
+    this.requireConnectorBind(input.tenantId, connectorId);
+    const run = this.runs.get(input.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Connector requires an open run; no implicit start");
+    }
+    return this.wake({
+      kind: "connector",
+      tenantId: input.tenantId,
+      pack: this.packs.get(input.tenantId),
+      connectorId,
+      runId: run.runId,
+    });
+  }
+
+  /**
+   * Connector: a wake on the open run. Does not mint a run or a goal.
+   * Talking stays thin — no pickAgent, no coder launch. No implicit start
+   * (unlike routine, which may start one goal). Attach only, like mail / deadline.
+   * Connector SHALL NOT confer authority.
+   */
+  private connectorWake(event: WakeEvent, decision: ReturnType<typeof stem>): WakeResult {
+    const stored = this.requireConnectorBind(event.tenantId, event.connectorId);
+    const run = this.runs.get(event.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Connector requires an open run; no implicit start");
+    }
+    const creature = this.requireOrchestrator(event.tenantId);
+    const memory = this.injectMemory(event.tenantId, creature.agentId);
+    this.assertLabeled(memory);
+    const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const talking = this.adapter.think({
+      pass: "talking",
+      event,
+      run,
+      memory,
+      skills: [],
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    this.validateTalking(talking);
+    this.wakeLog.append({
+      kind: "connector",
+      tenantId: event.tenantId,
+      runId: run.runId,
+      at: nowIso(),
+      decision,
+      detail: { connectorId: stored.connectorId, attached: true, confersAuthority: false },
+    });
+    return {
+      run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory,
+    };
+  }
+
+  private requireConnectorBind(tenantId: string, connectorId: string | undefined): ConnectorBindRecord {
+    const id = connectorId?.trim();
+    if (!id) {
+      throw new AvError("CONNECTOR_UNBOUND", "Connector wake requires an Architect bind; refusing to invent");
+    }
+    const store = readTenantConnectorBinds(this.opts.computerBaseDir, tenantId);
+    const found = findStoredConnectorBind(store, tenantId, id);
+    if (!found) {
+      throw new AvError("CONNECTOR_UNBOUND", "Architect must bind the connector before admit; no silent no-op");
+    }
+    if (found.requiresCredentials) {
+      const creds = readTenantConnectorCredentials(this.opts.computerBaseDir, tenantId);
+      const secret = findStoredConnectorCredentials(creds, tenantId, id);
+      if (!secret) {
+        throw new AvError("CONNECTOR_CREDENTIALS_MISSING", "Architect must write connector credentials before admit; no silent no-op");
+      }
+    }
+    return found;
   }
 
   private requireStoredDeadline(event: WakeEvent): DeadlineRecord {
