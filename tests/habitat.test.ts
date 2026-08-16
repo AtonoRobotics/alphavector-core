@@ -28,10 +28,26 @@ function pidAlive(pid: number | undefined): boolean {
   if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2).charAt(0);
+    return state !== "Z";
+  } catch {
+    return false;
+  }
+}
+
+/** HTTP start does not hold. Wait until the booked pid is gone (or a zombie). */
+function waitForPidDead(pid: number | undefined, ms = 2000): boolean {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (!pidAlive(pid)) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  return !pidAlive(pid);
 }
 
 afterEach(async () => {
@@ -717,7 +733,7 @@ describe("D10 §6 field verbs", () => {
     expect(worker.workerId).toBe(run.workerId);
     expect(worker.type).toBe("coder");
     expect(existsSync(worker.trailerPath)).toBe(true);
-    expect(pidAlive(worker.pid)).toBe(false);
+    expect(waitForPidDead(worker.pid)).toBe(true);
     const paths = computerRoot(dir, "t1");
     expect(existsSync(paths.workersFile)).toBe(true);
     expect(paths.workersFile).toBe(path.join(dir, "tenants", "t1", "workers.json"));
@@ -756,7 +772,7 @@ describe("D10 §6 field verbs", () => {
     const run = first.core.habitat.getRun("t1")!;
     const worker = first.core.habitat.activeWorker("t1")!;
     expect(existsSync(worker.trailerPath)).toBe(true);
-    expect(pidAlive(worker.pid)).toBe(false);
+    expect(waitForPidDead(worker.pid)).toBe(true);
     await first.server.close();
 
     const held = new WorkerBook(dir).launch({ tenantId: "t1", runId: run.runId, hold: true });
@@ -786,7 +802,7 @@ describe("D10 §6 field verbs", () => {
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const worker = first.core.habitat.activeWorker("t1")!;
     expect(existsSync(worker.trailerPath)).toBe(true);
-    expect(pidAlive(worker.pid)).toBe(false);
+    expect(waitForPidDead(worker.pid)).toBe(true);
     await first.server.close();
 
     const second = await liveField("t1", dir, { field: first.fieldToken });
@@ -879,6 +895,7 @@ describe("D10 §6 field verbs", () => {
     const cardId = run.pendingCardId;
     expect(run.status).toBe("awaiting_card");
     expect(existsSync(worker.trailerPath)).toBe(true);
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -912,6 +929,7 @@ describe("D10 §6 field verbs", () => {
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const run = first.core.habitat.getRun("t1")!;
     const worker = first.core.habitat.activeWorker("t1")!;
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -934,6 +952,7 @@ describe("D10 §6 field verbs", () => {
     const first = await liveField("t1", dir);
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const worker = first.core.habitat.activeWorker("t1")!;
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -960,6 +979,7 @@ describe("D10 §6 field verbs", () => {
     const runId = first.core.habitat.getRun("t1")!.runId;
     const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
     const worker = first.core.habitat.activeWorker("t1")!;
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 
@@ -984,6 +1004,7 @@ describe("D10 §6 field verbs", () => {
     const runId = first.core.habitat.getRun("t1")!.runId;
     const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
     const worker = first.core.habitat.activeWorker("t1")!;
+    expect(waitForPidDead(worker.pid)).toBe(true);
     rmSync(worker.trailerPath, { recursive: true, force: true });
     await first.server.close();
 

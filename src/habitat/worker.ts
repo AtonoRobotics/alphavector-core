@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentRecord } from "../agents/types.js";
 import { computerRoot } from "../computer/paths.js";
@@ -161,6 +161,7 @@ export class WorkerBook {
         AV_CODER_HOLD: hold ? "1" : "0",
       },
     });
+    child.on("exit", () => {});
     child.unref();
     const next: WorkerRecord = { ...record, pid: child.pid };
     this.workers.set(record.tenantId, next);
@@ -297,7 +298,19 @@ function isPidAlive(pid: number | undefined): boolean {
   if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
-    return true;
+  } catch {
+    return false;
+  }
+  // kill(0) succeeds for zombies. HTTP start does not hold; the exited
+  // child is not a live worker even if the parent has not reaped it.
+  return !isZombiePid(pid);
+}
+
+function isZombiePid(pid: number): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2).charAt(0);
+    return state === "Z";
   } catch {
     return false;
   }
