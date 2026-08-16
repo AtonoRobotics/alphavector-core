@@ -9,10 +9,9 @@ import { AvError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
 import { reapHeldCoders } from "../src/habitat/index.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
-import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
-import { ALPHAVECTOR_RE_PIN_SHA, createOpenStart, signedRePack } from "./helpers.js";
+import { ALPHAVECTOR_RE_PIN_SHA, bootTestFieldCore, createOpenStart, signedRePack } from "./helpers.js";
 import { bindWorldForPack, closeWorldHttp, useWorldHttp } from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
@@ -39,7 +38,7 @@ async function liveDurable(
   computerBaseDir: string,
   issued?: { field: string },
 ) {
-  const { core, pack } = await bootFieldCore(tenantId, {
+  const { core, pack } = await bootTestFieldCore(tenantId, {
     computerBaseDir,
     adapter: new DryStemAdapter(),
   });

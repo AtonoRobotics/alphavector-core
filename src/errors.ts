@@ -17,6 +17,14 @@ export class PackLoadError extends AvError {
   }
 }
 
+/** Missing or unreadable product trust anchors. Fail closed — no generated fallback. */
+export class TrustAnchorError extends AvError {
+  constructor(code: string, message: string) {
+    super(code, message, true);
+    this.name = "TrustAnchorError";
+  }
+}
+
 export class PolicyDeniedError extends AvError {
   constructor(message: string) {
     super("POLICY_DENIED", message, true);
