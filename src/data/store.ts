@@ -60,12 +60,18 @@ export class DurableStore {
     return rec;
   }
 
-  createJourney(tenantId: string, journeyKind: string, objective: string): Journey {
+  createJourney(
+    tenantId: string,
+    journeyKind: string,
+    objective: string,
+    recordId?: string,
+  ): Journey {
     const journey: Journey = {
       ...meta(tenantId, "journey", "user"),
       journeyKind,
       objective,
       status: "open",
+      ...(recordId ? { recordId } : {}),
     };
     this.journeys.push(journey);
     return journey;

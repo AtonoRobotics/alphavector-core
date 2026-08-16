@@ -39,6 +39,11 @@ export interface FieldStartInput {
   journeyKind: string;
   objective: string;
   /**
+   * Subject record this journey is about. Journey REQUIRES/AVOIDS eval
+   * uses that record's present set. Absent = tenant-global facts.
+   */
+  recordId?: string;
+  /**
    * Request claims only. Allow/deny uses persisted tenant facts on disk.
    * Passing a condition here does not write the fact store.
    */
@@ -85,7 +90,7 @@ export interface FieldFactInput {
   actor: PrincipalKind;
   pack: LoadedPack;
   id: string;
-  /** Attach this fact to a subject record. Absent = tenant-global (Open / journey). */
+  /** Attach this fact to a subject record. Absent = tenant-global. */
   recordId?: string;
 }
 

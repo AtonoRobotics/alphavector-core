@@ -11,7 +11,7 @@ import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { AlphaVectorCore } from "../src/kernel.js";
 import type { PackBinding } from "../src/packs/types.js";
-import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, signedRePackMutated } from "./helpers.js";
+import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, createOpenStart, signedRePackMutated } from "./helpers.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const REQUIRED = "condition.required";
@@ -160,12 +160,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "transaction",
       "past-client",
     ]);
-    await field.openApproved("buyer");
-    const journey = await field.start("buyer", "Work this buyer journey");
-    expect(journey.journeyKind).toBe("buyer");
-    expect(journey.status).toBe("open");
     const home = await field.home();
-    expect(home.journeys.map((j) => j.kind)).toContain("buyer");
+    expect(home.journeys).toEqual([]);
     expect(home.architectControls).toEqual([]);
     expect(home.journeyKinds.map((k) => k.id)).toEqual(pack.binding.journeyKinds.map((k) => k.id));
     expect(home.purposeFacts.map((f) => f.id)).toEqual(
@@ -194,6 +190,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       ...pack.binding.recordPartyKnowledge.partyKinds,
     ]);
     expect(home.recordKinds.every((k) => k.id && k.label)).toBe(true);
+    const { journey, record } = await createOpenStart(field, "buyer", "Work this buyer journey");
+    expect(journey.journeyKind).toBe("buyer");
+    expect(journey.status).toBe("open");
+    expect(journey.recordId).toBe(record.id);
+    const after = await field.home();
+    expect(after.journeys.map((j) => j.kind)).toContain("buyer");
+    expect(after.records.map((r) => r.id)).toContain(record.id);
   });
 
   it("approves an owner card then executes", async () => {
@@ -238,15 +241,14 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       const body = (await res.json()) as { error: string };
       expect(body.error).toBe("UNAUTHORIZED");
     }
-    await field.openApproved("buyer");
-    const journey = await field.start("buyer", "Work this buyer journey");
-    expect(journey.journeyKind).toBe("buyer");
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    expect(started.journey.journeyKind).toBe("buyer");
   });
 
   it("denies a revoked issued token and does not invent a session", async () => {
     const { url, tenantId, fieldIssued, core, field, tokens } = await liveField("revoke");
-    await field.openApproved("buyer");
-    const journey = await field.start("buyer", "Work this buyer journey");
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const journey = started.journey;
     expect(journey.status).toBe("open");
     core.fieldTokens.revoke({
       tenantId,
@@ -287,9 +289,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       status: 403,
       code: "SURFACE_VIOLATION",
     });
-    await field.openApproved("buyer");
-    const journey = await field.start("buyer", "Work this buyer journey");
-    expect(journey.journeyKind).toBe("buyer");
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    expect(started.journey.journeyKind).toBe("buyer");
   });
 
   it("does not expose Architect, models, prompts, Temporal, or tools on field routes", async () => {
@@ -327,6 +328,10 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/data-open=/);
     expect(html).toMatch(/>Open</);
     expect(html).toMatch(/"journey\." \+ t\.dataset\.open/);
+    expect(html).toMatch(
+      /requestFactCard\("journey\." \+ t\.dataset\.open, "\/field\/facts", selectedRecord\(\)\)/,
+    );
+    expect(html).toMatch(/recordId:\s*selectedRecord\(\)/);
     expect(html).toMatch(/id="purpose-facts"/);
     expect(html).toMatch(/home\.purposeFacts/);
     expect(html).toMatch(/data-purpose=/);
@@ -372,6 +377,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(clientSrc).toMatch(/recordApprovedFact/);
     expect(clientSrc).toMatch(/createApprovedRecord/);
     expect(clientSrc).toMatch(/home\.recordKinds/);
+    expect(clientSrc).toMatch(/openApproved\(kind\.id, subject\.id\)/);
+    expect(clientSrc).toMatch(/start\(kind\.id, `Work this \$\{kind\.label\} journey`, subject\.id\)/);
     const fieldSrc = await readFile(path.join(REPO_ROOT, "src/surfaces/field.ts"), "utf8");
     expect(fieldSrc).not.toMatch(/consent\.dnc/);
     expect(fieldSrc).toMatch(/avoidFactsFromBinding/);
@@ -427,13 +434,14 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const done = await field.completeBuyerJourneyAndCard();
     expect(done.journey.journeyKind).toBe("buyer");
     expect(done.effect.executed).toBe(true);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer"]),
-    );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
     const subject = (await field.home()).records[0];
     expect(subject?.id).toMatch(/^rec_/);
-    expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(["purpose.follow-up"]);
+    expect(done.journey.recordId).toBe(subject!.id);
+    expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
     for (const id of collectAvoidFactIds(pack.binding)) {
       expect(new FactBook(dir).presentIds(tenantId)).not.toContain(id);
       expect(new FactBook(dir).presentIds(tenantId, subject!.id)).not.toContain(id);
@@ -445,15 +453,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
     const recordCardId = await field.requestFactCard(REQUIRED);
     expect(existsSync(paths.factsFile)).toBe(true);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer"]),
-    );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
     const recorded = await field.approve(recordCardId);
     expect(recorded.fact).toEqual({ id: REQUIRED, present: true });
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual(
       expect.arrayContaining([
-        { id: "journey.buyer" },
+        { id: "journey.buyer", recordId: subject!.id },
         { id: "purpose.follow-up", recordId: subject!.id },
         { id: REQUIRED },
       ]),
@@ -462,22 +468,25 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const retractCardId = await field.requestFactCard(REQUIRED, "retract");
     expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining([REQUIRED, "journey.buyer"]),
+      expect.arrayContaining([REQUIRED]),
     );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     const retracted = await field.approve(retractCardId);
     expect(retracted.fact).toEqual({ id: REQUIRED, present: false });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer"]),
-    );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
+    expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
 
     const scripted = await field.completeFactRecordAndRetract("demo.fact");
     expect(scripted.recorded).toEqual({ id: "demo.fact", present: true });
     expect(scripted.retracted).toEqual({ id: "demo.fact", present: false });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer"]),
-    );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("demo.fact");
+    expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
   });
 
   it("keeps a real SwiftUI iOS field target in tree on the same API", async () => {
@@ -612,18 +621,28 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       message: expect.stringMatching(/REQUIRES missing/),
     });
 
-    const recorded = await field.openApproved("buyer");
-    expect(recorded).toEqual({ id: "journey.buyer", present: true });
+    const buyerRec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Buyer subject",
+    );
+    const recorded = await field.openApproved("buyer", buyerRec.id);
+    expect(recorded).toEqual({ id: "journey.buyer", present: true, recordId: buyerRec.id });
     expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, buyerRec.id)).toEqual(["journey.buyer"]);
 
-    const journey = await field.start("buyer", "Work this buyer journey");
+    const journey = await field.start("buyer", "Work this buyer journey", buyerRec.id);
     expect(journey.journeyKind).toBe("buyer");
+    expect(journey.recordId).toBe(buyerRec.id);
 
-    await field.openApproved("seller");
-    const seller = await field.start("seller", "Work this seller journey");
+    const sellerRec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Seller subject",
+    );
+    await field.openApproved("seller", sellerRec.id);
+    const seller = await field.start("seller", "Work this seller journey", sellerRec.id);
     expect(seller.journeyKind).toBe("seller");
 
     await expect(
@@ -651,8 +670,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       code: "AUTHORIZATION_REQUIRED",
     });
 
-    await field.recordApprovedFact("consent.dnc");
-    await expect(field.start("buyer", "DNC must fail closed")).rejects.toMatchObject({
+    await field.recordApprovedFact("consent.dnc", buyerRec.id);
+    await expect(field.start("buyer", "DNC must fail closed", buyerRec.id)).rejects.toMatchObject({
       status: 403,
       code: "PREDICATE_CLOSED",
       message: expect.stringMatching(/AVOIDS present/),
@@ -666,30 +685,41 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const kind = pack.binding.journeyKinds[0];
     expect(kind?.id).toBe("buyer");
 
-    await expect(field.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
+    const rec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
+    await expect(field.start(kind.id, `Work this ${kind.label} journey`, rec.id)).rejects.toMatchObject({
       status: 403,
       code: "PREDICATE_CLOSED",
       message: expect.stringMatching(/REQUIRES missing|fail closed/),
     });
 
-    const cardId = await field.open(kind.id);
+    const cardId = await field.open(kind.id, rec.id);
     expect(cardId).toMatch(/^card_/);
     expect(existsSync(paths.factsFile)).toBe(false);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
     expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
 
     const approved = await field.approve(cardId);
     expect(approved.card.status).toBe("approved");
-    expect(approved.fact).toEqual({ id: field.journeyFactId(kind.id), present: true });
+    expect(approved.fact).toEqual({
+      id: field.journeyFactId(kind.id),
+      present: true,
+      recordId: rec.id,
+    });
     expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain("purpose.follow-up");
 
-    const journey = await field.start(kind.id, `Work this ${kind.label} journey`);
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`, rec.id);
     expect(journey.journeyKind).toBe(kind.id);
     expect(journey.status).toBe("open");
+    expect(journey.recordId).toBe(rec.id);
 
     await expect(
       field.progress(journey.id, {
@@ -752,11 +782,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(JSON.stringify(home)).not.toMatch(/listing_id|person_id|household_id|buyer_id/i);
     expect(JSON.stringify(home)).not.toMatch(/Desk|Shape|Director|Play|Plant|HIL|Thor/);
 
-    await field.openApproved(kind.id);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+    const rec = await field.createApprovedRecord(home.recordKinds[0]?.id ?? "record", "Subject");
+    await field.openApproved(kind.id, rec.id);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain("purpose.follow-up");
 
-    const journey = await field.start(kind.id, `Work this ${kind.label} journey`);
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`, rec.id);
     const purpose = field.communicateRequiresPurpose(home);
     expect(pack.binding.actionClassVerbs.find((v) => v.id === "communicate")?.REQUIRES).toContain(
       purpose.id,
@@ -764,9 +796,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const cardId = await field.requestFactCard(purpose.id);
     expect(cardId).toMatch(/^card_/);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(existsSync(paths.factsFile)).toBe(true);
-    expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([{ id: "journey.buyer" }]);
+    expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([
+      { id: "journey.buyer", recordId: rec.id },
+    ]);
 
     await expect(
       field.progress(journey.id, {
@@ -783,9 +818,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const approved = await field.approve(cardId);
     expect(approved.fact).toEqual({ id: purpose.id, present: true });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer", purpose.id]),
-    );
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([purpose.id]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
 
     try {
       await field.progress(journey.id, {
@@ -846,32 +880,37 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     );
     expect(avoided.id).toBe("consent.dnc");
 
-    await field.openApproved(kind.id);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    const rec = await field.createApprovedRecord(home.recordKinds[0]?.id ?? "record", "Subject");
+    await field.openApproved(kind.id, rec.id);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
 
     const avoidCardId = await field.requestFactCard(avoided.id);
     expect(avoidCardId).toMatch(/^card_/);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(existsSync(paths.factsFile)).toBe(true);
-    expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([{ id: "journey.buyer" }]);
+    expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([
+      { id: "journey.buyer", recordId: rec.id },
+    ]);
 
     const recordedAvoid = await field.approve(avoidCardId);
     expect(recordedAvoid.fact).toEqual({ id: avoided.id, present: true });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer", avoided.id]),
-    );
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([avoided.id]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
 
     const retractId = await field.requestFactCard(avoided.id, "retract");
     const retracted = await field.approve(retractId);
     expect(retracted.fact).toEqual({ id: avoided.id, present: false });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
 
     const purpose = field.communicateRequiresPurpose(home);
     await field.recordApprovedFact(purpose.id);
-    const journey = await field.start(kind.id, `Work this ${kind.label} journey`);
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`, rec.id);
 
     try {
       await field.progress(journey.id, {
@@ -930,9 +969,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     });
     const restored = await field.approve(restoreId);
     expect(restored.fact).toEqual({ id: avoided.id, present: false });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer", purpose.id]),
-    );
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([purpose.id]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
 
     try {
@@ -1010,20 +1048,25 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       [recA.id, recB.id].sort(),
     );
 
-    await field.openApproved(kind.id);
+    await field.openApproved(kind.id, recB.id);
     await field.recordApprovedFact(purpose.id, recA.id);
     await field.recordApprovedFact(avoided.id, recA.id);
     await field.recordApprovedFact(purpose.id, recB.id);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     expect(new FactBook(dir).presentIds(tenantId, recA.id)).toEqual(
       expect.arrayContaining([purpose.id, avoided.id]),
     );
-    expect(new FactBook(dir).presentIds(tenantId, recB.id)).toEqual([purpose.id]);
+    expect(new FactBook(dir).presentIds(tenantId, recA.id)).not.toContain("journey.buyer");
+    expect(new FactBook(dir).presentIds(tenantId, recB.id)).toEqual(
+      expect.arrayContaining(["journey.buyer", purpose.id]),
+    );
     expect(new FactBook(dir).presentIds(tenantId, recB.id)).not.toContain(avoided.id);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(purpose.id);
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
 
-    const journey = await field.start(kind.id, `Work this ${kind.label} journey`);
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`, recB.id);
+    expect(journey.recordId).toBe(recB.id);
     await expect(
       field.progress(journey.id, {
         actionClass: "communicate",
@@ -1057,6 +1100,60 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       code: "SURFACE_VIOLATION",
     });
     await expect(architect.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+  });
+
+  it("opens a journey on A and does not satisfy start about B", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-journey-subject-scope-"));
+    const { field, architect, tenantId, pack } = await liveField("open-a-start-b", dir);
+    const paths = computerRoot(dir, tenantId);
+    const kind = pack.binding.journeyKinds[0];
+    const type = (await field.home()).recordKinds[0];
+    const recA = await field.createApprovedRecord(type.id, "A");
+    const recB = await field.createApprovedRecord(type.id, "B");
+
+    const unapproved = await field.open(kind.id, recA.id);
+    expect(unapproved).toMatch(/^card_/);
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, recA.id)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, recB.id)).toEqual([]);
+
+    const opened = await field.approve(unapproved);
+    expect(opened.fact).toEqual({
+      id: field.journeyFactId(kind.id),
+      present: true,
+      recordId: recA.id,
+    });
+    expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([
+      { id: "journey.buyer", recordId: recA.id },
+    ]);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, recA.id)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId, recB.id)).toEqual([]);
+
+    const startedA = await field.start(kind.id, `Work this ${kind.label} journey`, recA.id);
+    expect(startedA.journeyKind).toBe(kind.id);
+    expect(startedA.status).toBe("open");
+    expect(startedA.recordId).toBe(recA.id);
+
+    await expect(
+      field.start(kind.id, `Work this ${kind.label} journey`, recB.id),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/REQUIRES missing/),
+    });
+
+    await expect(architect.open(kind.id, recA.id)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    await expect(
+      architect.start(kind.id, `Work this ${kind.label} journey`, recA.id),
+    ).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });

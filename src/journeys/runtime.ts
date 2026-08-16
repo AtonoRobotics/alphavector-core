@@ -12,8 +12,8 @@ import type { Journey } from "../data/types.js";
 export class JourneyRuntime {
   constructor(private readonly store: DurableStore) {}
 
-  open(tenantId: string, journeyKind: string, objective: string): Journey {
-    return this.store.createJourney(tenantId, journeyKind, objective);
+  open(tenantId: string, journeyKind: string, objective: string, recordId?: string): Journey {
+    return this.store.createJourney(tenantId, journeyKind, objective, recordId);
   }
 
   progress(id: string): Journey {

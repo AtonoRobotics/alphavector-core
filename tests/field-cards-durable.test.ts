@@ -10,7 +10,7 @@ import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
-import { ALPHAVECTOR_RE_PIN_SHA, signedRePack } from "./helpers.js";
+import { ALPHAVECTOR_RE_PIN_SHA, createOpenStart, signedRePack } from "./helpers.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
@@ -58,15 +58,14 @@ async function liveDurable(
 }
 
 async function issueFollowUpCard(field: FieldClient): Promise<{ journeyId: string; cardId: string }> {
-  await field.recordApprovedFact("journey.buyer");
-  await field.recordApprovedFact("purpose.follow-up");
-  const journey = await field.start("buyer", "Work this buyer journey");
+  const { journey, record } = await createOpenStart(field, "buyer", "Work this buyer journey");
+  await field.recordApprovedFact("purpose.follow-up", record.id);
   try {
     await field.progress(journey.id, {
       actionClass: "communicate",
       channel: "email",
       purpose: "follow-up",
-      subject: "buyer",
+      subject: record.id,
     });
     throw new Error("expected authorization card before execute");
   } catch (err) {

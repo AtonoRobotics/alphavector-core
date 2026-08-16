@@ -143,6 +143,7 @@ export class FieldHttpServer {
         pack,
         journeyKind: String(body.journeyKind ?? ""),
         objective: String(body.objective ?? ""),
+        recordId: body.recordId ? String(body.recordId) : undefined,
         // Claims only — never a write to the tenant fact store.
         conditions: Array.isArray(body.conditions) ? body.conditions.map(String) : undefined,
       });
