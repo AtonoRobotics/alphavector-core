@@ -17,6 +17,29 @@ const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const REQUIRED = "condition.required";
 const servers: FieldHttpServer[] = [];
 
+/** Unique purpose.* from pack REQUIRES/PREFERS. Does not read AVOIDS. */
+function collectPurposeFactIds(binding: PackBinding): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const take = (values: string[] | undefined) => {
+    for (const id of values ?? []) {
+      if (id.startsWith("purpose.") && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  };
+  for (const verb of binding.actionClassVerbs) {
+    take(verb.REQUIRES);
+    take(verb.PREFERS);
+  }
+  for (const kind of binding.journeyKinds) {
+    take(kind.REQUIRES);
+    take(kind.PREFERS);
+  }
+  return ids;
+}
+
 afterEach(async () => {
   while (servers.length) {
     await servers.pop()?.close();
@@ -113,6 +136,15 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(home.journeys.map((j) => j.kind)).toContain("buyer");
     expect(home.architectControls).toEqual([]);
     expect(home.journeyKinds.map((k) => k.id)).toEqual(pack.binding.journeyKinds.map((k) => k.id));
+    expect(home.purposeFacts.map((f) => f.id)).toEqual(
+      expect.arrayContaining([
+        "purpose.follow-up",
+        "purpose.showing",
+        "purpose.listing",
+        "purpose.transaction",
+      ]),
+    );
+    expect(home.purposeFacts).toHaveLength(4);
   });
 
   it("approves an owner card then executes", async () => {
@@ -246,6 +278,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/data-open=/);
     expect(html).toMatch(/>Open</);
     expect(html).toMatch(/"journey\." \+ t\.dataset\.open/);
+    expect(html).toMatch(/id="purpose-facts"/);
+    expect(html).toMatch(/home\.purposeFacts/);
+    expect(html).toMatch(/data-purpose=/);
+    expect(html).toMatch(/t\.dataset\.purpose/);
+    expect(html).not.toMatch(/purpose\.follow-up/);
+    expect(html).not.toMatch(/purpose\.showing|purpose\.listing|purpose\.transaction/);
     expect(html).not.toMatch(/journey\.buyer/);
     expect(html).not.toMatch(/k\.id === ["']buyer["']/);
     expect(html).not.toContain("Work this buyer journey");
@@ -260,9 +298,33 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).not.toMatch(/architectControls|pick a model|edit prompt|inspect temporal|configure tool/i);
     expect(html).not.toMatch(/Desk|Shape|Director|Play|Plant|HIL|Thor|Mission Control/);
 
+    const clientSrc = await readFile(path.join(REPO_ROOT, "src/http/field-client.ts"), "utf8");
+    expect(clientSrc).not.toMatch(/purpose\.follow-up/);
+    expect(clientSrc).toMatch(/home\.purposeFacts/);
+    expect(clientSrc).toMatch(/recordApprovedFact\(purpose\.id\)/);
+
     const home = await field.home();
     expect(home.journeyKinds.map((k) => k.id)).toEqual(pack.binding.journeyKinds.map((k) => k.id));
     expect(home.journeyKinds.every((k) => k.id && k.label)).toBe(true);
+    expect(home.purposeFacts.map((f) => f.id).sort()).toEqual(
+      collectPurposeFactIds(pack.binding).sort(),
+    );
+    expect(home.purposeFacts.map((f) => f.id)).toEqual(
+      expect.arrayContaining([
+        "purpose.follow-up",
+        "purpose.showing",
+        "purpose.listing",
+        "purpose.transaction",
+      ]),
+    );
+    expect(home.purposeFacts.every((f) => f.id && f.label)).toBe(true);
+    expect(home.purposeFacts.find((f) => f.id === "purpose.follow-up")?.label).toBe(
+      pack.binding.fieldLanguageMap["purpose.follow-up"],
+    );
+    const communicateRequires = pack.binding.actionClassVerbs.find((v) => v.id === "communicate")
+      ?.REQUIRES;
+    expect(communicateRequires?.some((id) => id.startsWith("purpose."))).toBe(true);
+    expect(home.purposeFacts[0]?.id).toBe(communicateRequires?.find((id) => id.startsWith("purpose.")));
 
     const done = await field.completeBuyerJourneyAndCard();
     expect(done.journey.journeyKind).toBe("buyer");
@@ -530,12 +592,16 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       code: "PREDICATE_CLOSED",
       message: expect.stringMatching(/REQUIRES missing/),
     });
-    await field.recordApprovedFact("purpose.follow-up");
+    const purposeHome = await field.home();
+    const purpose = field.communicateRequiresPurpose(purposeHome);
+    expect(purpose.id).toMatch(/^purpose\./);
+    expect(purposeHome.purposeFacts.map((f) => f.id)).toContain(purpose.id);
+    await field.recordApprovedFact(purpose.id);
     await expect(
       field.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
-        purpose: "follow-up",
+        purpose: purpose.id.slice("purpose.".length),
         subject: kind.id,
       }),
     ).rejects.toMatchObject({
@@ -544,6 +610,92 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     });
 
     await expect(architect.open(kind.id)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+  });
+
+  it("records a pack purpose fact from home and unblocks communicate after approve", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-purpose-list-"));
+    const { field, architect, tenantId, pack } = await liveField("purpose-list", dir);
+    const paths = computerRoot(dir, tenantId);
+    const kind = pack.binding.journeyKinds[0];
+    const home = await field.home();
+    expect(home.purposeFacts).toEqual(
+      pack.binding.actionClassVerbs
+        .flatMap((v) => [...(v.REQUIRES ?? []), ...(v.PREFERS ?? [])])
+        .concat(pack.binding.journeyKinds.flatMap((k) => [...(k.REQUIRES ?? []), ...(k.PREFERS ?? [])]))
+        .filter((id, i, all) => id.startsWith("purpose.") && all.indexOf(id) === i)
+        .map((id) => ({ id, label: pack.binding.fieldLanguageMap[id] ?? id })),
+    );
+    expect(home.purposeFacts.map((f) => f.id)).toEqual(
+      expect.arrayContaining([
+        "purpose.follow-up",
+        "purpose.showing",
+        "purpose.listing",
+        "purpose.transaction",
+      ]),
+    );
+    expect(home.purposeFacts.every((f) => f.id.startsWith("purpose."))).toBe(true);
+    expect(home.purposeFacts.map((f) => f.id).join(" ")).not.toMatch(/consent\./);
+    expect(JSON.stringify(home)).not.toMatch(/listing_id|person_id|household_id|buyer_id/i);
+    expect(JSON.stringify(home)).not.toMatch(/Desk|Shape|Director|Play|Plant|HIL|Thor/);
+
+    await field.openApproved(kind.id);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`);
+    const purpose = field.communicateRequiresPurpose(home);
+    expect(pack.binding.actionClassVerbs.find((v) => v.id === "communicate")?.REQUIRES).toContain(
+      purpose.id,
+    );
+
+    const cardId = await field.requestFactCard(purpose.id);
+    expect(cardId).toMatch(/^card_/);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(existsSync(paths.factsFile)).toBe(true);
+    expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([{ id: "journey.buyer" }]);
+
+    await expect(
+      field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: kind.id,
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/REQUIRES missing/),
+    });
+
+    const approved = await field.approve(cardId);
+    expect(approved.fact).toEqual({ id: purpose.id, present: true });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
+      expect.arrayContaining(["journey.buyer", purpose.id]),
+    );
+
+    try {
+      await field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: kind.id,
+      });
+      throw new Error("expected authorization card before execute");
+    } catch (err) {
+      expect(err).toMatchObject({ status: 409, code: "AUTHORIZATION_REQUIRED" });
+      if (!(err instanceof FieldHttpError) || !err.cardId) throw err;
+      const executed = await field.approve(err.cardId);
+      expect(executed.effect?.executed).toBe(true);
+    }
+
+    await expect(architect.record(purpose.id)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    await expect(architect.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });

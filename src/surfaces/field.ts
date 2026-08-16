@@ -8,7 +8,7 @@ import { FactBook } from "../facts/book.js";
 import type { GrantBook } from "../grants/store.js";
 import { JourneyRuntime } from "../journeys/runtime.js";
 import { evaluateDeclaredPredicates } from "../packs/predicates.js";
-import type { LoadedPack, PredicateDeclaration, PrincipalKind } from "../packs/types.js";
+import type { LoadedPack, PackBinding, PredicateDeclaration, PrincipalKind } from "../packs/types.js";
 import { AskSurface } from "./ask.js";
 import type {
   FieldAskInput,
@@ -23,6 +23,39 @@ import type {
 /** Field fact write/retract. Not a pack action class and not an RE type. */
 const FACT_CHANNEL = "facts";
 const FACT_AGENT = "field";
+const PURPOSE_PREFIX = "purpose.";
+
+function isPurposeFactId(id: string): boolean {
+  return id.startsWith(PURPOSE_PREFIX) && id.length > PURPOSE_PREFIX.length;
+}
+
+/**
+ * Unique purpose.* ids from loaded pack bindings (REQUIRES and PREFERS only).
+ * AVOIDS are not collected. Does not invent ids. Label from fieldLanguageMap, else id.
+ */
+export function purposeFactsFromBinding(binding: PackBinding): Array<{ id: string; label: string }> {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const take = (values: readonly string[] | undefined) => {
+    for (const id of values ?? []) {
+      if (typeof id === "string" && isPurposeFactId(id) && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  };
+  // Action verbs first so communicate REQUIRES purpose is on the list for the field path.
+  for (const verb of binding.actionClassVerbs) {
+    take(verb.REQUIRES);
+    take(verb.PREFERS);
+  }
+  for (const kind of binding.journeyKinds) {
+    take(kind.REQUIRES);
+    take(kind.PREFERS);
+  }
+  const map = binding.fieldLanguageMap;
+  return ids.map((id) => ({ id, label: map[id] ?? id }));
+}
 
 const FORBIDDEN_FIELD = [
   "model",
@@ -59,6 +92,7 @@ export class FieldSurface {
       journeyKinds: pack
         ? pack.binding.journeyKinds.map((k) => ({ id: k.id, label: k.label }))
         : [],
+      purposeFacts: pack ? purposeFactsFromBinding(pack.binding) : [],
     };
   }
 
