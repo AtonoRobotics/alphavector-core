@@ -19,12 +19,12 @@ export function requireArchitect(
   if (principal === "architect") return;
   if (principal === "field") {
     throw new SurfaceViolationError(
-      "A field token cannot sit in the habitat or bind, see, or edit the adapter, provider credentials, routines, mail, deadlines, connectors, skills, or promote a proposal",
+      "A field token cannot sit in the habitat or bind, see, or edit the adapter, provider credentials, routines, mail, deadlines, connectors, skills, brokerage, or promote a proposal",
     );
   }
   if (principal) {
     throw new SurfaceViolationError(
-      "Only an Architect credential may sit in the habitat or write adapter bind, provider credentials, routines, mail, deadlines, connectors, skills, or promote a proposal",
+      "Only an Architect credential may sit in the habitat or write adapter bind, provider credentials, routines, mail, deadlines, connectors, skills, brokerage, or promote a proposal",
     );
   }
   throw new AvError("UNAUTHORIZED", "Unknown or revoked Architect credential");

@@ -26,7 +26,7 @@ const CORS = {
 } as const;
 
 const CONFIG_PATH =
-  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking/i;
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage/i;
 
 type PendingProgress = PendingProgressRecord;
 

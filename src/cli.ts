@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { architectBindAdapter } from "./auth/architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "./auth/architect-adapter-credentials.js";
+import { architectWriteBrokerage } from "./auth/architect-brokerage.js";
 import { architectBindConnector, architectWriteConnectorCredentials } from "./auth/architect-connectors.js";
 import { architectWriteDeadline } from "./auth/architect-deadlines.js";
 import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
@@ -87,7 +88,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill | promote-proposal",
+        "Architect (off the field home screen). Commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-brokerage | bind-deadline | deliver-mail | write-skill | promote-proposal",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -106,6 +107,9 @@ async function main(): Promise<void> {
       );
       console.log(
         "set-connector-credentials writes tenants/{id}/connector-credentials.json. Not on the bind. Field cannot set credentials.",
+      );
+      console.log(
+        "bind-brokerage writes tenants/{id}/brokerage.json from counsel-signed rules. Field cannot bind, see, or edit. Not pack schema.",
       );
       console.log(
         "bind-deadline writes tenants/{id}/deadlines.json. Field cannot author, see, or edit. Temporal is not the bus.",
@@ -254,6 +258,34 @@ async function main(): Promise<void> {
       );
       return;
     }
+    if (sub === "bind-brokerage") {
+      const rulesFile = flag(flags, "--rules-file");
+      const counselSignature = flag(flags, "--counsel-signature");
+      if (!rulesFile || !counselSignature) {
+        throw new Error("architect bind-brokerage requires --rules-file and --counsel-signature");
+      }
+      const rules = JSON.parse(await readFile(rulesFile, "utf8")) as unknown;
+      const bound = architectWriteBrokerage({
+        tenantId,
+        rules,
+        counselSignature,
+        computerBaseDir: dir,
+        architectToken,
+        anchors: resolveProductTrustAnchors(),
+      });
+      console.log(
+        JSON.stringify(
+          {
+            ok: true,
+            tenantId: bound.tenantId,
+            boundBy: bound.boundBy,
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     if (sub === "bind-deadline") {
       const deadlineId = flag(flags, "--deadline-id");
       const dueAt = flag(flags, "--due-at");
@@ -368,7 +400,7 @@ async function main(): Promise<void> {
       return;
     }
     throw new Error(
-      "architect commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill | promote-proposal",
+      "architect commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-brokerage | bind-deadline | deliver-mail | write-skill | promote-proposal",
     );
   }
   if (cmd === "field-serve") {
