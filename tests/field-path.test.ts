@@ -207,7 +207,7 @@ describe("required field path against pinned alphavector-re", () => {
     const { pack, field, cards, agents, facts, records } = await reFieldStack();
     const rec = putSubject(records, pack);
     facts.put("t1", "journey.buyer", rec.id);
-    facts.put("t1", "purpose.follow-up");
+    facts.put("t1", "purpose.follow-up", rec.id);
     const journey = field.start({
       actor: "field",
       pack,
@@ -224,7 +224,7 @@ describe("required field path against pinned alphavector-re", () => {
       actionClass: "communicate",
       channel: "email",
       purpose: "follow-up",
-      subject: "buyer",
+      subject: rec.id,
     };
 
     let cardId = "";
@@ -263,7 +263,7 @@ describe("required field path against pinned alphavector-re", () => {
     const { pack, field, cards, agents, facts, records } = await reFieldStack();
     const rec = putSubject(records, pack);
     facts.put("t1", "journey.buyer", rec.id);
-    facts.put("t1", "purpose.follow-up");
+    facts.put("t1", "purpose.follow-up", rec.id);
     const journey = field.start({
       actor: "field",
       pack,
@@ -280,7 +280,7 @@ describe("required field path against pinned alphavector-re", () => {
       actionClass: "communicate",
       channel: "email",
       purpose: "follow-up",
-      subject: "buyer",
+      subject: rec.id,
     };
 
     let cardId = "";
@@ -489,9 +489,11 @@ describe("required field path against pinned alphavector-re", () => {
       purpose: "follow-up",
       subject: "buyer",
     };
-    expect(() => field.progress(effect)).toThrow(/REQUIRES missing/);
-    facts.put("t1", "purpose.follow-up");
-    expect(() => field.progress(effect)).toThrow(AuthorizationRequiredError);
+    expect(() => field.progress({ ...effect, subject: buyerRec.id })).toThrow(/REQUIRES missing/);
+    facts.put("t1", "purpose.follow-up", buyerRec.id);
+    expect(() => field.progress({ ...effect, subject: buyerRec.id })).toThrow(
+      AuthorizationRequiredError,
+    );
   });
 
   it("authored AVOIDS fail closed when consent.dnc is on disk", async () => {
@@ -682,13 +684,14 @@ describe("required field path against pinned alphavector-re", () => {
       true,
     );
 
-    facts.put("t1", PREFERRED);
+    facts.put("t1", PREFERRED, rec.id);
     const met = field.progress({
       actor: "field",
       pack,
       journeyId: journey.id,
       agent,
       actionClass: "read",
+      subject: rec.id,
       conditions: [PREFERRED],
     });
     expect(met.effect?.executed).toBe(true);
@@ -709,7 +712,7 @@ describe("required field path against pinned alphavector-re", () => {
     const write = { actor: "field" as const, pack, id: REQUIRED, recordId: rec.id };
 
     expect(() =>
-      field.record({ actor: "architect", pack, id: REQUIRED }),
+      field.record({ actor: "architect", pack, id: REQUIRED, recordId: rec.id }),
     ).toThrow(SurfaceViolationError);
 
     expect(() =>
@@ -808,9 +811,10 @@ describe("required field path against pinned alphavector-re", () => {
 
   it("keeps a denied fact write terminal and off disk", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-deny-"));
-    const { pack, field, cards } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const { pack, field, cards, records } = await reFieldStack(undefined, { computerBaseDir: dir });
     const paths = computerRoot(dir, "t1");
-    const write = { actor: "field" as const, pack, id: REQUIRED };
+    const rec = putSubject(records, pack);
+    const write = { actor: "field" as const, pack, id: REQUIRED, recordId: rec.id };
 
     let cardId = "";
     try {
@@ -1106,10 +1110,12 @@ describe("required field path against pinned alphavector-re", () => {
     const rec = putSubject(records, pack);
     const paths = computerRoot(dir, "t1");
 
-    expect(() => field.record({ actor: "field", pack, id: "journey.buyer" })).toThrow(AvError);
-    expect(() => field.record({ actor: "field", pack, id: "journey.buyer" })).toThrow(
-      /Record id is required/,
-    );
+    expect(() =>
+      field.record({ actor: "field", pack, id: "journey.buyer", recordId: "" }),
+    ).toThrow(AvError);
+    expect(() =>
+      field.record({ actor: "field", pack, id: "journey.buyer", recordId: "" }),
+    ).toThrow(/Record id is required/);
     expect(existsSync(paths.factsFile)).toBe(false);
     expect(new FactBook(dir).presentIds("t1")).toEqual([]);
 
@@ -1125,6 +1131,42 @@ describe("required field path against pinned alphavector-re", () => {
       expect(err).toBeInstanceOf(AuthorizationRequiredError);
     }
     expect(existsSync(paths.factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([]);
+  });
+
+  it("denies record and retract of purpose, AVOIDS, and generic facts without a known record", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-fact-record-required-"));
+    const { pack, field, records } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const rec = putSubject(records, pack);
+    const paths = computerRoot(dir, "t1");
+    const ids = ["purpose.follow-up", "consent.dnc", REQUIRED] as const;
+
+    for (const id of ids) {
+      for (const op of ["record", "retract"] as const) {
+        expect(() => field[op]({ actor: "field", pack, id, recordId: "" })).toThrow(AvError);
+        expect(() => field[op]({ actor: "field", pack, id, recordId: "" })).toThrow(
+          /Record id is required/,
+        );
+        expect(() => field[op]({ actor: "field", pack, id, recordId: "rec_unknown" })).toThrow(
+          AvError,
+        );
+        expect(() => field[op]({ actor: "field", pack, id, recordId: "rec_unknown" })).toThrow(
+          /Unknown record/,
+        );
+      }
+      expect(existsSync(paths.factsFile)).toBe(false);
+      expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+      expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([]);
+    }
+
+    try {
+      field.record({ actor: "field", pack, id: REQUIRED, recordId: rec.id });
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+    }
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
     expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([]);
   });
 

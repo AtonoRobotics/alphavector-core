@@ -55,14 +55,14 @@ export class FieldClient {
     return this.request<{ ok: true }>("POST", "/field/ask", { text, actionClass });
   }
 
-  /** Issues an owner_instance card. Persist happens only after approve. */
-  record(id: string, recordId?: string): Promise<{ id: string; present: boolean }> {
-    return this.request("POST", "/field/facts", recordId ? { id, recordId } : { id });
+  /** Issues an owner_instance card. Persist happens only after approve. Missing recordId fails closed. */
+  record(id: string, recordId: string): Promise<{ id: string; present: boolean }> {
+    return this.request("POST", "/field/facts", { id, recordId });
   }
 
-  /** Issues an owner_instance card. Retract happens only after approve. */
-  retract(id: string, recordId?: string): Promise<{ id: string; present: boolean }> {
-    return this.request("POST", "/field/facts/retract", recordId ? { id, recordId } : { id });
+  /** Issues an owner_instance card. Retract happens only after approve. Missing recordId fails closed. */
+  retract(id: string, recordId: string): Promise<{ id: string; present: boolean }> {
+    return this.request("POST", "/field/facts/retract", { id, recordId });
   }
 
   /** Issues an owner_instance card. Persist happens only after approve. */
@@ -77,7 +77,7 @@ export class FieldClient {
   async requestFactCard(
     id: string,
     op: "record" | "retract" = "record",
-    recordId?: string,
+    recordId: string,
   ): Promise<string> {
     try {
       if (op === "record") await this.record(id, recordId);
@@ -123,18 +123,21 @@ export class FieldClient {
   /**
    * Same routes the Linux page uses: record → card → approve → retract → card → approve.
    */
-  async completeFactRecordAndRetract(id: string): Promise<{
+  async completeFactRecordAndRetract(
+    id: string,
+    recordId: string,
+  ): Promise<{
     recordCardId: string;
     retractCardId: string;
     recorded: NonNullable<FieldApproveResult["fact"]>;
     retracted: NonNullable<FieldApproveResult["fact"]>;
   }> {
-    const recordCardId = await this.requestFactCard(id, "record");
+    const recordCardId = await this.requestFactCard(id, "record", recordId);
     const recorded = await this.approve(recordCardId);
     if (!recorded.fact?.present) {
       throw new Error("fact record approve did not persist");
     }
-    const retractCardId = await this.requestFactCard(id, "retract");
+    const retractCardId = await this.requestFactCard(id, "retract", recordId);
     const retracted = await this.approve(retractCardId);
     if (!retracted.fact || retracted.fact.present) {
       throw new Error("fact retract approve did not remove");
@@ -148,7 +151,7 @@ export class FieldClient {
    */
   async recordApprovedFact(
     id: string,
-    recordId?: string,
+    recordId: string,
   ): Promise<NonNullable<FieldApproveResult["fact"]>> {
     const cardId = await this.requestFactCard(id, "record", recordId);
     const approved = await this.approve(cardId);

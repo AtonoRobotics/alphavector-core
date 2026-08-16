@@ -183,7 +183,7 @@ export class FieldHttpServer {
         actor,
         pack,
         id: String(body.id ?? ""),
-        recordId: body.recordId ? String(body.recordId) : undefined,
+        recordId: body.recordId ? String(body.recordId) : "",
       });
       return;
     }
@@ -194,7 +194,7 @@ export class FieldHttpServer {
         actor,
         pack,
         id: String(body.id ?? ""),
-        recordId: body.recordId ? String(body.recordId) : undefined,
+        recordId: body.recordId ? String(body.recordId) : "",
       });
       return;
     }
