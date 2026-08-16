@@ -126,7 +126,8 @@ function resolveBoundConnector(
     const found = findStoredConnectorBind({ connectors: tenantRows }, input.tenantId, declared.id);
     if (found) return found;
   }
-  return tenantRows[0];
+  // No channel or pack-declared id match. Do not invent a default world.
+  return undefined;
 }
 
 function readConnectorSecret(
