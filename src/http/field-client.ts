@@ -28,12 +28,8 @@ export class FieldClient {
     return this.request<FieldHome>("GET", "/field/home");
   }
 
-  start(journeyKind: string, objective: string, recordId?: string): Promise<Journey> {
-    return this.request<Journey>(
-      "POST",
-      "/field/journeys",
-      recordId ? { journeyKind, objective, recordId } : { journeyKind, objective },
-    );
+  start(journeyKind: string, objective: string, recordId: string): Promise<Journey> {
+    return this.request<Journey>("POST", "/field/journeys", { journeyKind, objective, recordId });
   }
 
   progress(journeyId: string, body: FieldProgressBody = {}): Promise<FieldProgressResult> {
@@ -166,16 +162,16 @@ export class FieldClient {
    * Field action on a pack journey kind. Issues an owner_instance card for
    * `journey.{kindId}` via POST /field/facts with the subject recordId.
    * Persist happens only after approve. Does not start the journey and does
-   * not record purpose/PREFERS/AVOIDS facts.
+   * not record purpose/PREFERS/AVOIDS facts. Missing recordId fails closed.
    */
-  open(kindId: string, recordId?: string): Promise<string> {
+  open(kindId: string, recordId: string): Promise<string> {
     return this.requestFactCard(this.journeyFactId(kindId), "record", recordId);
   }
 
   /** Same Open path the Linux page uses, then approve. For tests/demo only. */
   openApproved(
     kindId: string,
-    recordId?: string,
+    recordId: string,
   ): Promise<NonNullable<FieldApproveResult["fact"]>> {
     return this.recordApprovedFact(this.journeyFactId(kindId), recordId);
   }

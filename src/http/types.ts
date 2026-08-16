@@ -26,7 +26,7 @@ export interface FieldAskBody {
 export interface FieldStartBody {
   journeyKind: string;
   objective: string;
-  /** Subject record this journey is about. Absent = tenant-global facts. */
+  /** Subject record this journey is about. Missing fails closed. */
   recordId?: string;
   /** Claims only. Does not write the tenant fact store. */
   conditions?: string[];

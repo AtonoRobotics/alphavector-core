@@ -27,9 +27,15 @@ const FACT_CHANNEL = "facts";
 const RECORD_CHANNEL = "records";
 const FACT_AGENT = "field";
 const PURPOSE_PREFIX = "purpose.";
+const JOURNEY_PREFIX = "journey.";
 
 function isPurposeFactId(id: string): boolean {
   return id.startsWith(PURPOSE_PREFIX) && id.length > PURPOSE_PREFIX.length;
+}
+
+/** Generic journey.{kind} slot from a pack kind id. Not an RE column. */
+function isJourneyFactId(id: string): boolean {
+  return id.startsWith(JOURNEY_PREFIX) && id.length > JOURNEY_PREFIX.length;
 }
 
 /**
@@ -179,6 +185,8 @@ export class FieldSurface {
   /**
    * Required field path. Architect cannot start journeys here.
    * journeyKind must already be bound on the architect-loaded pack.
+   * recordId is required. Missing or unknown fails closed. Journey
+   * REQUIRES/AVOIDS eval uses that record's present set only.
    */
   start(input: FieldStartInput): Journey {
     this.assertActorIsField(input.actor);
@@ -380,7 +388,9 @@ export class FieldSurface {
       throw new AvError("FACT_ID_REQUIRED", "Fact id is required");
     }
     this.assertFieldSafe(input.id);
-    this.assertKnownRecord(input.pack.tenantId, input.recordId);
+    if (isJourneyFactId(input.id) || input.recordId) {
+      this.assertKnownRecord(input.pack.tenantId, input.recordId);
+    }
     if (this.cards.wasDenied(input.pack.tenantId, FACT_AGENT, op, input.id, FACT_CHANNEL)) {
       throw new AvError(
         "DENY_IS_TERMINAL",
@@ -458,8 +468,10 @@ export class FieldSurface {
     return this.facts.presentIds(tenantId);
   }
 
-  private assertKnownRecord(tenantId: string, recordId?: string): string | undefined {
-    if (!recordId) return undefined;
+  private assertKnownRecord(tenantId: string, recordId?: string): string {
+    if (!recordId) {
+      throw new AvError("RECORD_ID_REQUIRED", "Record id is required");
+    }
     this.assertFieldSafe(recordId);
     if (!this.records.has(tenantId, recordId)) {
       throw new AvError("RECORD_NOT_FOUND", `Unknown record ${recordId}`);
