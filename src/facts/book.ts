@@ -86,7 +86,9 @@ export class FactBook {
       const store = loadFactStore(this.fileFor(tenantId));
       const scoped = new Map<string, Set<string>>();
       for (const fact of store.facts) {
-        if (!fact.recordId) continue;
+        if (!fact.id || !fact.recordId) {
+          throw new AvError("FACT_STORE_CORRUPT", "Fact store is corrupt; refusing to invent a fact");
+        }
         const set = scoped.get(fact.recordId) ?? new Set<string>();
         set.add(fact.id);
         scoped.set(fact.recordId, set);

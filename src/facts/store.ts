@@ -5,7 +5,8 @@ import type { TenantFact, TenantFactStore } from "./types.js";
 
 /**
  * Load the tenant fact file. Missing file → empty store (no invented fact).
- * Corrupt or incomplete JSON → refuse. Do not reconstruct a fact from guesswork.
+ * Corrupt or incomplete JSON (including a row without id or recordId) → refuse.
+ * Do not reconstruct a fact from guesswork. Do not skip an unscoped row.
  */
 export function loadFactStore(file: string): TenantFactStore {
   let raw: unknown;
@@ -31,13 +32,16 @@ function parseStore(raw: unknown): TenantFactStore {
 }
 
 function parseFact(raw: unknown): TenantFact {
-  if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id) {
+  if (
+    !isRecord(raw) ||
+    typeof raw.id !== "string" ||
+    !raw.id ||
+    typeof raw.recordId !== "string" ||
+    !raw.recordId
+  ) {
     throw new AvError("FACT_STORE_CORRUPT", "Fact store is corrupt; refusing to invent a fact");
   }
-  if (raw.recordId !== undefined && (typeof raw.recordId !== "string" || !raw.recordId)) {
-    throw new AvError("FACT_STORE_CORRUPT", "Fact store is corrupt; refusing to invent a fact");
-  }
-  return raw.recordId ? { id: raw.id, recordId: raw.recordId } : { id: raw.id };
+  return { id: raw.id, recordId: raw.recordId };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
