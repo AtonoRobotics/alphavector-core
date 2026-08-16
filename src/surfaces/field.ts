@@ -444,6 +444,9 @@ export class FieldSurface {
     }
     if (card.channel === RECORD_CHANNEL && card.actionClass === "delete") {
       const recordId = this.assertKnownRecord(card.tenantId, card.purpose);
+      for (const factId of this.facts.presentIds(card.tenantId, recordId)) {
+        this.facts.retract(card.tenantId, factId, recordId);
+      }
       this.records.remove(card.tenantId, recordId);
       return { id: recordId, present: false };
     }
