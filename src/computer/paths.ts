@@ -34,6 +34,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     adapterCredentialsFile: path.join(root, "adapter-credentials.json"),
     // Architect- or pack-written routines. Same class as adapter-bind: not field UI, not on disk/.
     routinesFile: path.join(root, "routines.json"),
+    // Habitat inter-agent mail. Same class as routines / adapter-bind: not field UI, not on disk/.
+    mailFile: path.join(root, "mail.json"),
   };
 }
 

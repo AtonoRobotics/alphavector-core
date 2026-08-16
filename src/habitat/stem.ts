@@ -13,6 +13,7 @@ export function stem(event: WakeEvent): StemDecision {
     case "field_start":
     case "field_ask":
     case "routine":
+    case "mail":
       return { wakeOrchestrator: true, wakeOps: false };
     case "worker_done":
       return { wakeOrchestrator: true, wakeOps: true };
