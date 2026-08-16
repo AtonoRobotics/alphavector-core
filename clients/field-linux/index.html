@@ -141,6 +141,16 @@
       statusEl.className = err ? "err" : "";
     }
 
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>"']/g, (ch) => {
+        if (ch === "&") return "&amp;";
+        if (ch === "<") return "&lt;";
+        if (ch === ">") return "&gt;";
+        if (ch === '"') return "&quot;";
+        return "&#39;";
+      });
+    }
+
     function renderList(id, rows, html) {
       const el = document.getElementById(id);
       el.innerHTML = rows.length ? rows.map(html).join("") : "<li class='meta'>None</li>";
@@ -155,8 +165,8 @@
       const kind = document.getElementById("kind");
       const objective = document.getElementById("objective");
       renderList("journey-kinds", home.journeyKinds, (k) =>
-        `<li><strong>${k.label}</strong><div class="meta">${k.id}</div>
-         <button type="button" data-open="${k.id}">Open</button></li>`
+        `<li><strong>${escapeHtml(k.label)}</strong><div class="meta">${escapeHtml(k.id)}</div>
+         <button type="button" data-open="${escapeHtml(k.id)}">Open</button></li>`
       );
       const typeSelect = document.getElementById("record-type");
       if (!typeSelect.options.length) {
@@ -174,9 +184,9 @@
         selectedRecordId = home.records[0] ? home.records[0].id : "";
       }
       renderList("records", home.records, (r) =>
-        `<li><strong>${r.label}</strong><div class="meta">${r.type} · ${r.id}</div>
-         <div class="meta">${attributePairs(r.attributes)}</div>
-         <button type="button" data-select-record="${r.id}">${r.id === selectedRecordId ? "Selected" : "Select"}</button></li>`
+        `<li><strong>${escapeHtml(r.label)}</strong><div class="meta">${escapeHtml(r.type)} · ${escapeHtml(r.id)}</div>
+         <div class="meta">${escapeHtml(attributePairs(r.attributes))}</div>
+         <button type="button" data-select-record="${escapeHtml(r.id)}">${escapeHtml(r.id === selectedRecordId ? "Selected" : "Select")}</button></li>`
       );
       const selected = home.records.find((r) => r.id === selectedRecordId);
       const attrRows = selected
@@ -186,17 +196,17 @@
           }))
         : [];
       renderList("record-attributes", attrRows, (a) =>
-        `<li><strong>${a.key}</strong><div class="meta">${a.value}</div>
-         <button type="button" class="secondary" data-attr-retract="${a.key}">Retract</button></li>`
+        `<li><strong>${escapeHtml(a.key)}</strong><div class="meta">${escapeHtml(a.value)}</div>
+         <button type="button" class="secondary" data-attr-retract="${escapeHtml(a.key)}">Retract</button></li>`
       );
       renderList("purpose-facts", home.purposeFacts, (p) =>
-        `<li><strong>${p.label}</strong><div class="meta">${p.id}</div>
-         <button type="button" data-purpose="${p.id}">Record</button></li>`
+        `<li><strong>${escapeHtml(p.label)}</strong><div class="meta">${escapeHtml(p.id)}</div>
+         <button type="button" data-purpose="${escapeHtml(p.id)}">Record</button></li>`
       );
       renderList("avoid-facts", home.avoidFacts, (a) =>
-        `<li><strong>${a.label}</strong><div class="meta">${a.id}</div>
-         <button type="button" data-avoid="${a.id}">Record</button>
-         <button type="button" class="secondary" data-avoid-retract="${a.id}">Retract</button></li>`
+        `<li><strong>${escapeHtml(a.label)}</strong><div class="meta">${escapeHtml(a.id)}</div>
+         <button type="button" data-avoid="${escapeHtml(a.id)}">Record</button>
+         <button type="button" class="secondary" data-avoid-retract="${escapeHtml(a.id)}">Retract</button></li>`
       );
       if (!kind.options.length) {
         for (const k of home.journeyKinds) {
@@ -210,17 +220,17 @@
         }
       }
       renderList("journeys", home.journeys, (j) =>
-        `<li><strong>${j.kind}</strong> — ${j.objective}<div class="meta">${j.id}</div>
-         <button type="button" data-progress="${j.id}" data-kind="${j.kind}">Request follow-up</button></li>`
+        `<li><strong>${escapeHtml(j.kind)}</strong> — ${escapeHtml(j.objective)}<div class="meta">${escapeHtml(j.id)}</div>
+         <button type="button" data-progress="${escapeHtml(j.id)}" data-kind="${escapeHtml(j.kind)}">Request follow-up</button></li>`
       );
       renderList("cards", home.inbox, (c) =>
-        `<li><strong>${c.purpose}</strong> · ${c.subject} · ${c.channel}
-         <div class="meta">${c.cardId}</div>
-         <button type="button" data-approve="${c.cardId}">${c.approve}</button>
-         <button type="button" class="deny" data-deny="${c.cardId}">${c.deny}</button></li>`
+        `<li><strong>${escapeHtml(c.purpose)}</strong> · ${escapeHtml(c.subject)} · ${escapeHtml(c.channel)}
+         <div class="meta">${escapeHtml(c.cardId)}</div>
+         <button type="button" data-approve="${escapeHtml(c.cardId)}">${escapeHtml(c.approve)}</button>
+         <button type="button" class="deny" data-deny="${escapeHtml(c.cardId)}">${escapeHtml(c.deny)}</button></li>`
       );
       renderList("outbound", home.outboundLog, (o) =>
-        `<li>${o.summary}<div class="meta">${o.actionId}</div></li>`
+        `<li>${escapeHtml(o.summary)}<div class="meta">${escapeHtml(o.actionId)}</div></li>`
       );
     }
 
