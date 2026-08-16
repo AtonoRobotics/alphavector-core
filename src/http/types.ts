@@ -1,6 +1,7 @@
 import type { FieldCardView } from "../auth/types.js";
 import type { Journey } from "../data/types.js";
 import type {
+  ArchitectHabitatSeat,
   FieldFactResult,
   FieldHome,
   FieldProgressResult,
@@ -93,3 +94,4 @@ export interface FieldHttpErrorBody {
 
 export type FieldHomeResponse = FieldHome;
 export type FieldCardListResponse = { cards: FieldCardView[] };
+export type ArchitectHabitatResponse = ArchitectHabitatSeat;

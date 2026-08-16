@@ -206,6 +206,18 @@ export interface WorkerRecord {
   createdAt: string;
 }
 
+/**
+ * Trailer isolation as a record. Habitat isolation is trailer, not a boolean flag.
+ * Directory presence is not liveness — `live` is the booked pid.
+ */
+export interface HabitatIsolationRecord {
+  isolation: "trailer";
+  workerId?: string;
+  trailerPath?: string;
+  exists: boolean;
+  live: boolean;
+}
+
 export interface WakeResult {
   run?: RunRecord;
   wokeOrchestrator: boolean;
