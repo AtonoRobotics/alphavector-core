@@ -307,7 +307,15 @@ describe("field HTTP surface against pinned alphavector-re", () => {
   it("does not expose Architect, models, prompts, Temporal, or tools on field routes", async () => {
     const { url, tokens } = await liveField("closed");
     const headers = { authorization: `Bearer ${tokens.field}` };
-    for (const path of ["/field/models", "/field/prompts", "/field/temporal", "/field/tools"]) {
+    for (const path of [
+      "/field/models",
+      "/field/prompts",
+      "/field/temporal",
+      "/field/tools",
+      "/field/adapter-credentials",
+      "/field/credentials",
+      "/field/api-key",
+    ]) {
       const res = await fetch(`${url}${path}`, { headers });
       expect(res.status).toBe(403);
       const body = (await res.json()) as { message: string };

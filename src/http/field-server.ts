@@ -23,7 +23,7 @@ const CORS = {
   "access-control-allow-methods": "GET, POST, OPTIONS",
 } as const;
 
-const CONFIG_PATH = /model|prompt|temporal|tool|adapter-bind/i;
+const CONFIG_PATH = /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -434,7 +434,8 @@ export class FieldHttpServer {
                 err.code === "RUN_STORE_CORRUPT" ||
                 err.code === "WORKER_STORE_CORRUPT" ||
                 err.code === "MEMORY_STORE_CORRUPT" ||
-                err.code === "ADAPTER_BIND_CORRUPT"
+                err.code === "ADAPTER_BIND_CORRUPT" ||
+                err.code === "ADAPTER_CREDENTIALS_CORRUPT"
               ? 500
               : 400;
       this.json(res, status, { error: err.code, message: err.message });

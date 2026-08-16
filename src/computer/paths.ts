@@ -30,6 +30,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     trailersDir: path.join(root, "trailers"),
     // Architect adapter bind. Same reason as field-tokens: not field UI, not on agent disk/.
     adapterBindFile: path.join(root, "adapter-bind.json"),
+    // Provider credentials. Same class as field-tokens: not on bind, not on disk/, not a pack.
+    adapterCredentialsFile: path.join(root, "adapter-credentials.json"),
   };
 }
 

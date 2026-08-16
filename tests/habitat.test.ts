@@ -8,8 +8,10 @@ import { computerRoot } from "../src/computer/paths.js";
 import { EvalRunner } from "../src/eval/runner.js";
 import { AvError } from "../src/errors.js";
 import { architectBindAdapter } from "../src/auth/architect-adapter-bind.js";
+import { architectWriteAdapterCredentials } from "../src/auth/architect-adapter-credentials.js";
 import { architectIssueFieldToken } from "../src/auth/architect-field-token.js";
 import {
+  adapterThink,
   createDeepAgent,
   DeepAgentsAdapter,
   DryStemAdapter,
@@ -38,7 +40,46 @@ import {
 } from "./helpers.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
+const VENDOR_FIXTURE_KEY = "av-vcr-vendor-fixture-key";
 const servers: FieldHttpServer[] = [];
+
+function bindAdapter(input: {
+  tenantId: string;
+  computerBaseDir: string;
+  architectToken?: string;
+  modelId?: string;
+}): void {
+  architectBindAdapter({
+    tenantId: input.tenantId,
+    modelId: input.modelId ?? "ci-double",
+    computerBaseDir: input.computerBaseDir,
+    architectToken: input.architectToken,
+  });
+}
+
+function writeVendorCredentials(input: {
+  tenantId: string;
+  computerBaseDir: string;
+  architectToken?: string;
+  apiKey?: string;
+}): void {
+  architectWriteAdapterCredentials({
+    tenantId: input.tenantId,
+    apiKey: input.apiKey ?? VENDOR_FIXTURE_KEY,
+    computerBaseDir: input.computerBaseDir,
+    architectToken: input.architectToken,
+  });
+}
+
+function bindAndCredential(input: {
+  tenantId: string;
+  computerBaseDir: string;
+  architectToken?: string;
+  modelId?: string;
+}): void {
+  bindAdapter(input);
+  writeVendorCredentials(input);
+}
 
 /** Wait until the booked pid is gone (or a zombie). */
 function waitForPidDead(pid: number | undefined, ms = 2000): boolean {
@@ -1470,11 +1511,10 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
-  it("bound-model wake invokes the adapter think path without the field user setting a model", async () => {
+  it("bound + credentialed wake enters the recorded vendor think path, not adapterThink", async () => {
     const stack = await habitatThinkStack();
-    architectBindAdapter({
+    bindAndCredential({
       tenantId: stack.tenantId,
-      modelId: "ci-double",
       computerBaseDir: stack.computerBaseDir,
       architectToken: stack.architectToken,
     });
@@ -1482,14 +1522,23 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(paths.adapterBindFile).toBe(
       path.join(stack.computerBaseDir, "tenants", stack.tenantId, "adapter-bind.json"),
     );
+    expect(paths.adapterCredentialsFile).toBe(
+      path.join(stack.computerBaseDir, "tenants", stack.tenantId, "adapter-credentials.json"),
+    );
     expect(existsSync(paths.adapterBindFile)).toBe(true);
+    expect(existsSync(paths.adapterCredentialsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "adapter-bind.json"))).toBe(false);
+    expect(existsSync(path.join(paths.disk, "adapter-credentials.json"))).toBe(false);
     const raw = readFileSync(paths.adapterBindFile, "utf8");
     expect(raw).toMatch(/"modelId": "ci-double"/);
     expect(raw).toMatch(/"boundBy": "architect"/);
-    expect(raw).not.toMatch(/apiKey|secret|credential|password/);
+    expect(raw).not.toMatch(/apiKey|secret|credential|password|av-vcr/);
+    const credsRaw = readFileSync(paths.adapterCredentialsFile, "utf8");
+    expect(credsRaw).toMatch(/"writtenBy": "architect"/);
+    expect(credsRaw).toContain(VENDOR_FIXTURE_KEY);
 
     expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
     const talking = stack.core.habitat.wake(
       {
         kind: "field_start",
@@ -1501,6 +1550,8 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       { until: "talking" },
     );
     expect(DeepAgentsAdapter.invocations).toBe(1);
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(1);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(talking.launchedWorker).toBe(false);
     expect(talking.talkingDidHeavyWork).toBe(false);
@@ -1515,6 +1566,8 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       recordId: stack.record.id,
     });
     expect(DeepAgentsAdapter.invocations).toBeGreaterThanOrEqual(2);
+    expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThanOrEqual(2);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(working.launchedWorker).toBe(true);
     expect(working.run?.workerType).toBe("coder");
@@ -1524,10 +1577,17 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
 
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(kernelSrc).not.toMatch(/createDeepAgent\s*\(/);
+    const workerSrc = readFileSync(path.join(process.cwd(), "src/habitat/worker.ts"), "utf8");
+    expect(workerSrc).not.toMatch(/createDeepAgent\s*\(/);
     const adapterSrc = readFileSync(path.join(process.cwd(), "src/habitat/deep-agents.ts"), "utf8");
     expect(adapterSrc).not.toMatch(/dryThink/);
     expect(adapterSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(adapterSrc).not.toMatch(/thinkFn \?\? adapterThink/);
+    expect(adapterSrc).toMatch(/vendorThink/);
     expect(adapterSrc).toMatch(/adapterThink/);
+    const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
+    expect(vendorSrc).not.toMatch(/adapterThink|dryThink/);
+    expect(vendorSrc).not.toMatch(/createDeepAgent\s*\(/);
   });
 
   it("unbound wake is ADAPTER_UNBOUND with no think, worker, or dry-stem stamp", async () => {
@@ -1627,21 +1687,23 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
   });
 
-  it("bootFieldCore with no adapter option and Architect bind invokes DeepAgentsAdapter think", async () => {
+  it("bootFieldCore with no adapter option and Architect bind + credentials invokes vendor think", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-bound-"));
     const { core, field, architectToken } = await liveProductField("t1", dir);
     expect(architectToken).toBeDefined();
-    architectBindAdapter({
+    bindAndCredential({
       tenantId: "t1",
-      modelId: "ci-double",
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
     expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
     const home = await field.home();
-    expect(JSON.stringify(home)).not.toMatch(/adapter-bind|modelId|allowList|ci-double|pickAgent/);
+    expect(JSON.stringify(home)).not.toMatch(/adapter-bind|modelId|allowList|ci-double|pickAgent|av-vcr|apiKey/);
     await createOpenStart(field, "buyer", "Work this buyer journey");
     expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(core.habitat.getRun("t1")?.runId).toMatch(/^run_/);
     expect(core.habitat.trailerExists("t1")).toBe(true);
@@ -1660,10 +1722,14 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
 
   it("HTTP start on a bound tenant holds a live coder pid", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-hold-"));
-    const { core, field, architectToken } = await liveProductField("t1", dir);
-    architectBindAdapter({
+    const { core, field, architectToken } = await liveField(
+      "t1",
+      dir,
+      undefined,
+      new DeepAgentsAdapter(adapterThink),
+    );
+    bindAdapter({
       tenantId: "t1",
-      modelId: "ci-double",
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
@@ -1688,10 +1754,14 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
 
   it("same-goal second HTTP start returns the existing worker and does not relaunch", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-follow-"));
-    const { core, field, architectToken, pack } = await liveProductField("t1", dir);
-    architectBindAdapter({
+    const { core, field, architectToken, pack } = await liveField(
+      "t1",
+      dir,
+      undefined,
+      new DeepAgentsAdapter(adapterThink),
+    );
+    bindAdapter({
       tenantId: "t1",
-      modelId: "ci-double",
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
@@ -1719,10 +1789,14 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
 
   it("HTTP kill after a held start tears the trailer down and clears the book", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-hold-kill-"));
-    const { core, field, architectToken } = await liveProductField("t1", dir);
-    architectBindAdapter({
+    const { core, field, architectToken } = await liveField(
+      "t1",
+      dir,
+      undefined,
+      new DeepAgentsAdapter(adapterThink),
+    );
+    bindAdapter({
       tenantId: "t1",
-      modelId: "ci-double",
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
@@ -1759,7 +1833,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(core.habitat.trailerExists("t1")).toBe(false);
   });
 
-  it("field-serve with no adapter option and Architect bind invokes DeepAgentsAdapter think", async () => {
+  it("field-serve with no adapter option and Architect bind + credentials invokes vendor think", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-serve-bound-"));
     const architect = architectIssueFieldToken({
       tenantId: "t1",
@@ -1772,9 +1846,8 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       computerBaseDir: dir,
       architectToken: architect.token,
     });
-    architectBindAdapter({
+    bindAndCredential({
       tenantId: "t1",
-      modelId: "ci-double",
       computerBaseDir: dir,
       architectToken: architect.token,
     });
@@ -1782,10 +1855,13 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     servers.push(started.server);
     const field = new FieldClient(started.url, issued.token);
     expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
     const home = await field.home();
-    expect(JSON.stringify(home)).not.toMatch(/adapter-bind|modelId|allowList|ci-double|pickAgent/);
+    expect(JSON.stringify(home)).not.toMatch(/adapter-bind|modelId|allowList|ci-double|pickAgent|av-vcr|apiKey/);
     await createOpenStart(field, "buyer", "Work this buyer journey");
     expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(true);
     expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(true);
@@ -1879,9 +1955,8 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const stack = await habitatThinkStack("t1", (unsigned) => {
       unsigned.adapter = { allowList: ["ci-double"], defaultModelId: "ci-double" };
     });
-    architectBindAdapter({
+    bindAndCredential({
       tenantId: stack.tenantId,
-      modelId: "ci-double",
       computerBaseDir: stack.computerBaseDir,
       architectToken: stack.architectToken,
     });
@@ -1893,6 +1968,8 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       recordId: stack.record.id,
     });
     expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(started.launchedWorker).toBe(true);
     expect(started.run?.workerType).toBe("coder");
@@ -1916,7 +1993,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
   });
 
-  it("field SHALL NOT bind, see, or edit the adapter", async () => {
+  it("field SHALL NOT bind, see, or edit the adapter or credentials", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-field-"));
     const { field, fieldToken, url } = await liveProductField("t1", dir);
     expect(() =>
@@ -1927,10 +2004,19 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
         architectToken: fieldToken,
       }),
     ).toThrow(/cannot bind|field token/i);
+    expect(() =>
+      architectWriteAdapterCredentials({
+        tenantId: "t1",
+        apiKey: VENDOR_FIXTURE_KEY,
+        computerBaseDir: dir,
+        architectToken: fieldToken,
+      }),
+    ).toThrow(/cannot bind|field token|credentials/i);
     expect(existsSync(computerRoot(dir, "t1").adapterBindFile)).toBe(false);
+    expect(existsSync(computerRoot(dir, "t1").adapterCredentialsFile)).toBe(false);
 
     const home = await field.home();
-    expect(JSON.stringify(home)).not.toMatch(/adapter-bind|modelId|allowList|pickAgent/);
+    expect(JSON.stringify(home)).not.toMatch(/adapter-bind|adapter-credentials|modelId|allowList|pickAgent|apiKey|av-vcr/);
 
     const blocked = await fetch(`${url}/field/adapter-bind`, {
       method: "POST",
@@ -1944,6 +2030,28 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const body = (await blocked.json()) as { error: string };
     expect(body.error).toBe("SURFACE_VIOLATION");
     expect(existsSync(computerRoot(dir, "t1").adapterBindFile)).toBe(false);
+
+    const credsBlocked = await fetch(`${url}/field/adapter-credentials`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ apiKey: VENDOR_FIXTURE_KEY }),
+    });
+    expect(credsBlocked.status).toBe(403);
+    expect(((await credsBlocked.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+    expect(existsSync(computerRoot(dir, "t1").adapterCredentialsFile)).toBe(false);
+
+    const modelBlocked = await fetch(`${url}/field/model`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ modelId: "ci-double" }),
+    });
+    expect(modelBlocked.status).toBe(403);
 
     const pick = await fetch(`${url}/field/pickAgent`, {
       method: "POST",
@@ -1959,10 +2067,155 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(fieldSrc).not.toMatch(/pickAgent/);
     expect(fieldSrc).toMatch(/\/field\/ask/);
     expect(fieldSrc).toMatch(/\/field\/kill/);
+    expect(fieldSrc).toMatch(/adapter-credentials|credential|api-?key/);
     const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/FieldAPI.swift"), "utf8");
     expect(ios).not.toMatch(/pickAgent/);
     expect(ios).toMatch(/func start/);
     expect(ios).toMatch(/func approve/);
     expect(ios).toMatch(/func ask/);
+  });
+
+  it("bound + missing credentials is ADAPTER_CREDENTIALS_MISSING with no think, worker, or dry-stem stamp", async () => {
+    const stack = await habitatThinkStack();
+    bindAdapter({
+      tenantId: stack.tenantId,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    const paths = computerRoot(stack.computerBaseDir, stack.tenantId);
+    expect(existsSync(paths.adapterBindFile)).toBe(true);
+    expect(existsSync(paths.adapterCredentialsFile)).toBe(false);
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(() =>
+      stack.core.habitat.wake({
+        kind: "field_start",
+        tenantId: stack.tenantId,
+        pack: stack.pack,
+        goal: "one goal",
+        recordId: stack.record.id,
+      }),
+    ).toThrow(AvError);
+    try {
+      stack.core.habitat.wake({
+        kind: "field_start",
+        tenantId: stack.tenantId,
+        pack: stack.pack,
+        goal: "one goal",
+        recordId: stack.record.id,
+      });
+      expect.fail("bound wake without credentials must fail closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect(err).toMatchObject({
+        code: "ADAPTER_CREDENTIALS_MISSING",
+        closed: true,
+        message: expect.stringMatching(/no CI mapper default/i),
+      });
+    }
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBeUndefined();
+    expect(DeepAgentsAdapter.lastModelId).toBeUndefined();
+    expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
+    expect(existsSync(paths.runsFile)).toBe(false);
+    expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
+    expect(stack.core.habitat.listWakes(stack.tenantId)).toEqual([]);
+  });
+
+  it("bootFieldCore with bind and no credentials is ADAPTER_CREDENTIALS_MISSING", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-nocreds-"));
+    const { core, field, architectToken } = await liveProductField("t1", dir);
+    bindAdapter({
+      tenantId: "t1",
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+    });
+    const rec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
+    await field.openApproved("buyer", rec.id);
+    await expect(field.start("buyer", "Work this buyer journey", rec.id)).rejects.toMatchObject({
+      status: 400,
+      code: "ADAPTER_CREDENTIALS_MISSING",
+    });
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(false);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+    expect(core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(core.habitat.trailerExists("t1")).toBe(false);
+  });
+
+  it("credentials stay off bind, pack, trailer, and wake-log", async () => {
+    const stack = await habitatThinkStack();
+    bindAndCredential({
+      tenantId: stack.tenantId,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    const working = stack.core.habitat.wake({
+      kind: "field_start",
+      tenantId: stack.tenantId,
+      pack: stack.pack,
+      goal: "one goal",
+      recordId: stack.record.id,
+    });
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
+    expect(working.cardId).toMatch(/^card_/);
+    const paths = computerRoot(stack.computerBaseDir, stack.tenantId);
+    const bindRaw = readFileSync(paths.adapterBindFile, "utf8");
+    expect(bindRaw).not.toContain(VENDOR_FIXTURE_KEY);
+    expect(bindRaw).not.toMatch(/apiKey|secret|password/);
+    const wakeRaw = readFileSync(paths.wakeLogFile, "utf8");
+    expect(wakeRaw).not.toContain(VENDOR_FIXTURE_KEY);
+    expect(wakeRaw).not.toMatch(/apiKey|adapter-credentials/);
+    const runsRaw = readFileSync(paths.runsFile, "utf8");
+    expect(runsRaw).not.toContain(VENDOR_FIXTURE_KEY);
+    const workersRaw = readFileSync(paths.workersFile, "utf8");
+    expect(workersRaw).not.toContain(VENDOR_FIXTURE_KEY);
+    const packRaw = readFileSync(path.join(process.cwd(), "fixtures/packs/alphavector-re/pack.json"), "utf8");
+    expect(packRaw).not.toContain(VENDOR_FIXTURE_KEY);
+    expect(packRaw).not.toMatch(/"apiKey"/);
+    const worker = stack.core.habitat.activeWorker(stack.tenantId);
+    expect(worker?.trailerPath).toBeDefined();
+    const trailerListing = readFileSync(path.join(worker!.trailerPath, "coder-exec.mjs"), "utf8");
+    expect(trailerListing).not.toContain(VENDOR_FIXTURE_KEY);
+    expect(JSON.stringify(working.memory)).not.toContain(VENDOR_FIXTURE_KEY);
+  });
+
+  it("explicit thinkFn is the CI double path, not the product default", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-think-double-"));
+    const { anchors, binding } = await signedGenericPack();
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: new DeepAgentsAdapter(adapterThink),
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    const architect = core.fieldTokens.issue({ tenantId: "t1", principal: "architect" });
+    bindAdapter({
+      tenantId: "t1",
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    expect(existsSync(computerRoot(computerBaseDir, "t1").adapterCredentialsFile)).toBe(false);
+    const started = core.habitat.wake({
+      kind: "field_start",
+      tenantId: "t1",
+      pack: loaded.loaded,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("double");
+    expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
+    expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
+    expect(started.launchedWorker).toBe(true);
+    expect(started.cardId).toMatch(/^card_/);
+    const product = new DeepAgentsAdapter();
+    expect(product.requiresCredentials).toBe(true);
+    expect(new DeepAgentsAdapter(adapterThink).requiresCredentials).toBe(false);
   });
 });

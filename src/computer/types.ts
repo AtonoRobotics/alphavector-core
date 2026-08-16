@@ -32,6 +32,11 @@ export interface ComputerPaths {
    * Beside the disk, never inside the bind-mounted /home, never a field file.
    */
   adapterBindFile: string;
+  /**
+   * Architect provider credentials. Same class as field-tokens / adapter-bind.
+   * Beside the disk, never inside the bind-mounted /home, never on adapter-bind.json.
+   */
+  adapterCredentialsFile: string;
 }
 
 export interface TenantComputer {

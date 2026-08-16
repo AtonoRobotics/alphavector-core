@@ -130,6 +130,14 @@ export interface AdapterBind {
   modelId: string;
 }
 
+/**
+ * Provider credentials resolved by the kernel from Architect-written
+ * adapter-credentials.json. Never persist on bind, pack, trailer, or wake-log.
+ */
+export interface AdapterCredentials {
+  apiKey: string;
+}
+
 export interface AdapterInput {
   pass: AdapterPass;
   event: WakeEvent;
@@ -138,6 +146,11 @@ export interface AdapterInput {
   skills: SkillFile[];
   /** Present only after Architect bind. Never a field or createDeepAgent option. */
   bind?: AdapterBind;
+  /**
+   * Present only after Architect writes provider credentials.
+   * Think uses this to authorize the vendor hop. Never log. Never copy to trailer.
+   */
+  credentials?: AdapterCredentials;
 }
 
 export interface CognitiveIntent {
@@ -155,6 +168,11 @@ export interface CognitiveAdapter {
   readonly owns: readonly string[];
   /** DeepAgentsAdapter requires an Architect bind. Dry-stem (eval) does not. */
   readonly requiresBind?: boolean;
+  /**
+   * Product DeepAgentsAdapter requires Architect-written provider credentials.
+   * An explicit CI thinkFn double does not.
+   */
+  readonly requiresCredentials?: boolean;
   think(input: AdapterInput): CognitiveIntent;
 }
 
