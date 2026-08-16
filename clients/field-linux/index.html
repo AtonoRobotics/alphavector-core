@@ -28,7 +28,7 @@
 <body>
   <main>
     <h1>AV Dev Field</h1>
-    <p class="lead">Required field path. Open a pack journey, record a pack purpose, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
+    <p class="lead">Required field path. Open a pack journey, record a pack purpose, record or retract a pack avoid, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
     <div id="status"></div>
 
     <section>
@@ -56,6 +56,11 @@
     <section>
       <h2>Purpose</h2>
       <ul id="purpose-facts"></ul>
+    </section>
+
+    <section>
+      <h2>Avoids</h2>
+      <ul id="avoid-facts"></ul>
     </section>
 
     <section>
@@ -136,6 +141,11 @@
       renderList("purpose-facts", home.purposeFacts, (p) =>
         `<li><strong>${p.label}</strong><div class="meta">${p.id}</div>
          <button type="button" data-purpose="${p.id}">Record</button></li>`
+      );
+      renderList("avoid-facts", home.avoidFacts, (a) =>
+        `<li><strong>${a.label}</strong><div class="meta">${a.id}</div>
+         <button type="button" data-avoid="${a.id}">Record</button>
+         <button type="button" class="secondary" data-avoid-retract="${a.id}">Retract</button></li>`
       );
       if (!kind.options.length) {
         for (const k of home.journeyKinds) {
@@ -245,6 +255,22 @@
         if (t.dataset.purpose) {
           try {
             await requestFactCard(t.dataset.purpose, "/field/facts");
+          } catch (err) {
+            setStatus(err.message, true);
+          }
+          return;
+        }
+        if (t.dataset.avoidRetract) {
+          try {
+            await requestFactCard(t.dataset.avoidRetract, "/field/facts/retract");
+          } catch (err) {
+            setStatus(err.message, true);
+          }
+          return;
+        }
+        if (t.dataset.avoid) {
+          try {
+            await requestFactCard(t.dataset.avoid, "/field/facts");
           } catch (err) {
             setStatus(err.message, true);
           }
