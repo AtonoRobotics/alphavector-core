@@ -1,4 +1,9 @@
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { PackLoadError } from "../src/errors.js";
+import { FilePackRegistry } from "../src/packs/file-registry.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { signPack } from "../src/packs/signing.js";
 import { loadGenericUnsigned, makeAnchors, signedGenericPack, signedGenericPackMutated } from "./helpers.js";
@@ -126,5 +131,79 @@ describe("pack load DEC-019", () => {
     const result = loader.load({ tenantId: "t1", binding: poisoned, actor: "architect" });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe("PACK_INVALID");
+  });
+});
+
+describe("pack read-back DEC-019", () => {
+  it("getActive and active refuse a disk record whose signature no longer matches", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-pack-readback-"));
+    const { anchors, binding } = await signedGenericPack();
+    const registry = new FilePackRegistry(dir);
+    const loader = new PackLoader(registry, anchors);
+    const loaded = loader.load({ tenantId: "t1", binding, actor: "architect" });
+    expect(loaded.ok).toBe(true);
+    expect(loader.active("t1").binding.identity.packId).toBe("av-fixture-generic");
+
+    const file = path.join(dir, "packs", "t1.json");
+    const onDisk = JSON.parse(await readFile(file, "utf8")) as {
+      binding: { identity: { displayName: string } };
+    };
+    onDisk.binding.identity.displayName = "mutated-after-load";
+    await writeFile(file, `${JSON.stringify(onDisk, null, 2)}\n`, "utf8");
+
+    expect(() => registry.getActive("t1", anchors)).toThrow(PackLoadError);
+    expect(() => registry.getActive("t1", anchors)).toThrow(/Architect signature invalid/);
+    expect(() => loader.active("t1")).toThrow(PackLoadError);
+    try {
+      loader.active("t1");
+      throw new Error("expected active() to refuse the mutated record");
+    } catch (err) {
+      expect(err).toBeInstanceOf(PackLoadError);
+      expect((err as PackLoadError).code).toBe("PACK_UNSIGNED_OWNER");
+    }
+  });
+
+  it("read-back refuses an unsigned on-disk record", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-pack-unsigned-readback-"));
+    const { anchors, binding } = await signedGenericPack();
+    const registry = new FilePackRegistry(dir);
+    const loader = new PackLoader(registry, anchors);
+    expect(loader.load({ tenantId: "t1", binding, actor: "architect" }).ok).toBe(true);
+
+    const file = path.join(dir, "packs", "t1.json");
+    const onDisk = JSON.parse(await readFile(file, "utf8")) as { binding: { signatures?: unknown } };
+    delete onDisk.binding.signatures;
+    await writeFile(file, `${JSON.stringify(onDisk, null, 2)}\n`, "utf8");
+
+    expect(() => loader.active("t1")).toThrow(PackLoadError);
+    try {
+      registry.getActive("t1", anchors);
+      throw new Error("expected getActive to refuse an unsigned record");
+    } catch (err) {
+      expect(err).toBeInstanceOf(PackLoadError);
+      expect((err as PackLoadError).code).toBe("PACK_UNSIGNED");
+    }
+  });
+
+  it("read-back refuses an incomplete on-disk record", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-pack-incomplete-readback-"));
+    const { anchors, binding } = await signedGenericPack();
+    const registry = new FilePackRegistry(dir);
+    const loader = new PackLoader(registry, anchors);
+    expect(loader.load({ tenantId: "t1", binding, actor: "architect" }).ok).toBe(true);
+
+    const file = path.join(dir, "packs", "t1.json");
+    const onDisk = JSON.parse(await readFile(file, "utf8")) as { binding: Record<string, unknown> };
+    delete onDisk.binding.roles;
+    await writeFile(file, `${JSON.stringify(onDisk, null, 2)}\n`, "utf8");
+
+    expect(() => loader.active("t1")).toThrow(PackLoadError);
+    try {
+      registry.getActive("t1", anchors);
+      throw new Error("expected getActive to refuse an incomplete record");
+    } catch (err) {
+      expect(err).toBeInstanceOf(PackLoadError);
+      expect((err as PackLoadError).code).toBe("PACK_INCOMPLETE");
+    }
   });
 });

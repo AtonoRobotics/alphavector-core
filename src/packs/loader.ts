@@ -2,19 +2,21 @@ import { PackLoadError } from "../errors.js";
 import { nowIso } from "../ids.js";
 import { evaluateAdversarialFixtures } from "../policy/evaluator.js";
 import { assertCompletePack } from "./schema.js";
-import { verifyPackSignatures, type TrustAnchors } from "./signing.js";
+import { assertVerifiedLoadedPack, verifyPackSignatures, type TrustAnchors } from "./signing.js";
 import type { LoadedPack, PackBinding, PackLoadResult, PrincipalKind } from "./types.js";
 
 export interface PackRegistry {
-  getActive(tenantId: string): LoadedPack | undefined;
+  getActive(tenantId: string, anchors: TrustAnchors): LoadedPack | undefined;
   setActive(loaded: LoadedPack): void;
 }
 
 export class MemoryPackRegistry implements PackRegistry {
   private readonly active = new Map<string, LoadedPack>();
 
-  getActive(tenantId: string): LoadedPack | undefined {
-    return this.active.get(tenantId);
+  getActive(tenantId: string, anchors: TrustAnchors): LoadedPack | undefined {
+    const loaded = this.active.get(tenantId);
+    if (!loaded) return undefined;
+    return assertVerifiedLoadedPack(loaded, anchors, tenantId);
   }
 
   setActive(loaded: LoadedPack): void {
@@ -63,11 +65,11 @@ export class PackLoader {
   }
 
   active(tenantId: string): LoadedPack {
-    const loaded = this.registry.getActive(tenantId);
+    const loaded = this.registry.getActive(tenantId, this.anchors);
     if (!loaded) {
       throw new PackLoadError("NO_ACTIVE_PACK", `No active pack binding for tenant ${tenantId}`);
     }
-    return loaded;
+    return assertVerifiedLoadedPack(loaded, this.anchors, tenantId);
   }
 
   private assertFixturesPass(binding: PackBinding): void {
