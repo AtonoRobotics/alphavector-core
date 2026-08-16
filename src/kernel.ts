@@ -58,7 +58,7 @@ export class AlphaVectorCore {
     anchors: TrustAnchors,
     stateDir?: string,
     computerBaseDir?: string,
-    opts?: { adapter?: CognitiveAdapter },
+    opts?: { adapter?: CognitiveAdapter; now?: () => string; tickMs?: number },
   ) {
     this.packs = new PackLoader(
       stateDir ? new FilePackRegistry(stateDir) : new MemoryPackRegistry(),
@@ -89,6 +89,8 @@ export class AlphaVectorCore {
       agents: this.agents,
       orchestrator: this.orchestrator,
       adapter: opts?.adapter ?? new DeepAgentsAdapter(),
+      now: opts?.now,
+      tickMs: opts?.tickMs,
     });
   }
 
