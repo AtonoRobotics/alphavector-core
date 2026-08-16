@@ -17,6 +17,8 @@ export function stem(event: WakeEvent): StemDecision {
     case "mail":
     case "deadline":
     case "connector":
+    case "architect_message":
+    case "worker_failed":
       return { wakeOrchestrator: true, wakeOps: false };
     case "worker_done":
       return { wakeOrchestrator: true, wakeOps: true };

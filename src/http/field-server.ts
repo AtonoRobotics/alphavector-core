@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentRecord } from "../agents/types.js";
 import type { PendingProgressRecord } from "../auth/types.js";
 import { architectDeploy, fieldDeploy } from "../auth/architect-deploy.js";
+import { architectDeliverMessage } from "../auth/architect-message.js";
 import { AuthorizationRequiredError, AvError, DeployIncompleteError, SurfaceViolationError } from "../errors.js";
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
@@ -27,7 +28,7 @@ const CORS = {
 } as const;
 
 const CONFIG_PATH =
-  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy/i;
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -98,6 +99,10 @@ export class FieldHttpServer {
       }
       if (req.method === "POST" && path === "/architect/deploy") {
         await this.routeArchitectDeploy(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/message") {
+        await this.routeArchitectMessage(req, res);
         return;
       }
 
@@ -492,6 +497,56 @@ export class FieldHttpServer {
       architectToken: token,
     });
     this.json(res, 201, record);
+  }
+
+  /**
+   * Architect message wake. Off `/field` and off the field HTML page.
+   * Field token is 403 SURFACE_VIOLATION. Not sit().
+   */
+  private async routeArchitectMessage(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const header = req.headers.authorization;
+    if (!header?.startsWith("Bearer ")) {
+      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
+      return;
+    }
+    const token = header.slice("Bearer ".length).trim();
+    if (!token) {
+      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
+      return;
+    }
+    const principal = this.opts.core.fieldTokens.lookup(token, this.opts.tenantId);
+    if (principal === "field") {
+      this.json(res, 403, {
+        error: "SURFACE_VIOLATION",
+        message: "Field cannot issue architect_message",
+      });
+      return;
+    }
+    if (principal !== "architect") {
+      this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
+      return;
+    }
+    const body = (await readJson(req)) as { body?: string; addresseeId?: string };
+    const computerBaseDir = this.opts.core.fieldTokens.baseDir();
+    if (!computerBaseDir) {
+      throw new AvError("ARCHITECT_SEAT_UNBOUND", "Architect message requires a live habitat");
+    }
+    const woke = await architectDeliverMessage({
+      tenantId: this.opts.tenantId,
+      body: String(body.body ?? ""),
+      addresseeId: typeof body.addresseeId === "string" ? body.addresseeId : undefined,
+      computerBaseDir,
+      habitat: this.opts.core.habitat,
+      architectToken: token,
+    });
+    this.json(res, 200, {
+      ok: true,
+      kind: "architect_message",
+      runId: woke.run?.runId,
+      wokeOrchestrator: woke.wokeOrchestrator,
+      loadedAgentId: woke.memory.profile.agentId,
+      memory: woke.memory,
+    });
   }
 
   /**

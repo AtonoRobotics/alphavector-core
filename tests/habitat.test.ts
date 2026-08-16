@@ -171,7 +171,9 @@ async function startVendorThinkDouble(opts?: {
               : rec.kind === "field_ask" ||
                   rec.kind === "field_continue" ||
                   rec.kind === "mail" ||
-                  rec.kind === "deadline"
+                  rec.kind === "deadline" ||
+                  rec.kind === "architect_message" ||
+                  rec.kind === "worker_failed"
                 ? { pass: "talking", act: "follow_up" }
                 : { pass: "talking", act: "launch_worker", workerType: "coder" };
       res.writeHead(200, { "content-type": "application/json" });

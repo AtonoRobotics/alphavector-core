@@ -3,7 +3,7 @@ import { AvError } from "../errors.js";
 import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 import { loadRunStore } from "./run-store.js";
 import { stem, type StemDecision } from "./stem.js";
-import type { WakeEvent, WakeKind, WakeLogEntry } from "./types.js";
+import { WAKE_KINDS, type WakeEvent, type WakeKind, type WakeLogEntry } from "./types.js";
 
 export interface TenantWakeLog {
   entries: WakeLogEntry[];
@@ -69,18 +69,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-const KNOWN_WAKE_KINDS: ReadonlySet<WakeKind> = new Set([
-  "field_start",
-  "field_ask",
-  "field_continue",
-  "card_decide",
-  "worker_done",
-  "kill",
-  "deadline",
-  "connector",
-  "routine",
-  "mail",
-]);
+const KNOWN_WAKE_KINDS: ReadonlySet<WakeKind> = new Set(WAKE_KINDS);
 
 export interface WakeLogReplayResult {
   passed: boolean;
@@ -131,7 +120,8 @@ export function replayWakeLog(entries: unknown, context?: WakeLogReplayContext):
         kind === "field_continue" ||
         kind === "routine" ||
         kind === "mail" ||
-        kind === "deadline") &&
+        kind === "deadline" ||
+        kind === "architect_message") &&
       !runId
     ) {
       return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
