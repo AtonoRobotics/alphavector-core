@@ -35,6 +35,17 @@ export interface FieldAskResult {
   };
 }
 
+/**
+ * Continue is a wake on the open run. Field SHALL NOT pick who works.
+ * No agent id, worker type, or assignee on the request.
+ */
+export interface FieldContinueResult {
+  ok: true;
+  runId: string;
+  launchedWorker: boolean;
+  memory: FieldAskResult["memory"];
+}
+
 export interface FieldStartBody {
   journeyKind: string;
   objective: string;

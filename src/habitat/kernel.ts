@@ -240,10 +240,13 @@ export class HabitatKernel {
       return this.cardDecide(event, pack, until);
     }
     if (event.kind === "worker_done") {
-      return this.workerDone(event);
+      return this.workerDone(event, opts?.holdWorker === true);
     }
     if (event.kind === "field_ask") {
       return this.fieldAsk(event, decision);
+    }
+    if (event.kind === "field_continue") {
+      return this.fieldContinue(event, decision, opts?.holdWorker === true);
     }
     if (event.kind === "routine") {
       return this.routineWake(event, pack, decision, until, opts?.holdWorker === true);
@@ -781,6 +784,64 @@ export class HabitatKernel {
   }
 
   /**
+   * Field continue: a wake on the open run. Does not mint a run or a goal.
+   * Field SHALL NOT pick who works — no agent id, worker type, or assignee.
+   * Talking stays thin unless the orchestrator decides launch_worker.
+   * Continue is a wake, not a conductor.
+   */
+  private async fieldContinue(
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+    holdWorker: boolean,
+  ): Promise<WakeResult> {
+    this.assertFieldCannotPickAgent(event);
+    const run = this.runs.get(event.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Continue requires an open run; no implicit start");
+    }
+    const creature = this.requireOrchestrator(event.tenantId);
+    const memory = this.injectMemory(event.tenantId, creature.agentId);
+    this.assertLabeled(memory);
+    const pack = event.pack ?? this.packs.get(event.tenantId);
+    const resolved = this.requireThinkBind(event.tenantId, pack);
+    const skills = this.injectSkills(event.tenantId);
+    const talking = await this.adapter.think({
+      pass: "talking",
+      event,
+      run,
+      memory,
+      skills,
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    this.validateTalking(talking);
+    this.wakeLog.append({
+      kind: "field_continue",
+      tenantId: event.tenantId,
+      runId: run.runId,
+      at: nowIso(),
+      decision,
+      detail: { wakeOnly: true },
+    });
+    if (talking.act === "launch_worker" && pack && !this.workers.isLive(event.tenantId)) {
+      this.runs.put({
+        ...run,
+        pendingIntent: "launch_worker",
+        updatedAt: nowIso(),
+      });
+      return this.actLaunchAndWork(event, pack, creature, skills, holdWorker, "card");
+    }
+    return {
+      run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory,
+    };
+  }
+
+  /**
    * Field ask: a wake on the open run. Does not mint a run or a goal.
    * Talking stays thin — no pickAgent, no coder launch. No implicit start.
    */
@@ -1044,28 +1105,90 @@ export class HabitatKernel {
     return finished;
   }
 
-  private workerDone(event: WakeEvent): WakeResult {
+  /**
+   * Worker finished: tear the trailer down, then give the orchestrator a
+   * talking pass to decide follow-up. Field does not conduct this handoff.
+   * Field SHALL NOT pick who works. `done` completes the same run.
+   * `follow_up` / `launch_worker` launches the next coder on that same run.
+   */
+  private async workerDone(event: WakeEvent, holdWorker: boolean): Promise<WakeResult> {
+    this.assertFieldCannotPickAgent(event);
     const run = this.runs.get(event.tenantId);
+    const decision = stem(event);
     this.wakeLog.append({
       kind: "worker_done",
       tenantId: event.tenantId,
       runId: run?.runId,
       at: nowIso(),
-      decision: stem(event),
+      decision,
       detail: { workerId: event.workerId ?? run?.workerId },
     });
     this.workers.teardown(event.tenantId);
+
+    if (!run || isTerminal(run.status)) {
+      this.opts.orchestrator.completeGoal(event.tenantId);
+      const next = run
+        ? this.runs.put({
+            ...run,
+            status: run.status === "denied" || run.status === "killed" ? run.status : "completed",
+            pendingCardId: undefined,
+            pendingEffect: undefined,
+            updatedAt: nowIso(),
+          })
+        : undefined;
+      const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
+      return {
+        run: next,
+        wokeOrchestrator: true,
+        wokeOps: true,
+        launchedWorker: false,
+        talkingDidHeavyWork: false,
+        memory,
+      };
+    }
+
+    const open = this.runs.put({
+      ...run,
+      status: "talking",
+      pendingCardId: undefined,
+      pendingEffect: undefined,
+      pendingIntent: undefined,
+      updatedAt: nowIso(),
+    });
+    const orch = this.requireOrchestrator(event.tenantId);
+    const memory = this.injectMemory(event.tenantId, orch.agentId);
+    this.assertLabeled(memory);
+    const pack = event.pack ?? this.packs.get(event.tenantId);
+    const resolved = this.requireThinkBind(event.tenantId, pack);
+    const skills = this.injectSkills(event.tenantId);
+    const talking = await this.adapter.think({
+      pass: "talking",
+      event,
+      run: open,
+      memory,
+      skills,
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    this.validateTalking(talking);
+
+    if (talking.act === "follow_up" || talking.act === "launch_worker") {
+      if (!pack) throw new AvError("NO_ACTIVE_PACK", "Follow-up launch requires a loaded pack");
+      this.runs.put({
+        ...open,
+        pendingIntent: "launch_worker",
+        updatedAt: nowIso(),
+      });
+      return this.actLaunchAndWork(event, pack, orch, skills, holdWorker, "card");
+    }
+
     this.opts.orchestrator.completeGoal(event.tenantId);
-    const next = run
-      ? this.runs.put({
-          ...run,
-          status: run.status === "denied" || run.status === "killed" ? run.status : "completed",
-          pendingCardId: undefined,
-          pendingEffect: undefined,
-          updatedAt: nowIso(),
-        })
-      : undefined;
-    const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
+    const next = this.runs.put({
+      ...open,
+      status: "completed",
+      pendingIntent: undefined,
+      updatedAt: nowIso(),
+    });
     return {
       run: next,
       wokeOrchestrator: true,
@@ -1074,6 +1197,21 @@ export class HabitatKernel {
       talkingDidHeavyWork: false,
       memory,
     };
+  }
+
+  /**
+   * Continue / worker_done are wakes. Field SHALL NOT pick an agent,
+   * worker type, or assignee. Kernel owns who works (the thin coder).
+   */
+  private assertFieldCannotPickAgent(event: WakeEvent): void {
+    const picked =
+      nonempty(event.agentId) || nonempty(event.workerType) || nonempty(event.assigneeAgentId);
+    if (picked) {
+      throw new AvError(
+        "FIELD_CANNOT_PICK_AGENT",
+        "Field SHALL NOT pick an agent; continue is a wake",
+      );
+    }
   }
 
   private kill(event: WakeEvent): WakeResult {
@@ -1311,6 +1449,10 @@ export class HabitatKernel {
 
 function isTerminal(status: RunRecord["status"]): boolean {
   return status === "completed" || status === "denied" || status === "killed";
+}
+
+function nonempty(value: string | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function defaultUntil(kind: WakeEvent["kind"]): "talking" | "card" | "done" {

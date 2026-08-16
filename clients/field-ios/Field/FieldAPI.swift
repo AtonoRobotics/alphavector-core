@@ -49,6 +49,12 @@ final class FieldAPI: ObservableObject {
         )
     }
 
+    /// Continue is a wake. Field SHALL NOT pick who works.
+    /// Takes no agent id, worker type, or assignee.
+    func continueRun() async throws {
+        let _: Ok = try await request(method: "POST", path: "/field/continue")
+    }
+
     /// Issues an owner_instance card. Persist happens only after approve.
     func record(id: String, recordId: String) async throws {
         try await send(method: "POST", path: "/field/facts", body: ["id": id, "recordId": recordId])

@@ -287,6 +287,19 @@ export class FieldHttpServer {
       return;
     }
 
+    if (method === "POST" && path === "/field/continue") {
+      const body = (await readJson(req)) as Record<string, unknown>;
+      assertFieldContinueIsWakeOnly(body);
+      const woke = await core.habitat.wake({ kind: "field_continue", tenantId, pack }, { holdWorker: true });
+      this.json(res, 200, {
+        ok: true,
+        runId: woke.run?.runId,
+        launchedWorker: woke.launchedWorker,
+        memory: woke.memory,
+      });
+      return;
+    }
+
     if (method === "POST" && path === "/field/kill") {
       const body = (await readJson(req)) as { reason?: string };
       const reason = String(body.reason ?? "field kill");
@@ -523,6 +536,21 @@ export class FieldHttpServer {
   ): void {
     res.writeHead(status, headers);
     res.end(body);
+  }
+}
+
+/**
+ * Continue is a wake. Field SHALL NOT pick who works.
+ * Any agent / worker-type / assignee selector fails closed.
+ */
+function assertFieldContinueIsWakeOnly(body: Record<string, unknown>): void {
+  const named = new Set(["agentId", "agent", "workerType", "assigneeAgentId", "assignee", "who"]);
+  for (const [key, value] of Object.entries(body)) {
+    const lower = key.toLowerCase();
+    const selector = named.has(key) || (lower.includes("pick") && lower.includes("agent"));
+    if (selector && value !== undefined && value !== null && String(value).trim() !== "") {
+      throw new AvError("FIELD_CANNOT_PICK_AGENT", "Continue is a wake; field SHALL NOT pick who works");
+    }
   }
 }
 

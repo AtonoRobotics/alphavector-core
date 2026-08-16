@@ -6,6 +6,7 @@ import type { StemDecision } from "./stem.js";
 export type WakeKind =
   | "field_start"
   | "field_ask"
+  | "field_continue"
   | "card_decide"
   | "worker_done"
   | "kill"
@@ -59,6 +60,18 @@ export interface WakeEvent {
   deadlineId?: string;
   /** Architect-bound connector id. Required for kind "connector"; ConnectorBook is not enough. */
   connectorId?: string;
+  /**
+   * Rejected on field_continue / worker_done. Field SHALL NOT pick who works.
+   * Not a live assignee. Kernel ignores this for dispatch.
+   */
+  agentId?: string;
+  /**
+   * Rejected on field_continue / worker_done. Field SHALL NOT pick a worker type.
+   * Habitat owns the coder type.
+   */
+  workerType?: string;
+  /** Rejected on field_continue / worker_done. Field SHALL NOT pick an assignee. */
+  assigneeAgentId?: string;
 }
 
 export interface PendingEffect {

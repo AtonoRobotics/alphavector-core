@@ -608,6 +608,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(api).toMatch(/\/field\/journeys/);
     expect(api).toMatch(/\/field\/cards/);
     expect(api).toMatch(/\/field\/ask/);
+    expect(api).toMatch(/\/field\/continue/);
+    expect(api).toMatch(/func continueRun\(\)/);
     expect(api).toMatch(/\/field\/facts/);
     expect(api).toMatch(/\/field\/facts\/retract/);
     expect(api).toMatch(/\/field\/records/);

@@ -1,7 +1,7 @@
 import type { FieldCardView } from "../auth/types.js";
 import type { Journey } from "../data/types.js";
 import type { FieldHome, FieldProgressResult } from "../surfaces/types.js";
-import type { FieldApproveResult, FieldAskResult, FieldProgressBody } from "./types.js";
+import type { FieldApproveResult, FieldAskResult, FieldContinueResult, FieldProgressBody } from "./types.js";
 
 export class FieldHttpError extends Error {
   readonly status: number;
@@ -53,6 +53,14 @@ export class FieldClient {
 
   ask(text: string, actionClass: string): Promise<FieldAskResult> {
     return this.request<FieldAskResult>("POST", "/field/ask", { text, actionClass });
+  }
+
+  /**
+   * Continue is a wake. Field SHALL NOT pick who works.
+   * Takes no agent id, worker type, or assignee.
+   */
+  continue(): Promise<FieldContinueResult> {
+    return this.request<FieldContinueResult>("POST", "/field/continue");
   }
 
   kill(reason = "field kill"): Promise<{ ok: true }> {
