@@ -19,6 +19,10 @@ export interface BootFieldCoreOptions {
    * An explicit thinkFn on DeepAgentsAdapter is the CI double, not the product default.
    */
   adapter?: CognitiveAdapter;
+  /** Injectable habitat clock. Tests advance this; product uses wall time. */
+  now?: () => string;
+  /** Test override of the core-owned due interval. Not field-configured. */
+  tickMs?: number;
 }
 
 /** Boot a core with the pinned alphavector-re fixture. Architect load is internal, not a field route. */
@@ -44,7 +48,7 @@ export async function bootFieldCore(
     },
     stateDir,
     opts.computerBaseDir,
-    { adapter: opts.adapter ?? new DeepAgentsAdapter() },
+    { adapter: opts.adapter ?? new DeepAgentsAdapter(), now: opts.now, tickMs: opts.tickMs },
   );
   const loaded = core.packs.load({ tenantId, binding, actor: "architect" });
   if (!loaded.ok) {
@@ -52,6 +56,10 @@ export async function bootFieldCore(
   }
   if (core.agents.list(tenantId).length === 0) {
     core.agents.instantiateFromPack(loaded.loaded, "architect");
+  }
+  core.habitat.setPack(tenantId, loaded.loaded);
+  if (opts.computerBaseDir) {
+    core.habitat.startDueTicker();
   }
   return { core, pack: loaded.loaded, tenantId };
 }

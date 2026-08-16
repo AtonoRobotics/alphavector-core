@@ -59,6 +59,7 @@ export class FieldHttpServer {
   }
 
   async close(): Promise<void> {
+    this.opts.core.habitat.stopDueTicker();
     const server = this.server;
     this.server = undefined;
     if (!server) return;

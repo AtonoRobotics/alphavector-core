@@ -17,6 +17,7 @@ import {
   DeepAgentsAdapter,
   DryStemAdapter,
   HABITAT_OWNED,
+  HABITAT_ROUTINE_TICK_MS,
   isPidAlive,
   reapHeldCoders,
   resetDeepAgentsInvocations,
@@ -80,6 +81,16 @@ function bindAndCredential(input: {
 }): void {
   bindAdapter(input);
   writeVendorCredentials(input);
+}
+
+/** Wait until the habitat ticker (or another predicate) becomes true. */
+async function waitUntil(pred: () => boolean, ms = 1500): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (pred()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  if (!pred()) throw new Error("timed out waiting for habitat ticker");
 }
 
 /** Wait until the booked pid is gone (or a zombie). */
@@ -2491,5 +2502,169 @@ describe("D10 CS-013 routine wakes", () => {
     expect(isPidAlive(worker?.pid)).toBe(false);
     expect(new WorkerBook(dir).get("t1")).toBeUndefined();
     expect(core.habitat.getRun("t1")?.status).toBe("killed");
+  });
+});
+
+describe("D10 CS-013 routine ticker", () => {
+  it("keeps the RE fixture pin at 5091328", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    expect(HABITAT_ROUTINE_TICK_MS).toBe(60_000);
+    const pkg = readFileSync(path.join(process.cwd(), "package.json"), "utf8");
+    expect(pkg).not.toMatch(/temporalio|@temporalio|"temporal"/i);
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    expect(kernelSrc).toMatch(/startDueTicker\(/);
+    expect(kernelSrc).toMatch(/setInterval\(/);
+    expect(kernelSrc).toMatch(/HABITAT_ROUTINE_TICK_MS/);
+    expect(kernelSrc).toMatch(/advanceClock\(/);
+    expect(kernelSrc).not.toMatch(/from ["']@temporalio|require\(["']@temporalio/);
+    expect(kernelSrc).not.toMatch(/createDeepAgent\s*\(/);
+    const bootSrc = readFileSync(path.join(process.cwd(), "src/http/field-boot.ts"), "utf8");
+    expect(bootSrc).toMatch(/startDueTicker\(/);
+    expect(bootSrc).toMatch(/setPack\(/);
+    expect(bootSrc).not.toMatch(/cron|AV_ROUTINE|tickMs:\s*opts\.cron/i);
+    const listenSrc = readFileSync(path.join(process.cwd(), "src/http/field-listen.ts"), "utf8");
+    expect(listenSrc).toMatch(/bootFieldCore\(tenantId, \{ computerBaseDir: opts\.computerBaseDir \}\)/);
+    expect(listenSrc).not.toMatch(/cron|temporal|tickMs/i);
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    expect(fieldSrc).toMatch(/stopDueTicker\(/);
+    expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/routines/);
+    expect(fieldSrc).not.toMatch(/cron|AV_ROUTINE_TICK|tickMs/i);
+  });
+
+  it("bootFieldCore ticker wakes a due routine without the test calling fireDue", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-ticker-due-"));
+    const { core, tenantId } = await bootFieldCore("t1", {
+      computerBaseDir,
+      adapter: new DryStemAdapter(),
+      tickMs: 20,
+    });
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    const orchId = core.agents.list(tenantId).find((a) => a.isOrchestrator)!.agentId;
+    core.habitat.memory.writeProfile({ tenantId, agentId: orchId, note: "ticker-profile" });
+    core.habitat.memory.writeLog({ tenantId, agentId: orchId, text: "ticker-log" });
+    core.habitat.memory.writeRecall({ tenantId, scope: "agent", subjectId: orchId, text: "ticker-recall" });
+    const record = core.records.put(tenantId, { type: "case", label: "Subject" });
+    architectWriteRoutine({
+      tenantId,
+      routineId: "ticker-brief",
+      goal: "one goal",
+      dueAt: new Date(0).toISOString(),
+      recordId: record.id,
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    expect(core.habitat.listWakes(tenantId).some((w) => w.kind === "routine")).toBe(false);
+    await waitUntil(() => core.habitat.listWakes(tenantId).some((w) => w.kind === "routine"));
+    const run = core.habitat.getRun(tenantId);
+    expect(run?.runId).toMatch(/^run_/);
+    expect(run?.goal).toBe("one goal");
+    expect(run?.talkingDidHeavyWork).toBe(false);
+    const wakes = core.habitat.listWakes(tenantId);
+    expect(wakes.some((w) => w.kind === "routine" && w.runId === run?.runId)).toBe(true);
+    expect(wakes.find((w) => w.kind === "routine")?.decision).toEqual({
+      wakeOrchestrator: true,
+      wakeOps: false,
+    });
+    expect(wakes.find((w) => w.kind === "routine")?.detail).toMatchObject({
+      routineId: "ticker-brief",
+    });
+    const orchMem = core.habitat.memory.labeled(tenantId, orchId);
+    expect(orchMem.profile.label).toBe("profile");
+    expect(orchMem.logs.label).toBe("logs");
+    expect(orchMem.recall.label).toBe("recall");
+    expect(orchMem.profile.body?.notes).toContain("ticker-profile");
+    expect(orchMem.logs.entries.some((e) => e.text === "ticker-log")).toBe(true);
+    expect(orchMem.recall.items.some((e) => e.text === "ticker-recall")).toBe(true);
+    core.habitat.stopDueTicker();
+  });
+
+  it("ticker distinct-goal due routine while a run is open is ONE_GOAL", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-ticker-one-goal-"));
+    const { core, field, architectToken } = await liveField("t1", dir);
+    const first = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const runA = core.habitat.getRun("t1");
+    architectWriteRoutine({
+      tenantId: "t1",
+      routineId: "other-goal",
+      goal: "a different goal",
+      dueAt: new Date(0).toISOString(),
+      recordId: first.record.id,
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+    });
+    core.habitat.advanceClock(new Date().toISOString());
+    expect(core.habitat.getRun("t1")?.runId).toBe(runA!.runId);
+    expect(core.habitat.getRun("t1")?.goal).toBe(first.journey.objective);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "routine")).toBe(false);
+    const onDisk = JSON.parse(readFileSync(computerRoot(dir, "t1").runsFile, "utf8")) as {
+      runs: Array<{ runId: string; goal: string }>;
+    };
+    expect(onDisk.runs).toHaveLength(1);
+    expect(onDisk.runs[0]?.runId).toBe(runA!.runId);
+  });
+
+  it("ticker corrupt routines.json fails closed without inventing", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-ticker-corrupt-"));
+    const { core, tenantId } = await bootFieldCore("t1", {
+      computerBaseDir,
+      adapter: new DryStemAdapter(),
+      tickMs: 20,
+    });
+    const file = computerRoot(computerBaseDir, tenantId).routinesFile;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "{not-json", "utf8");
+    core.habitat.advanceClock(new Date().toISOString());
+    expect(core.habitat.getRun(tenantId)).toBeUndefined();
+    expect(core.habitat.listWakes(tenantId)).toEqual([]);
+    expect(existsSync(computerRoot(computerBaseDir, tenantId).runsFile)).toBe(false);
+    writeFileSync(file, `${JSON.stringify({ routines: [{ routineId: "x" }] })}\n`, "utf8");
+    core.habitat.advanceClock(new Date().toISOString());
+    expect(core.habitat.getRun(tenantId)).toBeUndefined();
+    expect(core.habitat.listWakes(tenantId)).toEqual([]);
+    core.habitat.stopDueTicker();
+  });
+
+  it("ticker unbound due routine stays ADAPTER_UNBOUND and keeps ticking", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-ticker-unbound-"));
+    const { core, tenantId } = await bootFieldCore("t1", {
+      computerBaseDir,
+      tickMs: 20,
+    });
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    architectWriteRoutine({
+      tenantId,
+      routineId: "unbound-brief",
+      goal: "one goal",
+      dueAt: new Date(0).toISOString(),
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    core.habitat.advanceClock(new Date().toISOString());
+    expect(core.habitat.getRun(tenantId)).toBeUndefined();
+    expect(core.habitat.listWakes(tenantId)).toEqual([]);
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    core.habitat.advanceClock(new Date().toISOString());
+    expect(core.habitat.getRun(tenantId)).toBeUndefined();
+    core.habitat.stopDueTicker();
+  });
+
+  it("field still cannot POST /field/routines after the ticker exists", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-ticker-field-"));
+    const { field, fieldToken, url, core } = await liveField("t1", dir);
+    const blocked = await fetch(`${url}/field/routines`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ routineId: "field-brief", goal: "one goal", cron: "* * * * *" }),
+    });
+    expect(blocked.status).toBe(403);
+    const body = (await blocked.json()) as { error: string };
+    expect(body.error).toBe("SURFACE_VIOLATION");
+    expect(existsSync(computerRoot(dir, "t1").routinesFile)).toBe(false);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/routines|routineId|dueAt|cron|tickMs/i);
   });
 });

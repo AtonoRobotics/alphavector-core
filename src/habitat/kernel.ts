@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
 import type { AgentRecord } from "../agents/types.js";
 import type { Orchestrator } from "../agents/orchestrator.js";
 import type { AgentRuntime } from "../agents/runtime.js";
@@ -40,6 +42,9 @@ import { WakeBus } from "./wake-bus.js";
 import { replayWakeLog, replayWakeLogFromDisk, WakeLog } from "./wake-log.js";
 import { WorkerBook } from "./worker.js";
 
+/** Core-owned due interval. Not field-configured. Not Temporal (DEC-020). */
+export const HABITAT_ROUTINE_TICK_MS = 60_000;
+
 export interface HabitatKernelOptions {
   computerBaseDir?: string;
   cards: CardBook;
@@ -47,6 +52,10 @@ export interface HabitatKernelOptions {
   agents: AgentRuntime;
   orchestrator: Orchestrator;
   adapter?: CognitiveAdapter;
+  /** Injectable clock. Tests advance this; the product process uses wall time. */
+  now?: () => string;
+  /** Test override of HABITAT_ROUTINE_TICK_MS. Not a field schedule string. */
+  tickMs?: number;
 }
 
 /**
@@ -63,6 +72,10 @@ export class HabitatKernel {
   private readonly workers: WorkerBook;
   private readonly adapter: CognitiveAdapter;
   private readonly packs = new Map<string, LoadedPack>();
+  private readonly nowFn: () => string;
+  private readonly tickMs: number;
+  private frozenNow?: string;
+  private timer?: ReturnType<typeof setInterval>;
 
   constructor(private readonly opts: HabitatKernelOptions) {
     this.runs = new RunStore(opts.computerBaseDir);
@@ -70,6 +83,46 @@ export class HabitatKernel {
     this.workers = new WorkerBook(opts.computerBaseDir);
     this.memory = new HabitatMemoryStore(opts.computerBaseDir);
     this.adapter = opts.adapter ?? new DeepAgentsAdapter();
+    this.nowFn = opts.now ?? nowIso;
+    this.tickMs = Number.isFinite(opts.tickMs) && (opts.tickMs as number) > 0 ? (opts.tickMs as number) : HABITAT_ROUTINE_TICK_MS;
+  }
+
+  /** Kernel-owned clock. Ticker and fireDue read this; field does not set it. */
+  now(): string {
+    return this.frozenNow ?? this.nowFn();
+  }
+
+  /**
+   * Advance the kernel-owned clock and run the due ticker.
+   * Tests use this instead of calling fireDue.
+   */
+  advanceClock(iso: string): void {
+    this.frozenNow = iso;
+    this.tickDue();
+  }
+
+  /** Remember the loaded pack so the ticker can fireDue without a test passing pack. */
+  setPack(tenantId: string, pack: LoadedPack): void {
+    this.packs.set(tenantId, pack);
+  }
+
+  /**
+   * Start the habitat-owned due ticker. Interval is core-owned, not field-set.
+   * Product process (bootFieldCore / field-serve) starts this after the pack is adopted.
+   * First tick is immediate so a due routine already on disk wakes without waiting.
+   */
+  startDueTicker(): void {
+    if (this.timer || !this.opts.computerBaseDir) return;
+    this.tickDue();
+    this.timer = setInterval(() => this.tickDue(), this.tickMs);
+    this.timer.unref?.();
+  }
+
+  /** Clear the due timer. Field HTTP close and process shutdown call this. */
+  stopDueTicker(): void {
+    if (!this.timer) return;
+    clearInterval(this.timer);
+    this.timer = undefined;
   }
 
   getRun(tenantId: string): RunRecord | undefined {
@@ -166,7 +219,7 @@ export class HabitatKernel {
    */
   fireDue(tenantId: string, opts?: { now?: string; holdWorker?: boolean; pack?: LoadedPack }): WakeResult[] {
     const store = readTenantRoutines(this.opts.computerBaseDir, tenantId);
-    const now = opts?.now ?? nowIso();
+    const now = opts?.now ?? this.now();
     const pack = opts?.pack ?? this.packs.get(tenantId);
     const due = store.routines.filter((row) => row.tenantId === tenantId && isRoutineDue(row, now));
     const results: WakeResult[] = [];
@@ -191,6 +244,37 @@ export class HabitatKernel {
       results.push(result);
     }
     return results;
+  }
+
+  /**
+   * Product ticker body. Habitat owns this clock. Calls fireDue per tenant.
+   * Typed fail (ONE_GOAL, ADAPTER_UNBOUND, ROUTINE_STORE_CORRUPT, ...) is
+   * swallowed so the interval keeps ticking. Does not invent routines.
+   */
+  private tickDue(): void {
+    if (!this.opts.computerBaseDir) return;
+    for (const tenantId of this.tickerTenantIds()) {
+      try {
+        this.fireDue(tenantId, { now: this.now() });
+      } catch {
+        // keep ticking
+      }
+    }
+  }
+
+  private tickerTenantIds(): string[] {
+    const ids = new Set(this.packs.keys());
+    const root = path.join(this.opts.computerBaseDir ?? "", "tenants");
+    if (this.opts.computerBaseDir && existsSync(root)) {
+      for (const name of readdirSync(root)) {
+        try {
+          if (statSync(path.join(root, name)).isDirectory()) ids.add(name);
+        } catch {
+          // skip unreadable entries
+        }
+      }
+    }
+    return [...ids];
   }
 
   replay(tenantId: string): ReturnType<typeof replayWakeLog> {
