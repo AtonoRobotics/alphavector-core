@@ -622,7 +622,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(api).toMatch(/func create\(type: String, label: String\)/);
     expect(api).toMatch(/func retractAttribute\(recordId: String, key: String\)/);
     expect(api).toMatch(/func retractRecord\(recordId: String\)/);
-    expect(api).toMatch(/"journey\.\(kindId\)"/);
+    expect(api).toMatch(/"journey\.\\\(kindId\)"/);
     expect(api).not.toMatch(/func start\(journeyKind: String, objective: String\) async/);
     expect(api).not.toMatch(/journey\.buyer/);
     expect(api).not.toMatch(/purpose\.follow-up|consent\.dnc/);
