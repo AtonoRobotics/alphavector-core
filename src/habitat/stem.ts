@@ -11,6 +11,7 @@ export interface StemDecision {
 export function stem(event: WakeEvent): StemDecision {
   switch (event.kind) {
     case "field_start":
+    case "field_ask":
       return { wakeOrchestrator: true, wakeOps: false };
     case "worker_done":
       return { wakeOrchestrator: true, wakeOps: true };

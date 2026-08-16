@@ -247,7 +247,12 @@ export class FieldHttpServer {
         text: String(body.text ?? ""),
         actionClass: String(body.actionClass ?? ""),
       });
-      this.json(res, 200, { ok: true });
+      const woke = core.habitat.wake({ kind: "field_ask", tenantId, pack });
+      this.json(res, 200, {
+        ok: true,
+        runId: woke.run?.runId,
+        memory: woke.memory,
+      });
       return;
     }
 

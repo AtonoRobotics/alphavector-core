@@ -4,6 +4,7 @@ import type { LoadedPack } from "../packs/types.js";
 /** Wake kinds for this slice. Deadline / connector / routine / mail are types only. */
 export type WakeKind =
   | "field_start"
+  | "field_ask"
   | "card_decide"
   | "worker_done"
   | "kill"

@@ -349,6 +349,7 @@ describe("D10 §6 habitat kernel", () => {
     expect(fieldSrc).not.toMatch(/Follow-up/);
     expect(fieldSrc).toMatch(/boundPackAgent/);
     expect(fieldSrc).toMatch(/observeFieldStart/);
+    expect(fieldSrc).toMatch(/wake\(\{ kind: "field_ask"/);
     expect(fieldSrc).toMatch(/\/field\/ask/);
     expect(fieldSrc).toMatch(/\/field\/kill/);
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
@@ -356,6 +357,8 @@ describe("D10 §6 habitat kernel", () => {
     expect(kernelSrc).not.toMatch(/wake\(\{ \.\.\.event, kind: "field_start" \},\s*\{\s*until:\s*["']talking["']/);
     expect(kernelSrc).not.toMatch(/does not throw ONE_GOAL/);
     expect(kernelSrc).toMatch(/throw new AvError\("ONE_GOAL"/);
+    expect(kernelSrc).toMatch(/event\.kind === "field_ask"/);
+    expect(kernelSrc).toMatch(/throw new AvError\("NO_OPEN_RUN"/);
   });
 
   it("follow-up sticks to the same worker; relaunch after kill is not follow-up", async () => {
@@ -1034,9 +1037,99 @@ describe("D10 §6 field verbs", () => {
     expect(() => book.getById("t1", "worker_invented")).toThrow(/corrupt/i);
   });
 
-  it("field ask stays available and does not pick an agent", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-ask-"));
-    const { field } = await liveField("t1", dir);
-    await expect(field.ask("status?", "read")).resolves.toEqual({ ok: true });
+  it("HTTP start, then field ask attaches to the same run with field_ask wake and labeled memory", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-ask-"));
+    const { core, field } = await liveField("t1", dir);
+    const orchId = core.agents.list("t1").find((a) => a.isOrchestrator)!.agentId;
+    core.habitat.memory.writeProfile({ tenantId: "t1", agentId: orchId, note: "ask-profile" });
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.runId).toMatch(/^run_/);
+    const worker = core.habitat.activeWorker("t1");
+    expect(worker?.workerId).toBeDefined();
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    const trailerPath = worker!.trailerPath;
+    const workerId = worker!.workerId;
+    const pid = worker!.pid;
+
+    const asked = await field.ask("status?", "read");
+    expect(asked.ok).toBe(true);
+    expect(asked.runId).toBe(run!.runId);
+    expect(asked.memory.profile.label).toBe("profile");
+    expect(asked.memory.logs.label).toBe("logs");
+    expect(asked.memory.recall.label).toBe("recall");
+    expect(asked.memory.profile.body).toEqual(
+      expect.objectContaining({ notes: expect.arrayContaining(["ask-profile"]) }),
+    );
+
+    const after = core.habitat.getRun("t1");
+    expect(after?.runId).toBe(run!.runId);
+    expect(after?.goal).toBe(started.journey.objective);
+    expect(after?.status).toBe(run!.status);
+    expect(after?.workerId).toBe(workerId);
+    expect(after?.talkingDidHeavyWork).toBe(false);
+    const onDisk = JSON.parse(readFileSync(computerRoot(dir, "t1").runsFile, "utf8")) as {
+      runs: Array<{ runId: string; goal: string }>;
+    };
+    expect(onDisk.runs).toHaveLength(1);
+    expect(onDisk.runs[0]?.runId).toBe(run!.runId);
+
+    const wakes = core.habitat.listWakes("t1");
+    expect(wakes.some((w) => w.kind === "field_start" && w.runId === run!.runId)).toBe(true);
+    expect(wakes.some((w) => w.kind === "field_ask" && w.runId === run!.runId)).toBe(true);
+    expect(wakes.filter((w) => w.kind === "field_ask")).toHaveLength(1);
+
+    const still = core.habitat.activeWorker("t1");
+    expect(still?.workerId).toBe(workerId);
+    expect(still?.trailerPath).toBe(trailerPath);
+    expect(still?.pid).toBe(pid);
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
+  });
+
+  it("field ask with no open run is NO_OPEN_RUN and does not create runs.json", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-ask-no-run-"));
+    const { core, field } = await liveField("t1", dir);
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    await expect(field.ask("status?", "read")).rejects.toMatchObject({
+      status: 400,
+      code: "NO_OPEN_RUN",
+      message: expect.stringMatching(/no implicit start/i),
+    });
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+    expect(core.habitat.listWakes("t1")).toEqual([]);
+    expect(core.habitat.trailerExists("t1")).toBe(false);
+  });
+
+  it("after field ask, a different-goal field start is still ONE_GOAL", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-ask-one-goal-"));
+    const { core, field } = await liveField("t1", dir);
+    const first = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const runA = core.habitat.getRun("t1");
+    const asked = await field.ask("status?", "read");
+    expect(asked.runId).toBe(runA!.runId);
+
+    const sellerRec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Seller subject",
+    );
+    await field.openApproved("seller", sellerRec.id);
+    await expect(field.start("seller", "Work this seller journey", sellerRec.id)).rejects.toMatchObject({
+      status: 400,
+      code: "ONE_GOAL",
+      message: expect.stringMatching(/one goal at a time/),
+    });
+
+    const still = core.habitat.getRun("t1");
+    expect(still?.runId).toBe(runA!.runId);
+    expect(still?.goal).toBe(first.journey.objective);
+    expect(still?.status).toBe("awaiting_card");
+    const onDisk = JSON.parse(readFileSync(computerRoot(dir, "t1").runsFile, "utf8")) as {
+      runs: Array<{ runId: string; goal: string }>;
+    };
+    expect(onDisk.runs).toHaveLength(1);
+    expect(onDisk.runs[0]?.runId).toBe(runA!.runId);
+    expect(onDisk.runs[0]?.goal).toBe(first.journey.objective);
   });
 });

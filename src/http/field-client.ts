@@ -1,7 +1,7 @@
 import type { FieldCardView } from "../auth/types.js";
 import type { Journey } from "../data/types.js";
 import type { FieldHome, FieldProgressResult } from "../surfaces/types.js";
-import type { FieldApproveResult, FieldProgressBody } from "./types.js";
+import type { FieldApproveResult, FieldAskResult, FieldProgressBody } from "./types.js";
 
 export class FieldHttpError extends Error {
   readonly status: number;
@@ -51,8 +51,8 @@ export class FieldClient {
     );
   }
 
-  ask(text: string, actionClass: string): Promise<{ ok: true }> {
-    return this.request<{ ok: true }>("POST", "/field/ask", { text, actionClass });
+  ask(text: string, actionClass: string): Promise<FieldAskResult> {
+    return this.request<FieldAskResult>("POST", "/field/ask", { text, actionClass });
   }
 
   kill(reason = "field kill"): Promise<{ ok: true }> {

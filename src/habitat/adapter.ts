@@ -14,6 +14,9 @@ export class DryStemAdapter implements CognitiveAdapter {
 
 export function dryThink(input: AdapterInput): CognitiveIntent {
   if (input.pass === "talking") {
+    if (input.event.kind === "field_ask") {
+      return { pass: "talking", act: "follow_up" };
+    }
     return { pass: "talking", act: "launch_worker", workerType: "coder" };
   }
   return {
