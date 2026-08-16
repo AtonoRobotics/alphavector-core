@@ -709,10 +709,7 @@ export class HabitatKernel {
       const creds = readTenantConnectorCredentials(this.opts.computerBaseDir, tenantId);
       const secret = findStoredConnectorCredentials(creds, tenantId, id);
       if (!secret) {
-        throw new AvError(
-          "CONNECTOR_CREDENTIALS_MISSING",
-          "Architect must write connector credentials before admit; no silent no-op",
-        );
+        throw new AvError("CONNECTOR_CREDENTIALS_MISSING", "Architect must write connector credentials before admit; no silent no-op");
       }
     }
     return found;
