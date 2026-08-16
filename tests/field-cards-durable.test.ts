@@ -13,12 +13,14 @@ import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { ALPHAVECTOR_RE_PIN_SHA, createOpenStart, signedRePack } from "./helpers.js";
+import { bindWorldForPack, closeWorldHttp, useWorldHttp } from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
   reapHeldCoders();
+  await closeWorldHttp();
   while (servers.length) {
     await servers.pop()?.close();
   }
@@ -42,8 +44,10 @@ async function liveDurable(
     adapter: new DryStemAdapter(),
   });
   let fieldToken = issued?.field;
+  let architectToken: string | undefined;
   if (!fieldToken) {
     const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    architectToken = architect.token;
     fieldToken = core.fieldTokens.issue({
       tenantId,
       principal: "field",
@@ -60,6 +64,7 @@ async function liveDurable(
     field: new FieldClient(url, fieldToken),
     core,
     pack,
+    architectToken,
   };
 }
 
@@ -109,6 +114,14 @@ describe("durable pending cards on tenant computer disk", () => {
   it("lists the same card and approve-then-executes after process restart", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-cards-http-"));
     const first = await liveDurable("restart", dir);
+    const world = await useWorldHttp();
+    bindWorldForPack({
+      tenantId: "restart",
+      computerBaseDir: dir,
+      architectToken: first.architectToken!,
+      pack: first.pack,
+      baseUrl: world.url,
+    });
     const { cardId } = await issueFollowUpCard(first.field);
     const inbox = await first.field.cards();
     expect(inbox).toHaveLength(1);

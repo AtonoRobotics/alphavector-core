@@ -30,11 +30,14 @@ export function architectBindConnector(input: {
   computerBaseDir: string;
   architectToken?: string;
   requiresCredentials?: boolean;
+  /** Architect-written world URL. Not a field setter. Not a hardcoded vendor host. */
+  baseUrl?: string;
 }): ConnectorBindRecord {
   const connectorId = input.connectorId.trim();
   if (!connectorId) {
     throw new AvError("CONNECTOR_ID_REQUIRED", "Architect connector bind requires a connector id");
   }
+  const baseUrl = input.baseUrl?.trim() || undefined;
   requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
   const file = connectorBindFile(input.computerBaseDir, input.tenantId);
   const current = readTenantConnectorBinds(input.computerBaseDir, input.tenantId);
@@ -45,6 +48,7 @@ export function architectBindConnector(input: {
     boundBy: "architect",
     boundAt: existing?.boundAt ?? nowIso(),
     requiresCredentials: input.requiresCredentials === true,
+    ...(baseUrl ? { baseUrl } : existing?.baseUrl ? { baseUrl: existing.baseUrl } : {}),
   };
   saveConnectorBindStore(file, upsertConnectorBind(current, record));
   return record;

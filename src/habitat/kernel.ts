@@ -47,6 +47,7 @@ import {
   findStoredConnectorCredentials,
   readTenantConnectorCredentials,
 } from "./connector-credentials.js";
+import { invokeConnectorWorld } from "./connector-world.js";
 import { RunStore } from "./run-store.js";
 import { writeSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
@@ -934,7 +935,7 @@ export class HabitatKernel {
     if (intent.act !== "propose_effect") {
       throw new AvError("WORKER_INTENT", "Worker pass must propose the one external effect");
     }
-    const proposed = this.admit(pack, worker.agent, intent);
+    const proposed = await this.admit(pack, worker.agent, intent);
     if (until === "done" && proposed.effect) {
       return this.finishAfterEffect(event.tenantId, proposed);
     }
@@ -998,16 +999,7 @@ export class HabitatKernel {
     }
     const worker = this.workers.get(event.tenantId);
     const agent = worker?.agent ?? this.coderFromPending(event.tenantId, run.pendingEffect.agentId);
-    const effect = this.opts.effects.execute({
-      pack,
-      agent,
-      actionClass: run.pendingEffect.actionClass,
-      channel: run.pendingEffect.channel,
-      purpose: run.pendingEffect.purpose,
-      subject: run.pendingEffect.subject,
-      surface: "field",
-      approvedCardId: event.cardId,
-    });
+    const effect = await this.executeApprovedEffect(pack, agent, run.pendingEffect, event.cardId);
     const finished = this.finishAfterEffect(event.tenantId, { effect, cardId: event.cardId });
     if (until === "card") {
       return { ...finished, wokeOps: true };
@@ -1091,21 +1083,19 @@ export class HabitatKernel {
     };
   }
 
-  private admit(
+  private async admit(
     pack: LoadedPack,
     agent: AgentRecord,
     intent: CognitiveIntent,
-  ): { effect?: EffectResult; cardId?: string } {
+  ): Promise<{ effect?: EffectResult; cardId?: string }> {
     const run = this.requireRun(pack.tenantId);
     try {
-      const effect = this.opts.effects.execute({
-        pack,
-        agent,
+      const effect = await this.executeApprovedEffect(pack, agent, {
         actionClass: intent.actionClass ?? "communicate",
-        channel: intent.channel,
-        purpose: intent.purpose,
-        subject: intent.subject,
-        surface: "field",
+        channel: intent.channel ?? "unspecified",
+        purpose: intent.purpose ?? "unspecified",
+        subject: intent.subject ?? "unspecified",
+        agentId: agent.agentId,
       });
       this.runs.put({
         ...run,
@@ -1132,6 +1122,49 @@ export class HabitatKernel {
       }
       throw err;
     }
+  }
+
+  /**
+   * Admission then a live connector handle, or typed fail-closed.
+   * Writing executed without a world call is autonomy theater.
+   */
+  private async executeApprovedEffect(
+    pack: LoadedPack,
+    agent: AgentRecord,
+    pending: { actionClass: string; channel: string; purpose: string; subject: string; agentId: string },
+    approvedCardId?: string,
+  ): Promise<EffectResult> {
+    const admitted = this.opts.effects.execute({
+      pack,
+      agent,
+      actionClass: pending.actionClass,
+      channel: pending.channel,
+      purpose: pending.purpose,
+      subject: pending.subject,
+      surface: "field",
+      approvedCardId,
+      recordExecution: false,
+    });
+    if (admitted.executed) return admitted;
+    await invokeConnectorWorld({
+      computerBaseDir: this.opts.computerBaseDir,
+      tenantId: pack.tenantId,
+      pack,
+      actionClass: pending.actionClass,
+      channel: pending.channel,
+      purpose: pending.purpose,
+      subject: pending.subject,
+    });
+    return this.opts.effects.commitExternal(admitted.actionId, {
+      pack,
+      agent,
+      actionClass: pending.actionClass,
+      channel: pending.channel,
+      purpose: pending.purpose,
+      subject: pending.subject,
+      surface: "field",
+      approvedCardId,
+    }, admitted.policyDecision);
   }
 
   /**

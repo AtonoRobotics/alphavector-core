@@ -21,6 +21,7 @@ import {
   expectPresentIdsDeniedWithoutRecord,
   signedRePackMutated,
 } from "./helpers.js";
+import { bindWorldForPack, closeWorldHttp, useWorldHttp } from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const REQUIRED = "condition.required";
@@ -83,6 +84,7 @@ function communicateAvoidFromHome(
 
 afterEach(async () => {
   reapHeldCoders();
+  await closeWorldHttp();
   while (servers.length) {
     await servers.pop()?.close();
   }
@@ -113,7 +115,21 @@ async function liveField(tenantId = "t1", computerBaseDir?: string) {
     architect: new FieldClient(url, tokens.architect),
     core,
     pack,
+    computerBaseDir: dir,
   };
+}
+
+async function liveFieldWithWorld(tenantId = "t1", computerBaseDir?: string) {
+  const stack = await liveField(tenantId, computerBaseDir);
+  const world = await useWorldHttp();
+  bindWorldForPack({
+    tenantId: stack.tenantId,
+    computerBaseDir: stack.computerBaseDir,
+    architectToken: stack.tokens.architect,
+    pack: stack.pack,
+    baseUrl: world.url,
+  });
+  return { ...stack, world };
 }
 
 async function liveMutatedField(
@@ -209,7 +225,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
   });
 
   it("approves an owner card then executes", async () => {
-    const { field } = await liveField("approve");
+    const { field } = await liveFieldWithWorld("approve");
     const done = await field.completeBuyerJourneyAndCard();
     expect(done.effect.executed).toBe(true);
     const home = await field.home();
@@ -336,7 +352,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
   it("serves a Linux-openable field client that can complete a journey and a card", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-linux-page-"));
-    const { url, field, tokens, tenantId, pack } = await liveField("linux", dir);
+    const { url, field, tokens, tenantId, pack } = await liveFieldWithWorld("linux", dir);
     const page = await fetch(url);
     expect(page.headers.get("content-type")).toMatch(/text\/html/);
     const html = await page.text();

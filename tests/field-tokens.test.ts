@@ -14,6 +14,7 @@ import { bootFieldCore } from "../src/http/field-boot.js";
 import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, createOpenStart } from "./helpers.js";
+import { bindWorldConnector, closeWorldHttp, useWorldHttp, WORLD_FIXTURE_SECRET } from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
@@ -21,6 +22,7 @@ const servers: FieldHttpServer[] = [];
 afterEach(async () => {
   vi.restoreAllMocks();
   reapHeldCoders();
+  await closeWorldHttp();
   while (servers.length) {
     await servers.pop()?.close();
   }
@@ -145,6 +147,15 @@ describe("tenant-issued field tokens on computer disk", () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-ftok-http-"));
     const architect = bootstrapArchitect(dir, "restart");
     const issued = issueFieldAsArchitect(dir, "restart", architect.token);
+    const world = await useWorldHttp();
+    bindWorldConnector({
+      tenantId: "restart",
+      computerBaseDir: dir,
+      architectToken: architect.token,
+      connectorId: "mls",
+      baseUrl: world.url,
+      secret: WORLD_FIXTURE_SECRET,
+    });
     const first = await listenEnvelope("restart", dir);
     const field = new FieldClient(first.url, issued.token);
     const { journey } = await createOpenStart(field, "buyer", "Work this buyer journey");
