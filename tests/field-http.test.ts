@@ -82,6 +82,58 @@ function communicateAvoidFromHome(
   return avoided;
 }
 
+/** Markup characters that must be escaped in HTML, not a reproduction procedure. */
+const FIELD_HTML_FIXTURE = "<em>x</em>";
+const FIELD_HTML_ESCAPED = "&lt;em&gt;x&lt;/em&gt;";
+
+function fieldPageScript(html: string): string {
+  const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+  if (!script) throw new Error("field page script missing");
+  return script;
+}
+
+function fieldPageFn<T>(html: string, name: string): T {
+  const match = fieldPageScript(html).match(new RegExp(`function ${name}\\([\\s\\S]*?\\n    \\}`));
+  if (!match) throw new Error(`${name} missing from field page`);
+  return new Function(`${match[0]}; return ${name};`)() as T;
+}
+
+function fieldPageListTemplate(html: string, listId: string): string {
+  const match = fieldPageScript(html).match(
+    new RegExp(`renderList\\("${listId}",[\\s\\S]*?=>\\s*\`([\\s\\S]*?)\`\\s*\\)`),
+  );
+  if (!match?.[1]) throw new Error(`renderList template for ${listId} missing`);
+  return match[1];
+}
+
+function renderFieldList(
+  html: string,
+  listId: string,
+  rowParam: string,
+  row: unknown,
+  selectedRecordId = "",
+): string {
+  const escapeHtml = fieldPageFn<(value: unknown) => string>(html, "escapeHtml");
+  const attributePairs = fieldPageFn<(attributes: Record<string, string> | undefined) => string>(
+    html,
+    "attributePairs",
+  );
+  const template = fieldPageListTemplate(html, listId);
+  const render = new Function(
+    "escapeHtml",
+    "attributePairs",
+    "selectedRecordId",
+    rowParam,
+    `return \`${template}\`;`,
+  );
+  return render(escapeHtml, attributePairs, selectedRecordId, row) as string;
+}
+
+function expectEscapedInterpolation(rendered: string) {
+  expect(rendered).toContain(FIELD_HTML_ESCAPED);
+  expect(rendered).not.toContain(FIELD_HTML_FIXTURE);
+}
+
 afterEach(async () => {
   reapHeldCoders();
   await closeWorldHttp();
@@ -370,6 +422,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/\/field\/facts\/retract/);
     expect(html).toMatch(/id="journey-kinds"/);
     expect(html).toMatch(/home\.journeyKinds/);
+    expect(html).toMatch(/function escapeHtml\(/);
+    expect(html).toMatch(/el\.innerHTML = rows\.length \? rows\.map\(html\)\.join\(""\)/);
     expect(html).toMatch(/data-open=/);
     expect(html).toMatch(/>Open</);
     expect(html).toMatch(/"journey\." \+ t\.dataset\.open/);
@@ -588,6 +642,85 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
     );
     expect(new FactBook(dir).presentIds(tenantId, subject!.id)).not.toContain("demo.fact");
+  });
+
+  it("escapes interpolated field values in the Linux page innerHTML", async () => {
+    const { url, field } = await liveField("escape-html");
+    const html = await (await fetch(url)).text();
+    expect(html).toMatch(/function escapeHtml\(/);
+    expect(html).toMatch(/el\.innerHTML = rows\.length \? rows\.map\(html\)\.join\(""\)/);
+    expect(html).toMatch(/\$\{escapeHtml\(k\.label\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(r\.label\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(attributePairs\(r\.attributes\)\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(a\.key\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(a\.value\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(p\.label\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(j\.objective\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(c\.purpose\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(c\.subject\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(c\.channel\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(c\.approve\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(c\.deny\)\}/);
+    expect(html).toMatch(/\$\{escapeHtml\(o\.summary\)\}/);
+    const interpolations = [...fieldPageScript(html).matchAll(/\$\{([^}]+)\}/g)].map((m) =>
+      m[1].trim(),
+    );
+    expect(interpolations.length).toBeGreaterThan(0);
+    for (const expr of interpolations) {
+      expect(expr.startsWith("escapeHtml(")).toBe(true);
+      expect(expr.endsWith(")")).toBe(true);
+    }
+
+    const home = await field.home();
+    const rec = await field.createApprovedRecord(home.recordKinds[0]!.id, FIELD_HTML_FIXTURE);
+    const updated = await field.updateApprovedRecord(rec.id, {
+      attributes: { [FIELD_HTML_FIXTURE]: FIELD_HTML_FIXTURE },
+    });
+    expect(updated.label).toBe(FIELD_HTML_FIXTURE);
+    expect(updated.attributes[FIELD_HTML_FIXTURE]).toBe(FIELD_HTML_FIXTURE);
+    const listed = (await field.home()).records.find((r) => r.id === rec.id);
+    expect(listed?.label).toBe(FIELD_HTML_FIXTURE);
+    expect(listed?.attributes[FIELD_HTML_FIXTURE]).toBe(FIELD_HTML_FIXTURE);
+
+    expectEscapedInterpolation(renderFieldList(html, "records", "r", listed, rec.id));
+    expectEscapedInterpolation(
+      renderFieldList(html, "record-attributes", "a", {
+        key: FIELD_HTML_FIXTURE,
+        value: FIELD_HTML_FIXTURE,
+      }),
+    );
+    expectEscapedInterpolation(
+      renderFieldList(html, "journey-kinds", "k", { id: FIELD_HTML_FIXTURE, label: FIELD_HTML_FIXTURE }),
+    );
+    expectEscapedInterpolation(
+      renderFieldList(html, "purpose-facts", "p", { id: FIELD_HTML_FIXTURE, label: FIELD_HTML_FIXTURE }),
+    );
+    expectEscapedInterpolation(
+      renderFieldList(html, "avoid-facts", "a", { id: FIELD_HTML_FIXTURE, label: FIELD_HTML_FIXTURE }),
+    );
+    expectEscapedInterpolation(
+      renderFieldList(html, "journeys", "j", {
+        kind: FIELD_HTML_FIXTURE,
+        objective: FIELD_HTML_FIXTURE,
+        id: FIELD_HTML_FIXTURE,
+      }),
+    );
+    expectEscapedInterpolation(
+      renderFieldList(html, "cards", "c", {
+        purpose: FIELD_HTML_FIXTURE,
+        subject: FIELD_HTML_FIXTURE,
+        channel: FIELD_HTML_FIXTURE,
+        cardId: FIELD_HTML_FIXTURE,
+        approve: FIELD_HTML_FIXTURE,
+        deny: FIELD_HTML_FIXTURE,
+      }),
+    );
+    expectEscapedInterpolation(
+      renderFieldList(html, "outbound", "o", {
+        summary: FIELD_HTML_FIXTURE,
+        actionId: FIELD_HTML_FIXTURE,
+      }),
+    );
   });
 
   it("keeps a real SwiftUI iOS field target in tree on the same API", async () => {
