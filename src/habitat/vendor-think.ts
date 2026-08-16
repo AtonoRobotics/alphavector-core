@@ -129,7 +129,7 @@ async function hostedVendorComplete(
   } catch {
     throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
   }
-  return parseVendorIntent(raw);
+  return cognitiveIntentFromUnknown(parseContent(extractChatContent(raw)));
 }
 
 export function resolveVendorBaseUrl(explicit?: string, bindUrl?: string): string {
@@ -147,10 +147,9 @@ function thinkUrl(baseUrl: string): string {
   return `${baseUrl}${VENDOR_THINK_PATH}`;
 }
 
-function parseVendorIntent(raw: unknown): CognitiveIntent {
-  const content = extractChatContent(raw);
-  const parsed = parseContent(content);
-  return asCognitiveIntent(parsed);
+/** Map an SDK or vendor JSON object to a kernel-owned CognitiveIntent. */
+export function cognitiveIntentFromUnknown(raw: unknown): CognitiveIntent {
+  return asCognitiveIntent(raw);
 }
 
 function extractChatContent(raw: unknown): unknown {

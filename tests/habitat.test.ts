@@ -582,7 +582,10 @@ describe("D10 §6 habitat kernel", () => {
     expect(adapterSrc).toMatch(/from ["']deepagents["']/);
     expect(adapterSrc).not.toMatch(/from ["']dcode["']/);
     expect(adapterSrc).not.toMatch(/dryThink/);
-    expect(adapterSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(adapterSrc).toMatch(/createDeepAgent\s*\(/);
+    expect(adapterSrc).toMatch(/\.invoke\(/);
+    expect(adapterSrc).toMatch(/owns = \["think"\]/);
+    expect(adapterSrc).not.toMatch(/owns = \["wake"/);
   });
 
   it("worker_done wakes ops and one card is required for one external effect", async () => {
@@ -1859,8 +1862,13 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     );
     expect(DeepAgentsAdapter.invocations).toBe(1);
     expect(DeepAgentsAdapter.vendorInvocations).toBe(1);
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(1);
     expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
+    expect(DeepAgentsAdapter.lastSdkPass?.modelId).toBe("ci-double");
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.profile.label).toBe("profile");
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.logs.label).toBe("logs");
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.recall.label).toBe("recall");
     expect(talking.launchedWorker).toBe(false);
     expect(talking.talkingDidHeavyWork).toBe(false);
     expect(talking.run?.status).toBe("talking");
@@ -1891,6 +1899,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     });
     expect(DeepAgentsAdapter.invocations).toBeGreaterThanOrEqual(2);
     expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThanOrEqual(2);
+    expect(DeepAgentsAdapter.sdkInvocations).toBeGreaterThanOrEqual(2);
     expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(working.launchedWorker).toBe(true);
@@ -1904,13 +1913,16 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const workerSrc = readFileSync(path.join(process.cwd(), "src/habitat/worker.ts"), "utf8");
     expect(workerSrc).not.toMatch(/createDeepAgent\s*\(/);
     const adapterSrc = readFileSync(path.join(process.cwd(), "src/habitat/deep-agents.ts"), "utf8");
+    const sdkSrc = readFileSync(path.join(process.cwd(), "src/habitat/sdk-think.ts"), "utf8");
     expect(adapterSrc).not.toMatch(/dryThink/);
-    expect(adapterSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(adapterSrc).toMatch(/createDeepAgent\s*\(/);
+    expect(adapterSrc).toMatch(/\.invoke\(/);
     expect(adapterSrc).not.toMatch(/thinkFn \?\? adapterThink/);
-    expect(adapterSrc).toMatch(/vendorThink/);
     expect(adapterSrc).toMatch(/hostedVendorClient/);
     expect(adapterSrc).toMatch(/adapterThink/);
     expect(adapterSrc).not.toMatch(/recordedVendorClient/);
+    expect(sdkSrc).toMatch(/vendorThink/);
+    expect(sdkSrc).toMatch(/VendorBoundChatModel/);
     const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
     expect(vendorSrc).not.toMatch(/adapterThink|dryThink/);
     expect(vendorSrc).not.toMatch(/createDeepAgent\s*\(/);
@@ -1957,6 +1969,8 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       });
     }
     expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
+    expect(DeepAgentsAdapter.lastSdkPass).toBeUndefined();
     expect(DeepAgentsAdapter.lastModelId).toBeUndefined();
     expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
     expect(existsSync(paths.runsFile)).toBe(false);
@@ -1978,6 +1992,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       }),
     ).rejects.toThrow(/ADAPTER_UNBOUND|no silent default/);
     expect(DeepAgentsAdapter.invocations).toBe(0);
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
     expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
     expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
   });
@@ -2491,7 +2506,9 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     }
     expect(DeepAgentsAdapter.invocations).toBe(0);
     expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
     expect(DeepAgentsAdapter.lastThinkPath).toBeUndefined();
+    expect(DeepAgentsAdapter.lastSdkPass).toBeUndefined();
     expect(DeepAgentsAdapter.lastModelId).toBeUndefined();
     expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
     expect(existsSync(paths.runsFile)).toBe(false);
@@ -2722,12 +2739,117 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     });
     expect(DeepAgentsAdapter.lastThinkPath).toBe("double");
     expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
+    expect(DeepAgentsAdapter.lastSdkPass).toBeUndefined();
     expect(DeepAgentsAdapter.invocations).toBeGreaterThan(0);
     expect(started.launchedWorker).toBe(true);
     expect(started.cardId).toMatch(/^card_/);
     const product = new DeepAgentsAdapter();
     expect(product.requiresCredentials).toBe(true);
     expect(new DeepAgentsAdapter(adapterThink).requiresCredentials).toBe(false);
+  });
+});
+
+describe("DEC-003 Deep Agents SDK pass inside think", () => {
+  it("think invokes createDeepAgent with skill bodies and labeled memory; SDK does not own the loop", async () => {
+    const double = await useVendorHttp();
+    const stack = await habitatThinkStack();
+    bindAndCredential({
+      tenantId: stack.tenantId,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    const marker = "SDK-PASS-MUST-SEE-THIS-SKILL-BODY";
+    const profile = "SDK-PASS-MUST-SEE-THIS-PROFILE";
+    architectWriteSkill({
+      tenantId: stack.tenantId,
+      name: "dispatch",
+      description: "Dispatch",
+      body: marker,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    const orchId = stack.agents.find((a) => a.isOrchestrator)!.agentId;
+    stack.core.habitat.memory.writeProfile({ tenantId: stack.tenantId, agentId: orchId, note: profile });
+
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
+    expect(DeepAgentsAdapter.sdkEntry).toBe(createDeepAgent);
+    await stack.core.habitat.wake({
+      kind: "field_start",
+      tenantId: stack.tenantId,
+      pack: stack.pack,
+      goal: "one goal",
+      recordId: stack.record.id,
+    });
+
+    expect(DeepAgentsAdapter.sdkInvocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
+    expect(DeepAgentsAdapter.lastSdkPass?.skills.some((s) => s.body === marker)).toBe(true);
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.profile.label).toBe("profile");
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.profile.body?.notes.includes(profile)).toBe(true);
+    expect(DeepAgentsAdapter.lastSdkPass?.systemPrompt).toContain(marker);
+    expect(DeepAgentsAdapter.lastSdkPass?.systemPrompt).toContain(profile);
+    expect(DeepAgentsAdapter.lastSdkPass?.userContent).toContain(marker);
+    expect(JSON.stringify(double.requests.map((r) => r.body))).toContain(marker);
+    expect(JSON.stringify(double.requests.map((r) => r.body))).toContain(profile);
+
+    const adapterSrc = readFileSync(path.join(process.cwd(), "src/habitat/deep-agents.ts"), "utf8");
+    const sdkSrc = readFileSync(path.join(process.cwd(), "src/habitat/sdk-think.ts"), "utf8");
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    const workerSrc = readFileSync(path.join(process.cwd(), "src/habitat/worker.ts"), "utf8");
+    const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    const passSrc = `${adapterSrc}\n${sdkSrc}`;
+    expect(adapterSrc).toMatch(/createDeepAgent\s*\(/);
+    expect(adapterSrc).toMatch(/\.invoke\(/);
+    expect(typeof createDeepAgent).toBe("function");
+    expect(kernelSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(workerSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(vendorSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(passSrc).not.toMatch(/\.wake\s*\(/);
+    expect(passSrc).not.toMatch(/this\.workers\.|new WorkerBook|admitConnector|fireDue\(/);
+    expect(passSrc).not.toMatch(/HABITAT_OWNED/);
+    expect(adapterSrc).toMatch(/owns = \["think"\]/);
+    expect(kernelSrc).toMatch(/owns = HABITAT_OWNED/);
+    expect(kernelSrc).toMatch(/adapter thinks → validate → act → sleep/);
+    expect(fieldSrc).toMatch(/model|prompt|temporal|tool/);
+    expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/model/);
+    expect(passSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+    expect(vendorSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    expect(passSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
+    expect(passSrc).not.toMatch(/Mission-Control|\bDesk\b|\bShape\b|\bPlay\b|\bPlant\b|\bHIL\b|\bThor\b/);
+    expect(passSrc).not.toMatch(/\bT0\b|\bT1\b|\bT2\b|\bT3\b/);
+  });
+
+  it("unbound is ADAPTER_UNBOUND and field cannot configure the model", async () => {
+    const stack = await habitatThinkStack();
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
+    await expect(
+      stack.core.habitat.wake({
+        kind: "field_start",
+        tenantId: stack.tenantId,
+        pack: stack.pack,
+        goal: "one goal",
+        recordId: stack.record.id,
+      }),
+    ).rejects.toMatchObject({ code: "ADAPTER_UNBOUND", closed: true });
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
+    expect(DeepAgentsAdapter.lastSdkPass).toBeUndefined();
+
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-sdk-field-model-"));
+    const { field, fieldToken, url } = await liveProductField("t1", dir);
+    const blocked = await fetch(`${url}/field/model`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${fieldToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "field-chosen" }),
+    });
+    expect(blocked.status).toBe(403);
+    expect(DeepAgentsAdapter.sdkInvocations).toBe(0);
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/vendor-base-url|adapter-bind|modelId/i);
+    expect(home.architectControls).toEqual([]);
   });
 });
 
@@ -5020,6 +5142,13 @@ describe("HK-070 skills are loadable files", () => {
     expect(JSON.stringify(double.requests.map((r) => r.body))).toContain(marker);
     expect(handles.some((h) => JSON.stringify(h).includes(marker))).toBe(true);
     expect(handles.some((h) => JSON.stringify(h).includes("dispatch"))).toBe(true);
+    expect(DeepAgentsAdapter.sdkInvocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastSdkPass?.skills.some((s) => s.body === marker && s.name === "dispatch")).toBe(
+      true,
+    );
+    expect(DeepAgentsAdapter.lastSdkPass?.systemPrompt).toContain(marker);
+    expect(DeepAgentsAdapter.lastSdkPass?.userContent).toContain(marker);
+    expect(JSON.stringify(DeepAgentsAdapter.lastSdkPass?.files)).toContain(marker);
   });
 
   it("missing or corrupt skill files fail closed (typed)", async () => {
@@ -5424,6 +5553,13 @@ describe("HK-072 durable memory injected on every wake", () => {
     expect(userContents.some((c) => c.memory?.recall.label === "recall" && c.memory.recall.items.some((e) => e.text === recall))).toBe(
       true,
     );
+    expect(DeepAgentsAdapter.sdkInvocations).toBeGreaterThan(0);
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.profile.label).toBe("profile");
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.profile.body?.notes.includes(profile)).toBe(true);
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.logs.entries.some((e) => e.text === log)).toBe(true);
+    expect(DeepAgentsAdapter.lastSdkPass?.memory.recall.items.some((e) => e.text === recall)).toBe(true);
+    expect(DeepAgentsAdapter.lastSdkPass?.systemPrompt).toContain(profile);
+    expect(DeepAgentsAdapter.lastSdkPass?.userContent).toContain(recall);
   });
 
   it("memory write is not a fact, consent, or outcome", async () => {

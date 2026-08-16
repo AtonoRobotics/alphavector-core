@@ -1,9 +1,16 @@
 import { createDeepAgent } from "deepagents";
 import { AvError } from "../errors.js";
+import {
+  intentFromSdkResult,
+  sdkThinkPassFromInput,
+  VendorBoundChatModel,
+  type DeepAgentsSdkPass,
+} from "./sdk-think.js";
 import type { AdapterInput, CognitiveAdapter, CognitiveIntent } from "./types.js";
-import { hostedVendorClient, vendorThink, type VendorThinkClient } from "./vendor-think.js";
+import { hostedVendorClient, type VendorThinkClient } from "./vendor-think.js";
 
 export { createDeepAgent };
+export type { DeepAgentsSdkPass };
 
 export type AdapterThinkFn = (input: AdapterInput) => CognitiveIntent;
 export type DeepAgentsThinkPath = "vendor" | "double";
@@ -23,14 +30,14 @@ export interface DeepAgentsAdapterOptions {
 /**
  * Deep Agents SDK is the cognitive adapter only (DEC-003).
  * A library version SHALL NOT be a core fork. The SDK does not own
- * wake, run, worker, admit, or the coder type.
+ * wake, run, worker, admit, persist, sleep, or the coder type.
  *
- * The published SDK entry is imported as sdkEntry. It SHALL NOT own the loop.
- * Think is this adapter. Kernel still wake / run / worker / admit / coder.
+ * Product think constructs and invokes createDeepAgent inside this adapter.
+ * Kernel still wake / run / worker / admit / coder / persist / sleep.
+ * Skills (HK-070 bodies) and labeled memory (HK-072) are inputs to that pass.
+ * Field cannot configure the model. Architect bind + credentials required.
  *
- * Product think: Architect bind + Architect-written credentials → live HTTP
- * to the hosted model. An explicit thinkFn is the CI test-double path.
- * It is not the product default. Dry-stem is not this adapter's production path.
+ * An explicit thinkFn is the CI test-double path. It is not the product default.
  */
 export class DeepAgentsAdapter implements CognitiveAdapter {
   readonly name = "deepagents";
@@ -40,8 +47,10 @@ export class DeepAgentsAdapter implements CognitiveAdapter {
   static readonly sdkEntry = createDeepAgent;
   static invocations = 0;
   static vendorInvocations = 0;
+  static sdkInvocations = 0;
   static lastModelId: string | undefined;
   static lastThinkPath: DeepAgentsThinkPath | undefined;
+  static lastSdkPass: DeepAgentsSdkPass | undefined;
   private readonly thinkFn?: AdapterThinkFn;
   private readonly vendor: VendorThinkClient;
 
@@ -77,7 +86,27 @@ export class DeepAgentsAdapter implements CognitiveAdapter {
     DeepAgentsAdapter.vendorInvocations += 1;
     DeepAgentsAdapter.lastModelId = modelId;
     DeepAgentsAdapter.lastThinkPath = "vendor";
-    return vendorThink(input, { apiKey }, this.vendor);
+    const pass = sdkThinkPassFromInput(input);
+    DeepAgentsAdapter.lastSdkPass = pass;
+    DeepAgentsAdapter.sdkInvocations += 1;
+    const credentials = { apiKey };
+    let result: unknown;
+    try {
+      const agent = createDeepAgent({
+        model: new VendorBoundChatModel({ input, credentials, vendor: this.vendor }),
+        name: "think",
+        systemPrompt: pass.systemPrompt,
+        ...(pass.skillSources.length ? { skills: pass.skillSources } : {}),
+      });
+      result = await agent.invoke({
+        messages: [{ role: "user", content: pass.userContent }],
+        files: pass.files,
+      });
+    } catch (err) {
+      throwIfAvError(err);
+      throw new AvError("ADAPTER_VENDOR_REJECTED", "Deep Agents SDK pass returned an unusable think body");
+    }
+    return intentFromSdkResult(result);
   }
 }
 
@@ -105,8 +134,10 @@ export function adapterThink(input: AdapterInput): CognitiveIntent {
 export function resetDeepAgentsInvocations(): void {
   DeepAgentsAdapter.invocations = 0;
   DeepAgentsAdapter.vendorInvocations = 0;
+  DeepAgentsAdapter.sdkInvocations = 0;
   DeepAgentsAdapter.lastModelId = undefined;
   DeepAgentsAdapter.lastThinkPath = undefined;
+  DeepAgentsAdapter.lastSdkPass = undefined;
 }
 
 function normalizeOpts(
@@ -114,4 +145,21 @@ function normalizeOpts(
 ): DeepAgentsAdapterOptions {
   if (typeof thinkFnOrOpts === "function") return { thinkFn: thinkFnOrOpts };
   return thinkFnOrOpts ?? {};
+}
+
+/** LangGraph wraps model errors; typed AvError must still fail closed. */
+function throwIfAvError(err: unknown): void {
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [err];
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    if (current instanceof AvError) throw current;
+    if ("cause" in current) queue.push((current as { cause: unknown }).cause);
+    if ("errors" in current && Array.isArray((current as { errors: unknown[] }).errors)) {
+      queue.push(...(current as { errors: unknown[] }).errors);
+    }
+    if ("originalError" in current) queue.push((current as { originalError: unknown }).originalError);
+  }
 }
