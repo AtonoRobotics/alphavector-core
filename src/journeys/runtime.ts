@@ -21,21 +21,20 @@ export class JourneyRuntime {
     if (journey.status !== "open") {
       throw new AvError("JOURNEY_NOT_OPEN", `Journey ${id} is ${journey.status}`);
     }
-    journey.version += 1;
-    journey.updatedAt = nowIso();
-    return journey;
+    return this.store.updateJourney(id, {
+      version: journey.version + 1,
+      updatedAt: nowIso(),
+    });
   }
 
   pause(id: string): Journey {
-    const journey = this.require(id);
-    journey.status = "paused";
-    return journey;
+    this.require(id);
+    return this.store.updateJourney(id, { status: "paused" });
   }
 
   close(id: string): Journey {
-    const journey = this.require(id);
-    journey.status = "closed";
-    return journey;
+    this.require(id);
+    return this.store.updateJourney(id, { status: "closed" });
   }
 
   private require(id: string): Journey {

@@ -67,4 +67,6 @@ AV_FIELD_TOKEN=<issued-token> npm run field:client -- --complete-demo
 
 Run install, then test, then build. Node 20. Vitest. Actions workflow under .github/workflows.
 
+Product boot requires `DATABASE_URL` (PostgreSQL). Missing URL fails closed — the process will not run an in-process ledger. This is ops/env, not a field control (DEC-020). CI starts a Postgres service and sets `DATABASE_URL` so the suite is independent evidence.
+
 Host packages the real desktop needs (GitHub-hosted runners install these in CI): `xvfb`, `x11-xserver-utils` (`xsetroot`), `x11-utils` (`xmessage`), `x11vnc`, `scrot`. `npm run prepare:image` only fetches the Alpine minirootfs.
