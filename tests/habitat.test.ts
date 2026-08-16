@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -795,8 +795,67 @@ describe("D10 §6 field verbs", () => {
     expect(second.core.habitat.trailerExists("t1")).toBe(false);
   });
 
-  it("worker book with a missing trailer fails closed and does not invent a worker id", async () => {
-    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-trailer-gone-"));
+  it("HTTP start, process restart, same-goal field start relaunches the same workerId when the trailer is gone", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-relaunch-"));
+    const first = await liveField("t1", dir);
+    const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
+    const run = first.core.habitat.getRun("t1")!;
+    const worker = first.core.habitat.activeWorker("t1")!;
+    const cardId = run.pendingCardId;
+    expect(run.status).toBe("awaiting_card");
+    expect(existsSync(worker.trailerPath)).toBe(true);
+    rmSync(worker.trailerPath, { recursive: true, force: true });
+    await first.server.close();
+
+    const second = await liveField("t1", dir, { field: first.fieldToken });
+    expect(second.core.habitat.getRun("t1")?.runId).toBe(run.runId);
+    expect(second.core.habitat.getRun("t1")?.status).toBe("awaiting_card");
+    expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
+    expect(second.core.habitat.trailerExists("t1")).toBe(false);
+
+    await second.field.start("buyer", started.journey.objective, started.record.id);
+    const live = second.core.habitat.activeWorker("t1");
+    expect(second.core.habitat.getRun("t1")?.runId).toBe(run.runId);
+    expect(second.core.habitat.getRun("t1")?.workerId).toBe(worker.workerId);
+    expect(second.core.habitat.getRun("t1")?.pendingCardId).toBe(cardId);
+    expect(live?.workerId).toBe(worker.workerId);
+    expect(live?.branch).toBe(worker.branch);
+    expect(live?.trailerPath).toBe(worker.trailerPath);
+    expect(second.core.habitat.trailerExists("t1")).toBe(true);
+    expect(existsSync(worker.trailerPath)).toBe(true);
+    expect(second.core.habitat.waitForExecutor("t1")).toBe(true);
+
+    const book = new WorkerBook(dir);
+    expect(book.get("t1")?.workerId).toBe(worker.workerId);
+    expect(book.launch({ tenantId: "t1", runId: worker.runId }).workerId).toBe(worker.workerId);
+    expect(book.get("t1")?.workerId).toBe(worker.workerId);
+  });
+
+  it("same-goal follow-up after that relaunch still sticks to the same workerId", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-relaunch-stick-"));
+    const first = await liveField("t1", dir);
+    const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
+    const run = first.core.habitat.getRun("t1")!;
+    const worker = first.core.habitat.activeWorker("t1")!;
+    rmSync(worker.trailerPath, { recursive: true, force: true });
+    await first.server.close();
+
+    const second = await liveField("t1", dir, { field: first.fieldToken });
+    await second.field.start("buyer", started.journey.objective, started.record.id);
+    expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
+    expect(second.core.habitat.trailerExists("t1")).toBe(true);
+
+    const follow = await second.field.start("buyer", started.journey.objective, started.record.id);
+    expect(follow.id).toBeDefined();
+    expect(second.core.habitat.getRun("t1")?.runId).toBe(run.runId);
+    expect(second.core.habitat.getRun("t1")?.workerId).toBe(worker.workerId);
+    expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
+    expect(second.core.habitat.activeWorker("t1")?.branch).toBe(worker.branch);
+    expect(second.core.habitat.trailerExists("t1")).toBe(true);
+  });
+
+  it("field kill after same-id relaunch tears the trailer down and clears the book", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-relaunch-kill-"));
     const first = await liveField("t1", dir);
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const worker = first.core.habitat.activeWorker("t1")!;
@@ -804,17 +863,89 @@ describe("D10 §6 field verbs", () => {
     await first.server.close();
 
     const second = await liveField("t1", dir, { field: first.fieldToken });
-    expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
-    expect(second.core.habitat.trailerExists("t1")).toBe(false);
     await second.field.start("buyer", started.journey.objective, started.record.id);
-    expect(second.core.habitat.getRun("t1")?.workerId).toBe(worker.workerId);
     expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
+    expect(second.core.habitat.trailerExists("t1")).toBe(true);
+    await second.field.kill("stop");
+    expect(second.core.habitat.trailerExists("t1")).toBe(false);
+    expect(second.core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(existsSync(worker.trailerPath)).toBe(false);
+    expect(second.core.habitat.getRun("t1")?.status).toBe("killed");
+    await second.server.close();
+
+    const third = await liveField("t1", dir, { field: first.fieldToken });
+    expect(third.core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(third.core.habitat.trailerExists("t1")).toBe(false);
+  });
+
+  it("field approve after same-id relaunch completes the same run and clears the book", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-relaunch-approve-"));
+    const first = await liveField("t1", dir);
+    const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
+    const runId = first.core.habitat.getRun("t1")!.runId;
+    const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
+    const worker = first.core.habitat.activeWorker("t1")!;
+    rmSync(worker.trailerPath, { recursive: true, force: true });
+    await first.server.close();
+
+    const second = await liveField("t1", dir, { field: first.fieldToken });
+    await second.field.start("buyer", started.journey.objective, started.record.id);
+    expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
+    expect(second.core.habitat.getRun("t1")?.pendingCardId).toBe(cardId);
+    const approved = await second.field.approve(cardId);
+    expect(approved.card.status).toBe("approved");
+    expect(approved.effect?.executed).toBe(true);
+    expect(approved.runId).toBe(runId);
+    expect(second.core.habitat.getRun("t1")?.runId).toBe(runId);
+    expect(second.core.habitat.getRun("t1")?.status).toBe("completed");
+    expect(second.core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(second.core.habitat.trailerExists("t1")).toBe(false);
+  });
+
+  it("field deny after same-id relaunch is terminal and clears the book", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-relaunch-deny-"));
+    const first = await liveField("t1", dir);
+    const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
+    const runId = first.core.habitat.getRun("t1")!.runId;
+    const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
+    const worker = first.core.habitat.activeWorker("t1")!;
+    rmSync(worker.trailerPath, { recursive: true, force: true });
+    await first.server.close();
+
+    const second = await liveField("t1", dir, { field: first.fieldToken });
+    await second.field.start("buyer", started.journey.objective, started.record.id);
+    expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
+    const denied = await second.field.deny(cardId);
+    expect(denied.status).toBe("denied");
+    expect(second.core.habitat.getRun("t1")?.runId).toBe(runId);
+    expect(second.core.habitat.getRun("t1")?.status).toBe("denied");
+    expect(second.core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(second.core.habitat.trailerExists("t1")).toBe(false);
+  });
+
+  it("corrupt workers.json still WORKER_STORE_CORRUPT", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-workers-corrupt-"));
+    const first = await liveField("t1", dir);
+    const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
+    const workerId = first.core.habitat.activeWorker("t1")!.workerId;
+    await first.server.close();
+    writeFileSync(computerRoot(dir, "t1").workersFile, "{not-json", "utf8");
+
+    const second = await liveField("t1", dir, { field: first.fieldToken });
+    await expect(
+      second.field.start("buyer", started.journey.objective, started.record.id),
+    ).rejects.toMatchObject({
+      status: 500,
+      code: "WORKER_STORE_CORRUPT",
+    });
+    expect(second.core.habitat.getRun("t1")?.workerId).toBe(workerId);
 
     const book = new WorkerBook(dir);
-    expect(book.get("t1")?.workerId).toBe(worker.workerId);
-    expect(() => book.launch({ tenantId: "t1", runId: worker.runId })).toThrow(AvError);
-    expect(() => book.launch({ tenantId: "t1", runId: worker.runId })).toThrow(/refusing to invent a worker/);
-    expect(book.get("t1")?.workerId).toBe(worker.workerId);
+    expect(() => book.get("t1")).toThrow(AvError);
+    expect(() => book.get("t1")).toThrow(/WORKER_STORE_CORRUPT|corrupt/i);
+    expect(() => book.launch({ tenantId: "t1", runId: "run_invented" })).toThrow(AvError);
+    expect(() => book.launch({ tenantId: "t1", runId: "run_invented" })).toThrow(/corrupt/i);
+    expect(() => book.getById("t1", "worker_invented")).toThrow(/corrupt/i);
   });
 
   it("field ask stays available and does not pick an agent", async () => {

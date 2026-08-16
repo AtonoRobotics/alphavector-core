@@ -57,49 +57,26 @@ export class WorkerBook {
     }
     const existing = this.get(input.tenantId);
     if (existing) {
-      if (!existsSync(existing.trailerPath)) {
-        throw new AvError(
-          "WORKER_TRAILER_GONE",
-          "Worker book is live but the trailer is gone; refusing to invent a worker",
-        );
-      }
-      return existing;
+      if (existsSync(existing.trailerPath)) return existing;
+      return this.spawnTrailer(existing, input.skills, input.hold);
     }
     const workerId = newId("worker");
     const paths = computerRoot(this.computerBaseDir, input.tenantId);
-    const trailerPath = path.join(paths.trailersDir, workerId);
-    mkdirSync(trailerPath, { recursive: true });
-    const branch = `coder/${workerId}`;
-    this.initBranch(trailerPath, branch);
-    if (input.skills?.length) copySkillsToTrailer(input.skills, trailerPath);
-    const execFile = path.join(trailerPath, "coder-exec.mjs");
-    writeFileSync(execFile, CODER_EXEC_SOURCE, "utf8");
-    const child = spawn(process.execPath, [execFile], {
-      cwd: trailerPath,
-      detached: true,
-      stdio: "ignore",
-      env: {
-        ...process.env,
-        AV_CODER_HOLD: input.hold ? "1" : "0",
+    return this.spawnTrailer(
+      {
+        workerId,
+        tenantId: input.tenantId,
+        runId: input.runId,
+        type: CODER_TYPE.id,
+        isolation: "trailer",
+        trailerPath: path.join(paths.trailersDir, workerId),
+        branch: `coder/${workerId}`,
+        agent: coderAgent(input.tenantId, workerId),
+        createdAt: nowIso(),
       },
-    });
-    child.unref();
-    const agent = coderAgent(input.tenantId, workerId);
-    const record: WorkerRecord = {
-      workerId,
-      tenantId: input.tenantId,
-      runId: input.runId,
-      type: CODER_TYPE.id,
-      isolation: "trailer",
-      trailerPath,
-      branch,
-      pid: child.pid,
-      agent,
-      createdAt: nowIso(),
-    };
-    this.workers.set(input.tenantId, record);
-    this.persist(input.tenantId);
-    return record;
+      input.skills,
+      input.hold,
+    );
   }
 
   trailerExists(tenantId: string): boolean {
@@ -160,6 +137,29 @@ export class WorkerBook {
       this.corrupt.set(tenantId, closed);
       throw closed;
     }
+  }
+
+  /** Recreate the trailer/process for this workerId. Does not mint a different id. */
+  private spawnTrailer(record: WorkerRecord, skills?: SkillFile[], hold?: boolean): WorkerRecord {
+    mkdirSync(record.trailerPath, { recursive: true });
+    this.initBranch(record.trailerPath, record.branch);
+    if (skills?.length) copySkillsToTrailer(skills, record.trailerPath);
+    const execFile = path.join(record.trailerPath, "coder-exec.mjs");
+    writeFileSync(execFile, CODER_EXEC_SOURCE, "utf8");
+    const child = spawn(process.execPath, [execFile], {
+      cwd: record.trailerPath,
+      detached: true,
+      stdio: "ignore",
+      env: {
+        ...process.env,
+        AV_CODER_HOLD: hold ? "1" : "0",
+      },
+    });
+    child.unref();
+    const next: WorkerRecord = { ...record, pid: child.pid };
+    this.workers.set(record.tenantId, next);
+    this.persist(record.tenantId);
+    return next;
   }
 
   private persist(tenantId: string): void {

@@ -156,6 +156,15 @@ export class HabitatKernel {
       throw new AvError("ONE_GOAL", "Orchestrator SHALL dispatch one goal at a time");
     }
     if (existing && existing.status === "awaiting_card" && existing.goal === event.goal) {
+      // Book live + trailer gone (typical after process restart): same-id relaunch.
+      // Do not return here as a no-op — launch() recreates the process, not a new id.
+      if (this.workers.get(event.tenantId) && !this.workers.trailerExists(event.tenantId)) {
+        this.workers.launch({
+          tenantId: event.tenantId,
+          runId: existing.runId,
+          skills: writeSkillFiles(this.opts.computerBaseDir, pack),
+        });
+      }
       const memory = this.injectMemory(
         event.tenantId,
         this.workers.get(event.tenantId)?.agent.agentId ?? this.orchestratorId(event.tenantId),
@@ -238,14 +247,15 @@ export class HabitatKernel {
   ): WakeResult {
     const run = this.requireRun(event.tenantId);
     const followUp = Boolean(run.workerId && this.workers.getById(event.tenantId, run.workerId));
-    const worker = followUp
-      ? this.workers.get(event.tenantId)!
-      : this.workers.launch({
-          tenantId: event.tenantId,
-          runId: run.runId,
-          skills,
-          hold: holdWorker,
-        });
+    const worker =
+      followUp && this.workers.trailerExists(event.tenantId)
+        ? this.workers.get(event.tenantId)!
+        : this.workers.launch({
+            tenantId: event.tenantId,
+            runId: run.runId,
+            skills,
+            hold: holdWorker,
+          });
     if (!followUp) {
       this.opts.orchestrator.dispatch({
         orchestrator: orch,
