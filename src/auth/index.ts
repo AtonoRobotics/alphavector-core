@@ -15,3 +15,4 @@ export * from "./architect-brokerage.js";
 export * from "./architect-skills.js";
 export * from "./architect-promote.js";
 export * from "./architect-habitat.js";
+export * from "./architect-deploy.js";

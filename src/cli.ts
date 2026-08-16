@@ -12,7 +12,10 @@ import { architectWriteRoutine } from "./auth/architect-routines.js";
 import { architectSit } from "./auth/architect-habitat.js";
 import { architectPromoteProposal } from "./auth/architect-promote.js";
 import { architectWriteSkill } from "./auth/architect-skills.js";
+import { architectDeploy } from "./auth/architect-deploy.js";
 import { requireArchitect } from "./auth/require-architect.js";
+import { ComputerHost } from "./computer/host.js";
+import { defaultImageCacheDir } from "./computer/image.js";
 import { PackLoadError } from "./errors.js";
 import { FieldClient } from "./http/field-client.js";
 import { startFieldServe } from "./http/field-listen.js";
@@ -88,7 +91,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-brokerage | bind-deadline | deliver-mail | write-skill | promote-proposal",
+        "Architect (off the field home screen). Commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-brokerage | bind-deadline | deliver-mail | write-skill | promote-proposal | deploy",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -125,6 +128,9 @@ async function main(): Promise<void> {
       );
       console.log(
         "habitat reads live org, open runs, workers, grants, eval, isolation. Not five booleans. Not a write. Field cannot sit.",
+      );
+      console.log(
+        "deploy records a live tenant (signed L1 pack, started Hull computer, DATABASE_URL) on a non-loopback host and non-ephemeral port. Field-serve on 127.0.0.1 / port 0 / t1 is not a deploy. DryStem and fixture packs are not a deploy. Field cannot deploy. Not a vendor cloud.",
       );
       return;
     }
@@ -357,6 +363,32 @@ async function main(): Promise<void> {
       );
       return;
     }
+    if (sub === "deploy") {
+      const host = flag(flags, "--host");
+      const portRaw = flag(flags, "--port");
+      if (!host || portRaw === undefined) {
+        throw new Error("architect deploy requires --host and --port");
+      }
+      const port = Number(portRaw);
+      requireArchitect(tenantId, dir, architectToken);
+      const core = new AlphaVectorCore(resolveProductTrustAnchors(), path.join(dir, "state"), dir);
+      const computer = await ComputerHost.create({
+        baseDir: dir,
+        imageCacheDir: defaultImageCacheDir(),
+      });
+      core.computer = computer;
+      core.habitat.attachComputer(computer);
+      const record = await architectDeploy({
+        tenantId,
+        computerBaseDir: dir,
+        core,
+        host,
+        port,
+        architectToken,
+      });
+      console.log(JSON.stringify(record, null, 2));
+      return;
+    }
     if (sub === "deliver-mail") {
       const addresseeId = flag(flags, "--addressee-id");
       const body = flag(flags, "--body");
@@ -400,7 +432,7 @@ async function main(): Promise<void> {
       return;
     }
     throw new Error(
-      "architect commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-brokerage | bind-deadline | deliver-mail | write-skill | promote-proposal",
+      "architect commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-brokerage | bind-deadline | deliver-mail | write-skill | promote-proposal | deploy",
     );
   }
   if (cmd === "field-serve") {

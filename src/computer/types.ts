@@ -84,6 +84,13 @@ export interface ComputerPaths {
    * never inside the bind-mounted /home, never a field file, never pack schema.
    */
   brokerageFile: string;
+  /**
+   * Architect-only production deploy record (DEC-020).
+   * Same class as brokerage / adapter-bind: beside the disk, never inside
+   * the bind-mounted /home, never a field file, never a vendor cloud.
+   * Field-serve theater does not write this file.
+   */
+  deployFile: string;
 }
 
 export interface TenantComputer {

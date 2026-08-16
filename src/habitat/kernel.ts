@@ -135,6 +135,11 @@ export class HabitatKernel {
     this.workers.attachComputer(computer);
   }
 
+  /** Adapter name the kernel is running. DryStem is fixture-only; not a deploy. */
+  cognitiveAdapterName(): string {
+    return this.adapter.name;
+  }
+
   /**
    * One persistent Linux computer per tenant. Starts if needed. Packs do not own it.
    * Field does not configure the machine.
