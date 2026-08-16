@@ -23,6 +23,17 @@ export interface FieldAskBody {
   actionClass: string;
 }
 
+/** Ask attaches to the open run. Labeled memory is on the wake result. */
+export interface FieldAskResult {
+  ok: true;
+  runId: string;
+  memory: {
+    profile: { label: "profile"; agentId: string; body: unknown };
+    logs: { label: "logs"; agentId: string; entries: unknown[] };
+    recall: { label: "recall"; scope: string; items: unknown[] };
+  };
+}
+
 export interface FieldStartBody {
   journeyKind: string;
   objective: string;

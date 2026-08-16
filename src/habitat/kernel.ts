@@ -117,6 +117,9 @@ export class HabitatKernel {
     if (event.kind === "worker_done") {
       return this.workerDone(event);
     }
+    if (event.kind === "field_ask") {
+      return this.fieldAsk(event, decision);
+    }
     if (event.kind !== "field_start") {
       const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
       this.wakeLog.append({
@@ -140,6 +143,42 @@ export class HabitatKernel {
 
   replay(tenantId: string): ReturnType<typeof replayWakeLog> {
     return replayWakeLog(this.wakeLog.list(tenantId));
+  }
+
+  /**
+   * Field ask: a wake on the open run. Does not mint a run or a goal.
+   * Talking stays thin — no pickAgent, no coder launch. No implicit start.
+   */
+  private fieldAsk(event: WakeEvent, decision: ReturnType<typeof stem>): WakeResult {
+    const run = this.runs.get(event.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Ask requires an open run; no implicit start");
+    }
+    const creature = this.requireOrchestrator(event.tenantId);
+    const memory = this.injectMemory(event.tenantId, creature.agentId);
+    this.assertLabeled(memory);
+    const talking = this.adapter.think({
+      pass: "talking",
+      event,
+      run,
+      memory,
+      skills: [],
+    });
+    this.validateTalking(talking);
+    this.wakeLog.append({
+      kind: "field_ask",
+      tenantId: event.tenantId,
+      runId: run.runId,
+      at: nowIso(),
+    });
+    return {
+      run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory,
+    };
   }
 
   private fieldStart(
