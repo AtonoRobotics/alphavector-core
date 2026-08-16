@@ -234,9 +234,10 @@ export class FieldClient {
   /**
    * Completes one pack journey and one owner card approve against a live field API.
    * Used by the Linux client so a reviewer can finish the required path today.
-   * Opens the first pack journey kind, then records the communicate REQUIRES
-   * purpose from home.purposeFacts (not a typed fact id). Does not mint tokens
-   * or skip the card. Opening does not record purpose.* facts.
+   * Opens the first pack journey kind, records the communicate REQUIRES purpose
+   * from home.purposeFacts, then starts. Field start is the habitat wake and
+   * issues the one card for the one external effect. Does not mint tokens or
+   * skip the card. Progress is not the conductor.
    */
   async completeBuyerJourneyAndCard(): Promise<{
     journey: Journey;
@@ -252,20 +253,10 @@ export class FieldClient {
     const purpose = this.communicateRequiresPurpose(home);
     await this.recordApprovedFact(purpose.id, subject.id);
     const journey = await this.start(kind.id, `Work this ${kind.label} journey`, subject.id);
-    let cardId = "";
-    try {
-      await this.progress(journey.id, {
-        actionClass: "communicate",
-        channel: "email",
-        purpose: purpose.id.slice("purpose.".length),
-        subject: subject.id,
-      });
-      throw new Error("expected authorization card before execute");
-    } catch (err) {
-      if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
-        throw err;
-      }
-      cardId = err.cardId;
+    const startedCards = await this.cards();
+    const cardId = startedCards[0]?.cardId;
+    if (!cardId) {
+      throw new Error("field start must require a card for the one external effect");
     }
     const approved = await this.approve(cardId);
     if (!approved.effect?.executed) {

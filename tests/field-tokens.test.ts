@@ -132,22 +132,11 @@ describe("tenant-issued field tokens on computer disk", () => {
     const issued = issueFieldAsArchitect(dir, "restart", architect.token);
     const first = await listenServe("restart", dir);
     const field = new FieldClient(first.url, issued.token);
-    const { journey, record } = await createOpenStart(field, "buyer", "Work this buyer journey");
-    await field.recordApprovedFact("purpose.follow-up", record.id);
+    const { journey } = await createOpenStart(field, "buyer", "Work this buyer journey");
     expect(journey.journeyKind).toBe("buyer");
-    let cardId = "";
-    try {
-      await field.progress(journey.id, {
-        actionClass: "communicate",
-        channel: "email",
-        purpose: "follow-up",
-        subject: record.id,
-      });
-      throw new Error("expected authorization card before execute");
-    } catch (err) {
-      expect(err).toMatchObject({ code: "AUTHORIZATION_REQUIRED" });
-      cardId = (err as { cardId: string }).cardId;
-    }
+    const startedCards = await field.cards();
+    const cardId = startedCards[0]?.cardId;
+    expect(cardId).toMatch(/^card_/);
     await first.server.close();
 
     const second = await listenServe("restart", dir);

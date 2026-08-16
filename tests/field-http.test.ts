@@ -86,10 +86,8 @@ afterEach(async () => {
 });
 
 async function liveField(tenantId = "t1", computerBaseDir?: string) {
-  const { core, pack } = await bootFieldCore(
-    tenantId,
-    computerBaseDir ? { computerBaseDir } : {},
-  );
+  const dir = computerBaseDir ?? (await mkdtemp(path.join(os.tmpdir(), "av-field-http-")));
+  const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir: dir });
   const architectIssued = core.fieldTokens.issue({ tenantId, principal: "architect" });
   const fieldIssued = core.fieldTokens.issue({
     tenantId,

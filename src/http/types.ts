@@ -59,6 +59,8 @@ export interface FieldApproveResult {
   effect?: FieldProgressResult["effect"];
   fact?: FieldFactResult;
   record?: FieldRecordResult;
+  /** Habitat run resumed by field card approve. Same id as start. */
+  runId?: string;
 }
 
 export interface FieldHttpErrorBody {
