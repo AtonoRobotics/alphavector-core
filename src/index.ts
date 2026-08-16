@@ -1,4 +1,4 @@
-export { PRODUCT, FORBIDDEN_PRODUCT_NAMES } from "./identity.js";
+export { PRODUCT, FORBIDDEN_PRODUCT_NAMES, GLASS, GLASS_HUES } from "./identity.js";
 export { AlphaVectorCore } from "./kernel.js";
 export * from "./errors.js";
 export * from "./packs/index.js";

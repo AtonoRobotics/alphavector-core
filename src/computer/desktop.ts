@@ -6,6 +6,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { ComputerError } from "../errors.js";
+import { GLASS } from "../identity.js";
 import type { DesktopSession } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -16,16 +17,10 @@ export function displayForAgent(agentId: string): number {
   return 10 + n;
 }
 
-export function colorForDisplay(display: number): string {
-  const r = 16 + ((display * 37) % 200);
-  const g = 32 + ((display * 53) % 180);
-  const b = 64 + ((display * 19) % 160);
-  return `#${[r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("")}`;
-}
-
 /**
  * Real per-agent desktop: Xvfb + labeled window + optional VNC.
  * Agents share the tenant disk, not this screen.
+ * Architect chrome is near-black. Do not invent a per-display hue.
  */
 export async function ensureRealDesktop(input: {
   tenantId: string;
@@ -39,7 +34,6 @@ export async function ensureRealDesktop(input: {
   const persisted = await readPersistedDisplay(input.desktopPath);
   const display = persisted ?? (await allocateDisplay(input.agentId));
   const vncPort = 5900 + display;
-  const color = colorForDisplay(display);
   const env = { ...process.env, DISPLAY: `:${display}` };
 
   await ensureSpawned({
@@ -50,7 +44,7 @@ export async function ensureRealDesktop(input: {
   });
   await waitUntil(() => existsSync(`/tmp/.X11-unix/X${display}`), 40, 100);
 
-  await execFileAsync("xsetroot", ["-solid", color], { env });
+  await execFileAsync("xsetroot", ["-solid", GLASS.nearBlack], { env });
   await ensureSpawned({
     pidFile: path.join(input.desktopPath, "label.pid"),
     command: "xmessage",
@@ -84,14 +78,13 @@ export async function ensureRealDesktop(input: {
       agentId: input.agentId,
       display,
       vncPort,
-      color,
     }),
     "utf8",
   );
   await writeFile(path.join(input.desktopPath, "display"), `:${display}\n`, "utf8");
   await writeFile(
     path.join(input.desktopPath, "session.json"),
-    `${JSON.stringify({ tenantId: input.tenantId, agentId: input.agentId, display, vncPort, color }, null, 2)}\n`,
+    `${JSON.stringify({ tenantId: input.tenantId, agentId: input.agentId, display, vncPort }, null, 2)}\n`,
     "utf8",
   );
 
@@ -233,12 +226,11 @@ async function waitUntil(pred: () => boolean, tries: number, delayMs: number): P
   throw new ComputerError("DESKTOP_X_UNREADY", "Xvfb display did not become ready");
 }
 
-function architectViewerHtml(input: {
+export function architectViewerHtml(input: {
   tenantId: string;
   agentId: string;
   display: number;
   vncPort: number;
-  color: string;
 }): string {
   return `<!doctype html>
 <html lang="en">
@@ -246,16 +238,33 @@ function architectViewerHtml(input: {
   <meta charset="utf-8"/>
   <title>AV Dev desktop · ${escapeHtml(input.agentId)}</title>
   <style>
-    body { font: 15px/1.4 sans-serif; background: #111; color: #eee; margin: 1.5rem; }
-    .screen { border: 4px solid ${input.color}; display: inline-block; }
+    :root {
+      --bone: ${GLASS.bone};
+      --near-black: ${GLASS.nearBlack};
+      --hairline: ${GLASS.hairline};
+      color-scheme: dark;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-weight: 400;
+    }
+    body { background: var(--near-black); color: var(--bone); margin: 0; }
+    main { max-width: 48rem; margin: 0 auto; padding: 1.5rem; }
+    h1 { font-size: 1rem; font-weight: 500; margin: 0 0 0.75rem; }
+    p { margin: 0 0 0.75rem; }
+    hr { border: 0; border-top: 1px solid var(--hairline); margin: 1rem 0; }
+    .screen { border: 1px solid var(--hairline); display: inline-block; }
     img { max-width: 100%; height: auto; }
+    footer { margin-top: 1.5rem; font-size: 0.8rem; }
   </style>
 </head>
 <body>
-  <h1>Architect attach</h1>
-  <p>Tenant ${escapeHtml(input.tenantId)} · agent ${escapeHtml(input.agentId)} · display :${input.display}</p>
-  <p>VNC localhost:${input.vncPort} (localhost only). Agent never sees keystrokes or passwords.</p>
-  <div class="screen"><img src="screenshot.png" alt="agent desktop"/></div>
+  <main>
+    <h1>Architect attach</h1>
+    <p>Tenant ${escapeHtml(input.tenantId)} · agent ${escapeHtml(input.agentId)} · display :${input.display}</p>
+    <hr />
+    <p>VNC localhost:${input.vncPort} (localhost only). Agent never sees keystrokes or passwords.</p>
+    <div class="screen"><img src="screenshot.png" alt="agent desktop"/></div>
+    <footer>Alpha Vector LLC</footer>
+  </main>
 </body>
 </html>
 `;
