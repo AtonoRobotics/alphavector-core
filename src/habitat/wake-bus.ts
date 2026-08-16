@@ -4,6 +4,7 @@ export type WakeHandler = (event: WakeEvent) => void;
 
 /**
  * Event-driven wake bus. The orchestrator SHALL NOT poll.
+ * Emit-to-subscribers only. Does not queue; HabitatKernel owns the pass lock.
  */
 export class WakeBus {
   private readonly handlers: WakeHandler[] = [];
