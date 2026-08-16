@@ -3,7 +3,8 @@ import { AgentRuntime } from "../src/agents/runtime.js";
 import { CardBook } from "../src/auth/cards.js";
 import { DurableStore } from "../src/data/store.js";
 import { EffectExecutor } from "../src/effects/executor.js";
-import { AuthorizationRequiredError, PolicyDeniedError } from "../src/errors.js";
+import { AuthorizationRequiredError, AvError, PolicyDeniedError } from "../src/errors.js";
+import { assertHabitatMayAsk, habitatAskReason } from "../src/grants/ask.js";
 import { GrantBook } from "../src/grants/store.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { PolicyGateway } from "../src/policy/gateway.js";
@@ -234,5 +235,75 @@ describe("policy gateway + auth cards", () => {
         fieldNotice: "nope",
       }),
     ).toThrow(/cannot create, widen, or graduate/);
+  });
+
+  it("uses an authorized grant for that class even when the acting agent differs", async () => {
+    const { pack, writer, effects, grants, cards, store } = await setup();
+    grants.write({
+      actor: "architect",
+      tenantId: "t1",
+      agentId: writer.agentId,
+      actionClass: "communicate",
+      state: "authorized",
+      bounds: { channels: ["email"] },
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: "Follow-up emails will now send without asking. You can kill this.",
+    });
+    const coder = { ...writer, agentId: "worker_not_the_grant_agent", name: "coder" };
+    const before = cards.fieldInbox("t1").length;
+    const result = effects.execute({
+      pack,
+      agent: coder,
+      actionClass: "communicate",
+      channel: "email",
+      purpose: "follow-up",
+      subject: "case",
+      surface: "field",
+    });
+    expect(result.executed).toBe(true);
+    expect(result.policyDecision).toMatch(/Email permitted|Consented follow-up/);
+    expect(cards.fieldInbox("t1")).toHaveLength(before);
+    expect(store.actions.some((a) => a.status === "executed")).toBe(true);
+    expect(habitatAskReason({ grants, tenantId: "t1", actionClass: "communicate" })).toBeUndefined();
+    expect(() => assertHabitatMayAsk(undefined)).toThrow(AvError);
+    expect(() => assertHabitatMayAsk(undefined)).toThrow(/HABITAT_REASK|habitat bug/);
+  });
+
+  it("does not send or retry when there is no grant and no current card (EXC-008)", async () => {
+    const { pack, writer, effects, grants, cards, store } = await setup();
+    expect(grants.classState("t1", "communicate")).toBe("requires_authorization");
+    expect(() =>
+      effects.execute({
+        pack,
+        agent: writer,
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "follow-up",
+        subject: "case",
+        surface: "field",
+        assumedRoutineAutonomy: true,
+      }),
+    ).toThrow(/EXC-008/);
+    expect(store.actions.some((a) => a.status === "executed")).toBe(false);
+
+    try {
+      effects.execute({
+        pack,
+        agent: writer,
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "follow-up",
+        subject: "case",
+        surface: "field",
+      });
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+    }
+    expect(store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(cards.fieldInbox("t1")).toHaveLength(1);
+    expect(habitatAskReason({ grants, tenantId: "t1", actionClass: "communicate" })).toBe("no_grant");
   });
 });

@@ -2,6 +2,7 @@ import { AuthorizationRequiredError, AvError, PolicyDeniedError } from "../error
 import type { AgentRecord } from "../agents/types.js";
 import type { CardBook } from "../auth/cards.js";
 import type { DurableStore } from "../data/store.js";
+import { assertHabitatMayAsk, habitatAskReason } from "../grants/ask.js";
 import type { GrantBook } from "../grants/store.js";
 import type { LoadedPack } from "../packs/types.js";
 import type { PolicyGateway } from "../policy/gateway.js";
@@ -100,15 +101,17 @@ export class EffectExecutor {
       throw new AvError("DENY_IS_TERMINAL", "Deny is terminal; the same action cannot be silently resubmitted");
     }
 
-    const grantState = this.grants.state(input.pack.tenantId, input.agent.agentId, input.actionClass);
-    if (grantState === "revoked") {
-      this.store.updateAction(action.id, "denied");
-      throw new AvError("GRANT_REVOKED", "Grant revoked; no execution");
-    }
-
+    const grantState = this.grants.classState(input.pack.tenantId, input.actionClass);
+    const askReason = habitatAskReason({
+      grants: this.grants,
+      tenantId: input.pack.tenantId,
+      actionClass: input.actionClass,
+      ceiling: verb.ceiling,
+    });
     const needsCard = grantState !== "authorized" || verb.ceiling === "human_decision";
     if (needsCard) {
       if (!input.approvedCardId) {
+        assertHabitatMayAsk(askReason);
         const card = this.cards.issue({
           tenantId: input.pack.tenantId,
           kind: input.surface === "architect" ? "architect_admin" : "owner_instance",
@@ -122,7 +125,7 @@ export class EffectExecutor {
         this.store.addEvidence({
           tenantId: input.pack.tenantId,
           kind: "auth_card",
-          payload: { cardId: card.cardId, actionId: action.id },
+          payload: { cardId: card.cardId, actionId: action.id, askReason },
           producedBy: "core",
         });
         throw new AuthorizationRequiredError(card.cardId, "Authorization card required before execution");
@@ -144,7 +147,7 @@ export class EffectExecutor {
    * Admission without a world call must not use this.
    */
   commitExternal(actionId: string, input: EffectInput, policyDecision: string): EffectResult {
-    const grantState = this.grants.state(input.pack.tenantId, input.agent.agentId, input.actionClass);
+    const grantState = this.grants.classState(input.pack.tenantId, input.actionClass);
     this.store.updateAction(actionId, "executed");
     this.store.addEvidence({
       tenantId: input.pack.tenantId,

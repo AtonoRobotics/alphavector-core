@@ -18,6 +18,35 @@ export class GrantBook {
     return grant.state;
   }
 
+  /**
+   * Class-level state for the habitat loop. A grant already authorized for
+   * this action class SHALL be used, regardless of which pack agent it was
+   * written on. The thin coder is not a second owner-auth identity.
+   */
+  classState(tenantId: string, actionClass: string): GrantState {
+    const now = nowIso();
+    const matches = [...this.grants.values()].filter(
+      (grant) => grant.tenantId === tenantId && grant.actionClass === actionClass,
+    );
+    if (matches.length === 0) return "requires_authorization";
+    const live = matches.filter((grant) => !grant.expiresAt || grant.expiresAt >= now);
+    if (live.some((grant) => grant.state === "authorized")) return "authorized";
+    if (matches.some((grant) => grant.state === "revoked")) return "revoked";
+    return "requires_authorization";
+  }
+
+  /** Live authorized grant for this class, if the loop may use it. */
+  authorizedForClass(tenantId: string, actionClass: string): Grant | undefined {
+    const now = nowIso();
+    return [...this.grants.values()].find(
+      (grant) =>
+        grant.tenantId === tenantId &&
+        grant.actionClass === actionClass &&
+        grant.state === "authorized" &&
+        (!grant.expiresAt || grant.expiresAt >= now),
+    );
+  }
+
   get(tenantId: string, agentId: string, actionClass: string): Grant | undefined {
     return this.grants.get(this.key(tenantId, agentId, actionClass));
   }

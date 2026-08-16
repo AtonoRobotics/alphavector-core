@@ -4,6 +4,14 @@
  */
 export type GrantState = "requires_authorization" | "authorized" | "revoked";
 
+/**
+ * Why the habitat loop may mint a new owner_instance card.
+ * Re-ask without one of these is a habitat bug (HABITAT_REASK), not safety.
+ * Not a T0–T3 ladder. Authorization remains the default.
+ */
+export const HABITAT_ASK_REASONS = ["no_grant", "grant_revoked", "class_mismatch", "human_decision"] as const;
+export type HabitatAskReason = (typeof HABITAT_ASK_REASONS)[number];
+
 export interface GrantBounds {
   channels?: string[];
   purposes?: string[];
