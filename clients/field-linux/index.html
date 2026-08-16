@@ -28,7 +28,7 @@
 <body>
   <main>
     <h1>AV Dev Field</h1>
-    <p class="lead">Required field path. Create a record, set or retract a key on the selected record, open a pack journey, record a pack purpose or avoid on the selected record, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
+    <p class="lead">Required field path. Create a record, set or retract a key on the selected record, retract the selected record, open a pack journey, record a pack purpose or avoid on the selected record, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
     <div id="status"></div>
 
     <section>
@@ -68,6 +68,7 @@
       <label for="attr-value">Value</label>
       <input id="attr-value" autocomplete="off" spellcheck="false" placeholder="Attribute value" />
       <button id="set-attribute" type="button">Set attribute</button>
+      <button id="retract-record" type="button" class="secondary">Retract record</button>
       <ul id="record-attributes"></ul>
     </section>
 
@@ -276,6 +277,27 @@
         try {
           await api("POST", "/field/records", { type: type, label: label });
           setStatus("Record create completed without a card");
+        } catch (err) {
+          if (err.cardId) setStatus("Card required: " + err.cardId);
+          else throw err;
+        }
+        await refresh();
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    };
+
+    document.getElementById("retract-record").onclick = async () => {
+      try {
+        if (!selectedRecord()) {
+          setStatus("Select a record before retracting a record", true);
+          return;
+        }
+        try {
+          await api("POST", "/field/records/retract", {
+            recordId: selectedRecord(),
+          });
+          setStatus("Record retract completed without a card");
         } catch (err) {
           if (err.cardId) setStatus("Card required: " + err.cardId);
           else throw err;

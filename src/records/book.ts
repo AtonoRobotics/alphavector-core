@@ -137,6 +137,27 @@ export class RecordBook {
     return next;
   }
 
+  /**
+   * Ungated remove of a known record. Field path must not call this until
+   * the owner_instance card is approved. Unknown or blank id fails closed.
+   * Does not invent a record and does not delete-on-empty-string.
+   */
+  remove(tenantId: string, id: string): TenantRecord {
+    if (!id) {
+      throw new AvError("RECORD_ID_REQUIRED", "Record id is required");
+    }
+    this.ensure(tenantId);
+    const list = this.records.get(tenantId) ?? [];
+    const index = list.findIndex((record) => record.id === id);
+    if (index < 0) {
+      throw new AvError("RECORD_NOT_FOUND", `Unknown record ${id}`);
+    }
+    const [removed] = list.splice(index, 1);
+    this.records.set(tenantId, list);
+    this.persist(tenantId);
+    return removed!;
+  }
+
   private ensure(tenantId: string): void {
     const failed = this.corrupt.get(tenantId);
     if (failed) throw failed;

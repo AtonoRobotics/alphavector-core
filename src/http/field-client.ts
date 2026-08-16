@@ -97,6 +97,14 @@ export class FieldClient {
   }
 
   /**
+   * Issues an owner_instance card to retract a whole known record. Persist
+   * happens only after approve. Missing recordId fails closed.
+   */
+  retractRecord(recordId: string): Promise<{ id: string; present: boolean }> {
+    return this.request("POST", "/field/records/retract", { recordId });
+  }
+
+  /**
    * Page path: POST /field/facts or /field/facts/retract, then approve the
    * owner_instance card. Persist happens only after approve.
    */
@@ -205,6 +213,32 @@ export class FieldClient {
       throw new Error("attribute retract approve did not persist");
     }
     return approved.record;
+  }
+
+  /**
+   * Page path: POST /field/records/retract, then approve the owner_instance
+   * card. Persist happens only after approve. Missing recordId fails closed.
+   */
+  async requestRecordRetractCard(recordId: string): Promise<string> {
+    try {
+      await this.retractRecord(recordId);
+      throw new Error("expected authorization card before record retract");
+    } catch (err) {
+      if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
+        throw err;
+      }
+      return err.cardId;
+    }
+  }
+
+  /** Same whole-record retract path the Linux page uses, then approve. */
+  async retractApprovedRecord(recordId: string): Promise<NonNullable<FieldApproveResult["fact"]>> {
+    const cardId = await this.requestRecordRetractCard(recordId);
+    const approved = await this.approve(cardId);
+    if (!approved.fact || approved.fact.present) {
+      throw new Error("record retract approve did not remove");
+    }
+    return approved.fact;
   }
 
   /**

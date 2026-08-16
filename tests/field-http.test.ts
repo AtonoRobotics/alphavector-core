@@ -391,6 +391,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/\/field\/records\/attributes\/retract/);
     expect(html).toMatch(/data-attr-retract=/);
     expect(html).toMatch(/Select a record before retracting an attribute/);
+    expect(html).toMatch(/id="retract-record"/);
+    expect(html).toMatch(/\/field\/records\/retract/);
+    expect(html).toMatch(/Select a record before retracting a record/);
     expect(html).toMatch(/home\.recordKinds/);
     expect(html).toMatch(/home\.records/);
     expect(html).toMatch(/data-select-record=/);
@@ -431,6 +434,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(clientSrc).toMatch(/updateApprovedRecord/);
     expect(clientSrc).toMatch(/requestRecordUpdateCard/);
     expect(clientSrc).toMatch(/\/field\/records\/update/);
+    expect(clientSrc).toMatch(/requestRecordRetractCard/);
+    expect(clientSrc).toMatch(/retractApprovedRecord/);
+    expect(clientSrc).toMatch(/\/field\/records\/retract/);
     expect(clientSrc).toMatch(/home\.recordKinds/);
     expect(clientSrc).toMatch(/openApproved\(kind\.id, subject\.id\)/);
     expect(clientSrc).toMatch(/start\(kind\.id, `Work this \$\{kind\.label\} journey`, subject\.id\)/);
@@ -446,6 +452,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(fieldSrc).toMatch(/recordKindsFromBinding/);
     expect(fieldSrc).toMatch(/assertRecordUpdatePatch/);
     expect(fieldSrc).toMatch(/actionClass === "update"/);
+    expect(fieldSrc).toMatch(/actionClass === "delete"/);
+    expect(fieldSrc).toMatch(/retractRecord/);
     expect(fieldSrc).toMatch(/verb\.AVOIDS/);
     expect(fieldSrc).toMatch(/kind\.AVOIDS/);
     expect(fieldSrc).toMatch(/RECORD_ID_REQUIRED/);
@@ -1573,6 +1581,74 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(restarted?.attributes).toEqual({ keep: "yes" });
     const home = await field.home();
     expect(home.records.find((r) => r.id === rec.id)?.attributes).toEqual({ keep: "yes" });
+  });
+
+  it("retracts a whole record only after approve and survives RecordBook restart", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-http-retract-"));
+    const { field, architect, tenantId, url, tokens } = await liveField("records-retract", dir);
+    const paths = computerRoot(dir, tenantId);
+    const type = (await field.home()).recordKinds[0];
+    const keep = await field.createApprovedRecord(type.id, "Keep");
+    const rec = await field.createApprovedRecord(type.id, "Gone");
+
+    await expect(architect.retractRecord(rec.id)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    const unauthed = await fetch(`${url}/field/records/retract`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ recordId: rec.id }),
+    });
+    expect(unauthed.status).toBe(401);
+
+    const missingRecord = await fetch(`${url}/field/records/retract`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.field}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    expect(missingRecord.status).toBe(400);
+    expect(await missingRecord.json()).toMatchObject({ error: "RECORD_ID_REQUIRED" });
+
+    await expect(field.retractRecord("rec_unknown")).rejects.toMatchObject({
+      status: 404,
+      code: "RECORD_NOT_FOUND",
+    });
+
+    const unapproved = await field.requestRecordRetractCard(rec.id);
+    expect(unapproved).toMatch(/^card_/);
+    expect(new RecordBook(dir).get(tenantId, rec.id)?.label).toBe("Gone");
+    expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records.map((r: { id: string }) => r.id)).toEqual(
+      expect.arrayContaining([keep.id, rec.id]),
+    );
+
+    const denied = await field.requestRecordRetractCard(keep.id);
+    await field.deny(denied);
+    expect(new RecordBook(dir).get(tenantId, keep.id)?.label).toBe("Keep");
+    await expect(field.retractRecord(keep.id)).rejects.toMatchObject({
+      status: 403,
+      code: "DENY_IS_TERMINAL",
+    });
+
+    const approved = await field.approve(unapproved);
+    expect(approved.fact).toEqual({ id: rec.id, present: false });
+    expect(approved.record).toBeUndefined();
+    expect(new RecordBook(dir).get(tenantId, rec.id)).toBeUndefined();
+    expect(new RecordBook(dir).get(tenantId, keep.id)?.label).toBe("Keep");
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+    expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records).toEqual([
+      expect.objectContaining({ id: keep.id, label: "Keep" }),
+    ]);
+
+    const restarted = new RecordBook(dir);
+    expect(restarted.get(tenantId, rec.id)).toBeUndefined();
+    expect(restarted.get(tenantId, keep.id)?.label).toBe("Keep");
+    const home = await field.home();
+    expect(home.records.find((r) => r.id === rec.id)).toBeUndefined();
+    expect(home.records.find((r) => r.id === keep.id)?.label).toBe("Keep");
   });
 
   it("keeps RE types out of core schema and migrations", async () => {
