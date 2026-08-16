@@ -876,7 +876,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
   it("records a pack purpose fact from home and unblocks communicate after approve", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-purpose-list-"));
-    const { field, architect, tenantId, pack } = await liveField("purpose-list", dir);
+    const { field, architect, tenantId, pack, world } = await liveFieldWithWorld("purpose-list", dir);
     const paths = computerRoot(dir, tenantId);
     const kind = pack.binding.journeyKinds[0];
     const home = await field.home();
@@ -954,6 +954,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       if (!(err instanceof FieldHttpError) || !err.cardId) throw err;
       const executed = await field.approve(err.cardId);
       expect(executed.effect?.executed).toBe(true);
+      expect(world.requests).toHaveLength(1);
+      expect(world.requests[0]?.method).toBe("POST");
     }
 
     await expect(architect.record(purpose.id, rec.id)).rejects.toMatchObject({
@@ -970,7 +972,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
   it("records a pack AVOIDS fact from home and fail-closes communicate after approve", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-avoid-list-"));
-    const { field, architect, tenantId, pack } = await liveField("avoid-list", dir);
+    const { field, architect, tenantId, pack } = await liveFieldWithWorld("avoid-list", dir);
     const paths = computerRoot(dir, tenantId);
     const kind = pack.binding.journeyKinds[0];
     const home = await field.home();
@@ -1136,7 +1138,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
   it("creates records through the card path and scopes DNC to the subject", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-http-subject-"));
-    const { field, architect, tenantId, pack, url } = await liveField("records-subject", dir);
+    const { field, architect, tenantId, pack, url } = await liveFieldWithWorld("records-subject", dir);
     const paths = computerRoot(dir, tenantId);
     const home = await field.home();
     const kind = pack.binding.journeyKinds[0];

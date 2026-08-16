@@ -1,10 +1,12 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { AgentRuntime } from "../src/agents/runtime.js";
+import { architectBindConnector } from "../src/auth/architect-connectors.js";
 import { CardBook } from "../src/auth/cards.js";
+import { FieldTokenBook } from "../src/auth/field-tokens.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { DurableStore } from "../src/data/store.js";
 import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
@@ -13,6 +15,10 @@ import { AvError, AuthorizationRequiredError, PolicyDeniedError, SurfaceViolatio
 import { FactBook } from "../src/facts/book.js";
 import { GrantBook } from "../src/grants/store.js";
 import { RecordBook } from "../src/records/book.js";
+import { DryStemAdapter } from "../src/habitat/adapter.js";
+import { FieldHttpServer } from "../src/http/field-server.js";
+import { FieldClient } from "../src/http/field-client.js";
+import { AlphaVectorCore } from "../src/kernel.js";
 import { JourneyRuntime } from "../src/journeys/runtime.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { PolicyGateway } from "../src/policy/gateway.js";
@@ -25,8 +31,24 @@ import {
   signedRePack,
   signedRePackMutated,
 } from "./helpers.js";
+import {
+  WORLD_FIXTURE_SECRET,
+  bindWorldConnector,
+  bindWorldForPack,
+  closeWorldHttp,
+  startWorldDouble,
+  useWorldHttp,
+} from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
+const servers: FieldHttpServer[] = [];
+
+afterEach(async () => {
+  await closeWorldHttp();
+  while (servers.length) {
+    await servers.pop()?.close();
+  }
+});
 const REQUIRED = "condition.required";
 const PREFERRED = "condition.preferred";
 const AVOIDED = "condition.avoided";
@@ -54,7 +76,17 @@ async function reFieldStack(
   const ask = new AskSurface(store);
   const facts = new FactBook(opts?.computerBaseDir);
   const records = new RecordBook(opts?.computerBaseDir);
-  const field = new FieldSurface(cards, store, grants, journeys, effects, ask, facts, records);
+  const field = new FieldSurface(
+    cards,
+    store,
+    grants,
+    journeys,
+    effects,
+    ask,
+    facts,
+    records,
+    opts?.computerBaseDir,
+  );
   const agents = new AgentRuntime().instantiateFromPack(loaded.loaded, "architect");
   return { pack: loaded.loaded, field, cards, store, grants, agents, ask, facts, records };
 }
@@ -187,14 +219,14 @@ describe("required field path against pinned alphavector-re", () => {
         recordId: "rec_none",
       }),
     ).toThrow(SurfaceViolationError);
-    expect(() =>
+    await expect(
       field.progress({
         actor: "architect",
         pack,
         journeyId: "journey_none",
         note: "Architect must not progress here",
       }),
-    ).toThrow(/field user/);
+    ).rejects.toThrow(/field user/);
     expect(() =>
       field.ask({
         actor: "counsel_eval",
@@ -231,7 +263,7 @@ describe("required field path against pinned alphavector-re", () => {
       const agent =
         agents.find((a) => a.specialties.includes(kind)) ??
         agents.find((a) => a.isOrchestrator)!;
-      const advanced = field.progress({
+      const advanced = await field.progress({
         actor: "field",
         pack,
         journeyId: journey.id,
@@ -277,7 +309,7 @@ describe("required field path against pinned alphavector-re", () => {
     expect(() => field.ask({ actor: "field", pack, ...req })).toThrow(/Ask ceiling/);
 
     const agent = agents.find((a) => a.specialties.includes("seller"))!;
-    expect(() =>
+    await expect(
       field.progress({
         actor: "field",
         pack,
@@ -286,9 +318,9 @@ describe("required field path against pinned alphavector-re", () => {
         actionClass: "licensed_judgment",
         subject: rec.id,
       }),
-    ).toThrow(PolicyDeniedError);
+    ).rejects.toBeInstanceOf(PolicyDeniedError);
 
-    const progressed = field.progress({
+    const progressed = await field.progress({
       actor: "field",
       pack,
       journeyId: journey.id,
@@ -333,7 +365,7 @@ describe("required field path against pinned alphavector-re", () => {
 
     let cardId = "";
     try {
-      field.progress(effect);
+      await field.progress(effect);
       throw new Error("should have required a card");
     } catch (err) {
       expect(err).toBeInstanceOf(AuthorizationRequiredError);
@@ -359,12 +391,24 @@ describe("required field path against pinned alphavector-re", () => {
     expect(field.home("t1").inbox).toHaveLength(1);
 
     cards.resolve({ cardId, decision: "denied", actor: "field" });
-    expect(() => field.progress(effect)).toThrow(/terminal/);
-    expect(() => field.progress(effect)).toThrow(/terminal/);
+    await expect(field.progress(effect)).rejects.toThrow(/terminal/);
+    await expect(field.progress(effect)).rejects.toThrow(/terminal/);
   });
 
   it("approves an owner_instance card then executes communicate on the field path", async () => {
-    const { pack, field, cards, agents, facts, records } = await reFieldStack();
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-field-progress-world-"));
+    const { pack, field, cards, agents, facts, records, store } = await reFieldStack(undefined, {
+      computerBaseDir: dir,
+    });
+    const world = await useWorldHttp();
+    const architect = new FieldTokenBook(dir).issue({ tenantId: "t1", principal: "architect" });
+    bindWorldForPack({
+      tenantId: "t1",
+      computerBaseDir: dir,
+      architectToken: architect.token,
+      pack,
+      baseUrl: world.url,
+    });
     const rec = putSubject(records, pack);
     facts.put("t1", "journey.buyer", rec.id);
     facts.put("t1", "purpose.follow-up", rec.id);
@@ -389,7 +433,7 @@ describe("required field path against pinned alphavector-re", () => {
 
     let cardId = "";
     try {
-      field.progress(effect);
+      await field.progress(effect);
       throw new Error("should have required a card");
     } catch (err) {
       expect(err).toBeInstanceOf(AuthorizationRequiredError);
@@ -416,8 +460,13 @@ describe("required field path against pinned alphavector-re", () => {
     expect(field.home("t1").inbox).toHaveLength(1);
 
     cards.resolve({ cardId, decision: "approved", actor: "field" });
-    const progressed = field.progress({ ...effect, approvedCardId: cardId });
+    expect(world.requests).toHaveLength(0);
+    expect(store.actions.some((a) => a.status === "executed")).toBe(false);
+    const progressed = await field.progress({ ...effect, approvedCardId: cardId });
     expect(progressed.effect?.executed).toBe(true);
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0]?.method).toBe("POST");
+    expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
     expect(field.home("t1").inbox).toHaveLength(0);
     expect(field.home("t1").outboundLog.some((row) => row.actionId === progressed.effect?.actionId)).toBe(
       true,
@@ -593,11 +642,9 @@ describe("required field path against pinned alphavector-re", () => {
       purpose: "follow-up",
       subject: buyerRec.id,
     };
-    expect(() => field.progress(effect)).toThrow(/REQUIRES missing/);
+    await expect(field.progress(effect)).rejects.toThrow(/REQUIRES missing/);
     facts.put("t1", "purpose.follow-up", buyerRec.id);
-    expect(() => field.progress(effect)).toThrow(
-      AuthorizationRequiredError,
-    );
+    await expect(field.progress(effect)).rejects.toBeInstanceOf(AuthorizationRequiredError);
   });
 
   it("authored AVOIDS fail closed when consent.dnc is on disk", async () => {
@@ -687,7 +734,7 @@ describe("required field path against pinned alphavector-re", () => {
       recordId: rec.id,
     });
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
-    const advanced = field.progress({
+    const advanced = await field.progress({
       actor: "field",
       pack,
       journeyId: journey.id,
@@ -742,7 +789,7 @@ describe("required field path against pinned alphavector-re", () => {
     ).toThrow(/fail closed/);
 
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
-    expect(() =>
+    await expect(
       field.progress({
         actor: "field",
         pack,
@@ -751,7 +798,7 @@ describe("required field path against pinned alphavector-re", () => {
         actionClass: "read",
         subject: rec.id,
       }),
-    ).toThrow(/AVOIDS present/);
+    ).rejects.toThrow(/AVOIDS present/);
   });
 
   it("records PREFERS on the field path and does not fail closed when unmet", async () => {
@@ -776,7 +823,7 @@ describe("required field path against pinned alphavector-re", () => {
     });
     expect(journey.status).toBe("open");
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
-    const unmet = field.progress({
+    const unmet = await field.progress({
       actor: "field",
       pack,
       journeyId: journey.id,
@@ -791,7 +838,7 @@ describe("required field path against pinned alphavector-re", () => {
     );
 
     facts.put("t1", PREFERRED, rec.id);
-    const met = field.progress({
+    const met = await field.progress({
       actor: "field",
       pack,
       journeyId: journey.id,
@@ -868,7 +915,7 @@ describe("required field path against pinned alphavector-re", () => {
       recordId: rec.id,
     });
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
-    const advanced = field.progress({
+    const advanced = await field.progress({
       actor: "field",
       pack,
       journeyId: journey.id,
@@ -1075,9 +1122,9 @@ describe("required field path against pinned alphavector-re", () => {
       channel: "email",
       purpose: "follow-up",
     };
-    expect(() => field.progress({ ...communicate, subject: recA.id })).toThrow(/AVOIDS present/);
-    expect(() => field.progress({ ...communicate, subject: recA.id })).toThrow(/fail closed/);
-    expect(() => field.progress({ ...communicate, subject: recB.id })).toThrow(
+    await expect(field.progress({ ...communicate, subject: recA.id })).rejects.toThrow(/AVOIDS present/);
+    await expect(field.progress({ ...communicate, subject: recA.id })).rejects.toThrow(/fail closed/);
+    await expect(field.progress({ ...communicate, subject: recB.id })).rejects.toBeInstanceOf(
       AuthorizationRequiredError,
     );
   });
@@ -1108,15 +1155,15 @@ describe("required field path against pinned alphavector-re", () => {
       purpose: "follow-up",
     };
 
-    expect(() => field.progress(communicate)).toThrow(AvError);
-    expect(() => field.progress(communicate)).toThrow(/Record id is required/);
-    expect(() => field.progress({ ...communicate, subject: "" })).toThrow(/Record id is required/);
-    expect(() => field.progress({ ...communicate, subject: "buyer" })).toThrow(AvError);
-    expect(() => field.progress({ ...communicate, subject: "buyer" })).toThrow(/Unknown record/);
-    expect(() => field.progress({ ...communicate, subject: "rec_unknown" })).toThrow(
+    await expect(field.progress(communicate)).rejects.toBeInstanceOf(AvError);
+    await expect(field.progress(communicate)).rejects.toThrow(/Record id is required/);
+    await expect(field.progress({ ...communicate, subject: "" })).rejects.toThrow(/Record id is required/);
+    await expect(field.progress({ ...communicate, subject: "buyer" })).rejects.toBeInstanceOf(AvError);
+    await expect(field.progress({ ...communicate, subject: "buyer" })).rejects.toThrow(/Unknown record/);
+    await expect(field.progress({ ...communicate, subject: "rec_unknown" })).rejects.toThrow(
       /Unknown record/,
     );
-    expect(() => field.progress({ ...communicate, subject: rec.id })).toThrow(
+    await expect(field.progress({ ...communicate, subject: rec.id })).rejects.toBeInstanceOf(
       AuthorizationRequiredError,
     );
   });
@@ -1674,5 +1721,260 @@ describe("required field path against pinned alphavector-re", () => {
     ]);
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+  });
+});
+
+async function journeyProgressStack() {
+  const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-journey-world-"));
+  const { anchors, binding } = await signedRePack();
+  const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+    adapter: new DryStemAdapter(),
+  });
+  const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+  if (!loaded.ok) throw new Error(loaded.message);
+  const agents = core.agents.instantiateFromPack(loaded.loaded, "architect");
+  const type = loaded.loaded.binding.recordPartyKnowledge.recordKinds[0] ?? "record";
+  const rec = core.records.put("t1", { type, label: "Subject" });
+  core.facts.put("t1", "journey.buyer", rec.id);
+  core.facts.put("t1", "purpose.follow-up", rec.id);
+  const journey = core.field.start({
+    actor: "field",
+    pack: loaded.loaded,
+    journeyKind: "buyer",
+    objective: "Work this buyer journey",
+    recordId: rec.id,
+  });
+  const followUp = agents.find((a) => a.name === "Follow-up")!;
+  const architect = core.fieldTokens.issue({ tenantId: "t1", principal: "architect" });
+  const fieldToken = core.fieldTokens.issue({
+    tenantId: "t1",
+    principal: "field",
+    presented: architect.token,
+  });
+  return {
+    core,
+    pack: loaded.loaded,
+    rec,
+    journey,
+    followUp,
+    computerBaseDir,
+    architectToken: architect.token,
+    fieldToken: fieldToken.token,
+  };
+}
+
+function communicateEffect(stack: Awaited<ReturnType<typeof journeyProgressStack>>) {
+  return {
+    actor: "field" as const,
+    pack: stack.pack,
+    journeyId: stack.journey.id,
+    agent: stack.followUp,
+    actionClass: "communicate",
+    channel: "email",
+    purpose: "follow-up",
+    subject: stack.rec.id,
+  };
+}
+
+async function issueProgressCard(stack: Awaited<ReturnType<typeof journeyProgressStack>>): Promise<string> {
+  try {
+    await stack.core.field.progress(communicateEffect(stack));
+    throw new Error("should have required a card");
+  } catch (err) {
+    if (!(err instanceof AuthorizationRequiredError)) throw err;
+    return err.cardId;
+  }
+}
+
+describe("approved journey progress calls the world", () => {
+  it("keeps the RE fixture pin at 5091328 and does not hardcode a public vendor host", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/surfaces/field.ts"), "utf8");
+    const worldSrc = readFileSync(path.join(process.cwd(), "src/habitat/connector-world.ts"), "utf8");
+    const executorSrc = readFileSync(path.join(process.cwd(), "src/effects/executor.ts"), "utf8");
+    expect(fieldSrc).toMatch(/invokeConnectorWorld/);
+    expect(fieldSrc).toMatch(/recordExecution: false/);
+    expect(fieldSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+    expect(worldSrc).toMatch(/invokeConnectorWorld/);
+    expect(worldSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+    expect(executorSrc).toMatch(/recordExecution/);
+    expect(executorSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com/);
+    const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/HomeView.swift"), "utf8");
+    expect(ios).not.toMatch(/connector/i);
+  });
+
+  it("approved journey progress POSTs the live handle and only then writes executed", async () => {
+    const stack = await journeyProgressStack();
+    const world = await useWorldHttp();
+    bindWorldForPack({
+      tenantId: "t1",
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      pack: stack.pack,
+      baseUrl: world.url,
+    });
+    const cardId = await issueProgressCard(stack);
+    stack.core.cards.resolve({ cardId, decision: "approved", actor: "field" });
+    expect(world.requests).toHaveLength(0);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    const progressed = await stack.core.field.progress({
+      ...communicateEffect(stack),
+      approvedCardId: cardId,
+    });
+    expect(progressed.effect?.executed).toBe(true);
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0]?.method).toBe("POST");
+    expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
+    const body = world.requests[0]?.body as { handleId?: string; connectorId?: string; actionClass?: string };
+    expect(body.actionClass).toBe("communicate");
+    expect(body.handleId).toMatch(/^handle:/);
+    expect(JSON.stringify(body)).not.toContain(WORLD_FIXTURE_SECRET);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(true);
+    expect(stack.core.store.evidence.some((e) => e.kind === "journey_progress")).toBe(true);
+  });
+
+  it("unbound approved progress is CONNECTOR_UNBOUND and does not write executed", async () => {
+    const stack = await journeyProgressStack();
+    const cardId = await issueProgressCard(stack);
+    stack.core.cards.resolve({ cardId, decision: "approved", actor: "field" });
+    await expect(
+      stack.core.field.progress({ ...communicateEffect(stack), approvedCardId: cardId }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_UNBOUND", closed: true });
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(stack.core.store.evidence.some((e) => e.kind === "journey_progress")).toBe(false);
+  });
+
+  it("missing required credentials fail closed and do not call the world", async () => {
+    const stack = await journeyProgressStack();
+    const world = await useWorldHttp();
+    architectBindConnector({
+      tenantId: "t1",
+      connectorId: stack.pack.binding.connectors[0]!.id,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      baseUrl: world.url,
+      requiresCredentials: true,
+    });
+    const cardId = await issueProgressCard(stack);
+    stack.core.cards.resolve({ cardId, decision: "approved", actor: "field" });
+    await expect(
+      stack.core.field.progress({ ...communicateEffect(stack), approvedCardId: cardId }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_CREDENTIALS_MISSING", closed: true });
+    expect(world.requests).toHaveLength(0);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("unreachable world is CONNECTOR_UNREACHABLE and does not write executed", async () => {
+    const stack = await journeyProgressStack();
+    bindWorldConnector({
+      tenantId: "t1",
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      connectorId: stack.pack.binding.connectors[0]!.id,
+      baseUrl: "http://127.0.0.1:1",
+    });
+    const cardId = await issueProgressCard(stack);
+    stack.core.cards.resolve({ cardId, decision: "approved", actor: "field" });
+    await expect(
+      stack.core.field.progress({ ...communicateEffect(stack), approvedCardId: cardId }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_UNREACHABLE", closed: true });
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("world 500 is CONNECTOR_REJECTED and does not write executed", async () => {
+    const stack = await journeyProgressStack();
+    const world = await startWorldDouble({ status: 500 });
+    bindWorldForPack({
+      tenantId: "t1",
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      pack: stack.pack,
+      baseUrl: world.url,
+    });
+    const cardId = await issueProgressCard(stack);
+    stack.core.cards.resolve({ cardId, decision: "approved", actor: "field" });
+    await expect(
+      stack.core.field.progress({ ...communicateEffect(stack), approvedCardId: cardId }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_REJECTED", closed: true });
+    expect(world.requests).toHaveLength(1);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("rejected credentials are CONNECTOR_CREDENTIALS_REJECTED and do not write executed", async () => {
+    const stack = await journeyProgressStack();
+    const world = await startWorldDouble({ rejectAuth: true });
+    bindWorldForPack({
+      tenantId: "t1",
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      pack: stack.pack,
+      baseUrl: world.url,
+    });
+    const cardId = await issueProgressCard(stack);
+    stack.core.cards.resolve({ cardId, decision: "approved", actor: "field" });
+    await expect(
+      stack.core.field.progress({ ...communicateEffect(stack), approvedCardId: cardId }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_CREDENTIALS_REJECTED", closed: true });
+    expect(world.requests).toHaveLength(1);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("denied card is terminal and does not call the world", async () => {
+    const stack = await journeyProgressStack();
+    const world = await useWorldHttp();
+    bindWorldForPack({
+      tenantId: "t1",
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+      pack: stack.pack,
+      baseUrl: world.url,
+    });
+    const cardId = await issueProgressCard(stack);
+    stack.core.cards.resolve({ cardId, decision: "denied", actor: "field" });
+    await expect(stack.core.field.progress(communicateEffect(stack))).rejects.toThrow(/terminal/);
+    expect(world.requests).toHaveLength(0);
+    expect(stack.core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("field cannot bind the connector, set credentials, or fire it as Architect", async () => {
+    const stack = await journeyProgressStack();
+    expect(() =>
+      architectBindConnector({
+        tenantId: "t1",
+        connectorId: "webhook",
+        computerBaseDir: stack.computerBaseDir,
+        architectToken: stack.fieldToken,
+        baseUrl: "http://127.0.0.1:9",
+      }),
+    ).toThrow(/cannot bind|field token|connector/i);
+    const server = new FieldHttpServer({
+      core: stack.core,
+      pack: stack.pack,
+      tenantId: "t1",
+    });
+    servers.push(server);
+    const { url } = await server.listen(0, "127.0.0.1");
+    const field = new FieldClient(url, stack.fieldToken);
+    const blocked = await fetch(`${url}/field/connectors`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${stack.fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ connectorId: "webhook", baseUrl: "http://127.0.0.1:9" }),
+    });
+    expect(blocked.status).toBe(403);
+    const fire = await fetch(`${url}/field/connector-world`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${stack.fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ connectorId: "webhook" }),
+    });
+    expect(fire.status).toBe(403);
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/baseUrl|bind-connector|connector-world/i);
+    expect(existsSync(computerRoot(stack.computerBaseDir, "t1").connectorBindFile)).toBe(false);
   });
 });
