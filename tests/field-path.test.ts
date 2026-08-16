@@ -901,6 +901,78 @@ describe("required field path against pinned alphavector-re", () => {
     );
   });
 
+  it("open on A allows start about A and leaves start about B closed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-journey-open-a-not-b-"));
+    const { pack, field, cards, records } = await reFieldStack(undefined, {
+      computerBaseDir: dir,
+    });
+    const type = pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record";
+    const putRecord = (label: string) => {
+      let cardId = "";
+      try {
+        field.create({ actor: "field", pack, type, label });
+        throw new Error("should have required a card");
+      } catch (err) {
+        cardId = (err as AuthorizationRequiredError).cardId;
+      }
+      cards.resolve({ cardId, decision: "approved", actor: "field" });
+      return field.commitApprovedFact(cardId)!.id;
+    };
+    const recA = putRecord("A");
+    const recB = putRecord("B");
+
+    let openA = "";
+    try {
+      field.record({ actor: "field", pack, id: "journey.buyer", recordId: recA });
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+      openA = (err as AuthorizationRequiredError).cardId;
+    }
+    expect(existsSync(computerRoot(dir, "t1").factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds("t1", recA)).toEqual([]);
+
+    cards.resolve({ cardId: openA, decision: "approved", actor: "field" });
+    expect(field.commitApprovedFact(openA)).toEqual({
+      id: "journey.buyer",
+      present: true,
+      recordId: recA,
+    });
+    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expect(new FactBook(dir).presentIds("t1", recA)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds("t1", recB)).toEqual([]);
+
+    const startedA = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+      recordId: recA,
+    });
+    expect(startedA.status).toBe("open");
+    expect(startedA.recordId).toBe(recA);
+    expect(records.has("t1", recA)).toBe(true);
+
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        recordId: recB,
+      }),
+    ).toThrow(/REQUIRES missing/);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        recordId: recB,
+      }),
+    ).toThrow(/fail closed/);
+  });
+
   it("fail-closes on a corrupt record store and does not invent a record", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-bad-"));
     const paths = computerRoot(dir, "t1");

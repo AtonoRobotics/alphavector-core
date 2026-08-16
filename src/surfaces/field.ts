@@ -185,13 +185,14 @@ export class FieldSurface {
     this.assertFieldSafe(input.journeyKind);
     this.assertFieldSafe(input.objective);
     this.assertPackJourneyKind(input.pack, input.journeyKind);
+    const recordId = this.assertKnownRecord(input.pack.tenantId, input.recordId);
     this.assertDeclaredPredicates(
       input.pack.tenantId,
       [this.journeyBinding(input.pack, input.journeyKind)],
       input.conditions,
-      this.facts.presentIds(input.pack.tenantId),
+      this.facts.presentIds(input.pack.tenantId, recordId),
     );
-    return this.journeys.open(input.pack.tenantId, input.journeyKind, input.objective);
+    return this.journeys.open(input.pack.tenantId, input.journeyKind, input.objective, recordId);
   }
 
   /**
@@ -211,7 +212,7 @@ export class FieldSurface {
       input.pack.tenantId,
       [this.journeyBinding(input.pack, journey.journeyKind)],
       input.conditions,
-      this.facts.presentIds(input.pack.tenantId),
+      this.facts.presentIds(input.pack.tenantId, journey.recordId),
     );
     if (input.actionClass) {
       const actionPrefers = this.assertDeclaredPredicates(
@@ -379,12 +380,7 @@ export class FieldSurface {
       throw new AvError("FACT_ID_REQUIRED", "Fact id is required");
     }
     this.assertFieldSafe(input.id);
-    if (input.recordId) {
-      this.assertFieldSafe(input.recordId);
-      if (!this.records.has(input.pack.tenantId, input.recordId)) {
-        throw new AvError("RECORD_NOT_FOUND", `Unknown record ${input.recordId}`);
-      }
-    }
+    this.assertKnownRecord(input.pack.tenantId, input.recordId);
     if (this.cards.wasDenied(input.pack.tenantId, FACT_AGENT, op, input.id, FACT_CHANNEL)) {
       throw new AvError(
         "DENY_IS_TERMINAL",
@@ -430,8 +426,8 @@ export class FieldSurface {
   /**
    * Present-set is on-disk facts for the given scope. Request conditions are
    * claims only: they do not write the store and they do not satisfy REQUIRES
-   * or AVOIDS. Journey eval uses tenant-global facts. Action eval uses the
-   * subject's facts when subject is a record id.
+   * or AVOIDS. Journey eval uses the journey subject's facts. Action eval
+   * uses the action subject's facts when subject is a record id.
    */
   private assertDeclaredPredicates(
     tenantId: string,
@@ -460,5 +456,14 @@ export class FieldSurface {
       return this.facts.presentIds(tenantId, subject);
     }
     return this.facts.presentIds(tenantId);
+  }
+
+  private assertKnownRecord(tenantId: string, recordId?: string): string | undefined {
+    if (!recordId) return undefined;
+    this.assertFieldSafe(recordId);
+    if (!this.records.has(tenantId, recordId)) {
+      throw new AvError("RECORD_NOT_FOUND", `Unknown record ${recordId}`);
+    }
+    return recordId;
   }
 }

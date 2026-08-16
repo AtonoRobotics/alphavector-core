@@ -210,6 +210,7 @@
         const journey = await api("POST", "/field/journeys", {
           journeyKind: document.getElementById("kind").value,
           objective: document.getElementById("objective").value,
+          recordId: selectedRecord(),
         });
         setStatus("Started " + journey.journeyKind + " " + journey.id);
         await refresh();
@@ -300,7 +301,7 @@
       try {
         if (t.dataset.open) {
           try {
-            await requestFactCard("journey." + t.dataset.open, "/field/facts");
+            await requestFactCard("journey." + t.dataset.open, "/field/facts", selectedRecord());
           } catch (err) {
             setStatus(err.message, true);
           }

@@ -11,7 +11,7 @@ import { FieldClient } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
-import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT } from "./helpers.js";
+import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, createOpenStart } from "./helpers.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
@@ -132,9 +132,8 @@ describe("tenant-issued field tokens on computer disk", () => {
     const issued = issueFieldAsArchitect(dir, "restart", architect.token);
     const first = await listenServe("restart", dir);
     const field = new FieldClient(first.url, issued.token);
-    await field.recordApprovedFact("journey.buyer");
-    await field.recordApprovedFact("purpose.follow-up");
-    const journey = await field.start("buyer", "Work this buyer journey");
+    const { journey, record } = await createOpenStart(field, "buyer", "Work this buyer journey");
+    await field.recordApprovedFact("purpose.follow-up", record.id);
     expect(journey.journeyKind).toBe("buyer");
     let cardId = "";
     try {
@@ -142,7 +141,7 @@ describe("tenant-issued field tokens on computer disk", () => {
         actionClass: "communicate",
         channel: "email",
         purpose: "follow-up",
-        subject: "buyer",
+        subject: record.id,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {
@@ -212,8 +211,7 @@ describe("tenant-issued field tokens on computer disk", () => {
 
     const first = await listenServe("issued", dir);
     const field = new FieldClient(first.url, issued.token);
-    await field.recordApprovedFact("journey.buyer");
-    const journey = await field.start("buyer", "Architect issued this token");
+    const { journey } = await createOpenStart(field, "buyer", "Architect issued this token");
     expect(journey.status).toBe("open");
     await first.server.close();
 

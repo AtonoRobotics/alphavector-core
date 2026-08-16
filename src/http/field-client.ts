@@ -28,8 +28,12 @@ export class FieldClient {
     return this.request<FieldHome>("GET", "/field/home");
   }
 
-  start(journeyKind: string, objective: string): Promise<Journey> {
-    return this.request<Journey>("POST", "/field/journeys", { journeyKind, objective });
+  start(journeyKind: string, objective: string, recordId?: string): Promise<Journey> {
+    return this.request<Journey>(
+      "POST",
+      "/field/journeys",
+      recordId ? { journeyKind, objective, recordId } : { journeyKind, objective },
+    );
   }
 
   progress(journeyId: string, body: FieldProgressBody = {}): Promise<FieldProgressResult> {
@@ -160,16 +164,20 @@ export class FieldClient {
 
   /**
    * Field action on a pack journey kind. Issues an owner_instance card for
-   * `journey.{kindId}` via POST /field/facts. Persist happens only after approve.
-   * Does not start the journey and does not record purpose/PREFERS/AVOIDS facts.
+   * `journey.{kindId}` via POST /field/facts with the subject recordId.
+   * Persist happens only after approve. Does not start the journey and does
+   * not record purpose/PREFERS/AVOIDS facts.
    */
-  open(kindId: string): Promise<string> {
-    return this.requestFactCard(this.journeyFactId(kindId));
+  open(kindId: string, recordId?: string): Promise<string> {
+    return this.requestFactCard(this.journeyFactId(kindId), "record", recordId);
   }
 
   /** Same Open path the Linux page uses, then approve. For tests/demo only. */
-  openApproved(kindId: string): Promise<NonNullable<FieldApproveResult["fact"]>> {
-    return this.recordApprovedFact(this.journeyFactId(kindId));
+  openApproved(
+    kindId: string,
+    recordId?: string,
+  ): Promise<NonNullable<FieldApproveResult["fact"]>> {
+    return this.recordApprovedFact(this.journeyFactId(kindId), recordId);
   }
 
   /** Generic journey slot from a pack kind id. Not an RE column. */
@@ -192,12 +200,12 @@ export class FieldClient {
     const home = await this.home();
     const kind = home.journeyKinds[0];
     if (!kind) throw new Error("loaded pack has no journey kinds");
-    await this.openApproved(kind.id);
     const recordType = home.recordKinds[0]?.id ?? "record";
     const subject = await this.createApprovedRecord(recordType, "Subject");
+    await this.openApproved(kind.id, subject.id);
     const purpose = this.communicateRequiresPurpose(home);
     await this.recordApprovedFact(purpose.id, subject.id);
-    const journey = await this.start(kind.id, `Work this ${kind.label} journey`);
+    const journey = await this.start(kind.id, `Work this ${kind.label} journey`, subject.id);
     let cardId = "";
     try {
       await this.progress(journey.id, {

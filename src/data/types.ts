@@ -24,6 +24,8 @@ export interface Journey extends DurableMeta {
   journeyKind: string;
   objective: string;
   status: "open" | "paused" | "closed";
+  /** Subject record this journey is about. Generic slot, not an RE column. */
+  recordId?: string;
 }
 
 export type AssertionClass =

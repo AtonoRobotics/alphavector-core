@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Journey } from "../src/data/types.js";
+import type { FieldClient } from "../src/http/field-client.js";
+import type { FieldApproveResult } from "../src/http/types.js";
 import { signPack, generateEd25519, type TrustAnchors } from "../src/packs/signing.js";
 import type { PackBinding } from "../src/packs/types.js";
 
@@ -81,3 +84,22 @@ export async function signedRePackMutated(
 }
 
 export const REPO_ROOT = root;
+
+/** Create a pack record, Open the kind on it, then start about it. */
+export async function createOpenStart(
+  field: FieldClient,
+  kindId: string,
+  objective: string,
+  label = "Subject",
+): Promise<{
+  record: NonNullable<FieldApproveResult["record"]>;
+  fact: NonNullable<FieldApproveResult["fact"]>;
+  journey: Journey;
+}> {
+  const home = await field.home();
+  const type = home.recordKinds[0]?.id ?? "record";
+  const record = await field.createApprovedRecord(type, label);
+  const fact = await field.openApproved(kindId, record.id);
+  const journey = await field.start(kindId, objective, record.id);
+  return { record, fact, journey };
+}

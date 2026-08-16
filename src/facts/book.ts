@@ -19,8 +19,9 @@ export class FactBook {
 
   /**
    * Fact ids present on this tenant's disk.
-   * No recordId → tenant-global facts (Open / journey REQUIRES).
+   * No recordId → tenant-global facts.
    * With recordId → facts attached to that subject record.
+   * Open / journey REQUIRES use the subject's set, not the global set.
    * Missing file → empty (no invented fact). Corrupt store throws.
    */
   presentIds(tenantId: string, recordId?: string): string[] {

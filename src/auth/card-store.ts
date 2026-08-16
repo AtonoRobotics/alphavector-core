@@ -159,6 +159,12 @@ function parsePendingRecord(cardId: string, raw: unknown): PendingProgressRecord
       status: journey.status as PendingProgressRecord["journey"]["status"],
     },
   };
+  if (journey.recordId !== undefined) {
+    if (typeof journey.recordId !== "string" || !journey.recordId) {
+      throw new AvError("CARD_STORE_CORRUPT", "Card store is corrupt; refusing to invent a card");
+    }
+    record.journey.recordId = journey.recordId;
+  }
   if (typeof raw.channel === "string") record.channel = raw.channel;
   if (typeof raw.purpose === "string") record.purpose = raw.purpose;
   if (typeof raw.subject === "string") record.subject = raw.subject;
