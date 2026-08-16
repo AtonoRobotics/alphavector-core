@@ -429,7 +429,7 @@ export class FieldSurface {
    * Present-set is on-disk facts for the given scope. Request conditions are
    * claims only: they do not write the store and they do not satisfy REQUIRES
    * or AVOIDS. Journey eval uses the journey subject's facts. Action eval
-   * uses the action subject's facts when subject is a record id.
+   * uses the action subject's facts for a known record subject only.
    */
   private assertDeclaredPredicates(
     tenantId: string,
@@ -454,10 +454,8 @@ export class FieldSurface {
   }
 
   private actionPresentIds(tenantId: string, subject?: string): string[] {
-    if (subject && this.records.has(tenantId, subject)) {
-      return this.facts.presentIds(tenantId, subject);
-    }
-    return this.facts.presentIds(tenantId);
+    const recordId = this.assertKnownRecord(tenantId, subject);
+    return this.facts.presentIds(tenantId, recordId);
   }
 
   private assertKnownRecord(tenantId: string, recordId?: string): string {

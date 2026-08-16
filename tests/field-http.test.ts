@@ -338,6 +338,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/Select a record before retracting an avoid/);
     expect(html).toMatch(/Select a record before recording a fact/);
     expect(html).toMatch(/Select a record before retracting a fact/);
+    expect(html).toMatch(/Select a record before requesting follow-up/);
+    expect(html).not.toMatch(/selectedRecord\(\) \|\| t\.dataset\.kind/);
+    expect(html).toMatch(/subject:\s*selectedRecord\(\)/);
     expect(html).toMatch(/id="purpose-facts"/);
     expect(html).toMatch(/home\.purposeFacts/);
     expect(html).toMatch(/data-purpose=/);
@@ -399,6 +402,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(fieldSrc).toMatch(/kind\.AVOIDS/);
     expect(fieldSrc).toMatch(/RECORD_ID_REQUIRED/);
     expect(fieldSrc).toMatch(/assertKnownRecord\(input\.pack\.tenantId, input\.recordId\)/);
+    expect(fieldSrc).toMatch(/assertKnownRecord\(tenantId, subject\)/);
+    expect(fieldSrc).not.toMatch(/this\.facts\.presentIds\(tenantId\)\s*;/);
     expect(fieldSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
 
     const home = await field.home();
@@ -1302,6 +1307,56 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(existsSync(computerRoot(dir, tenantId).factsFile)).toBe(false);
     expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
+  });
+
+  it("denies action progress with no subject or unknown subject", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-http-action-subject-required-"));
+    const { field, url, tokens, tenantId, pack } = await liveField("action-subject-required", dir);
+    const kind = pack.binding.journeyKinds[0];
+    const home = await field.home();
+    const purpose = field.communicateRequiresPurpose(home);
+    const rec = await field.createApprovedRecord(home.recordKinds[0]?.id ?? "record", "Subject");
+    await field.openApproved(kind.id, rec.id);
+    await field.recordApprovedFact(purpose.id, rec.id);
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`, rec.id);
+    const body = {
+      actionClass: "communicate",
+      channel: "email",
+      purpose: purpose.id.slice("purpose.".length),
+    };
+
+    const missing = await fetch(`${url}/field/journeys/${journey.id}/progress`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.field}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: "RECORD_ID_REQUIRED" });
+
+    await expect(
+      field.progress(journey.id, { ...body, subject: "buyer" }),
+    ).rejects.toMatchObject({
+      status: 404,
+      code: "RECORD_NOT_FOUND",
+    });
+    await expect(
+      field.progress(journey.id, { ...body, subject: "rec_unknown" }),
+    ).rejects.toMatchObject({
+      status: 404,
+      code: "RECORD_NOT_FOUND",
+    });
+
+    await expect(field.progress(journey.id, { ...body, subject: rec.id })).rejects.toMatchObject({
+      status: 409,
+      code: "AUTHORIZATION_REQUIRED",
+    });
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
+      expect.arrayContaining([field.journeyFactId(kind.id), purpose.id]),
+    );
   });
 
   it("keeps RE types out of core schema and migrations", async () => {
