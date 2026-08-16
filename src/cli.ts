@@ -10,6 +10,7 @@ import { architectDeliverMail } from "./auth/architect-mail.js";
 import { architectWriteRoutine } from "./auth/architect-routines.js";
 import { architectSit } from "./auth/architect-habitat.js";
 import { architectWriteSkill } from "./auth/architect-skills.js";
+import { PackLoadError } from "./errors.js";
 import { FieldClient } from "./http/field-client.js";
 import { startFieldServe } from "./http/field-listen.js";
 import { PRODUCT } from "./identity.js";
@@ -307,8 +308,11 @@ async function main(): Promise<void> {
         path.join(dir, "state"),
         dir,
       );
-      const pack = core.packs.active(tenantId);
-      core.habitat.setPack(tenantId, pack);
+      try {
+        core.habitat.setPack(tenantId, core.packs.active(tenantId));
+      } catch (err) {
+        if (!(err instanceof PackLoadError)) throw err;
+      }
       const delivered = await architectDeliverMail({
         tenantId,
         addresseeId,

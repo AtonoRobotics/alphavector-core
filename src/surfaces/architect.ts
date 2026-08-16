@@ -60,7 +60,7 @@ function peekActivePack(packs: PackLoader, tenantId: string): LoadedPack | undef
   try {
     return packs.active(tenantId);
   } catch (err) {
-    if (err instanceof PackLoadError && err.code === "NO_ACTIVE_PACK") return undefined;
+    if (err instanceof PackLoadError) return undefined;
     throw err;
   }
 }
