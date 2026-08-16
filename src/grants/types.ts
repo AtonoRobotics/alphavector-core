@@ -36,6 +36,7 @@ export interface GrantUse {
 }
 
 export type GrantBoundsCode = "GRANT_BOUNDS" | "GRANT_RATE";
+export type GrantExpiryCode = "GRANT_EXPIRED";
 
 /**
  * Why this use may not consume an authorized grant.
@@ -77,6 +78,21 @@ export function grantBoundsRefusal(
   return undefined;
 }
 
+/**
+ * Why a set expiry refuses authorization.
+ * Missing expiry is open-ended — not expired.
+ * `now` is the kernel clock (`nowIso()`). Do not invent a second clock.
+ */
+export function grantExpiryRefusal(
+  expiresAt: string | undefined,
+  now: string,
+): { code: GrantExpiryCode; message: string } | undefined {
+  if (expiresAt && expiresAt < now) {
+    return { code: "GRANT_EXPIRED", message: "Grant has expired" };
+  }
+  return undefined;
+}
+
 export interface Grant {
   grantId: string;
   tenantId: string;
@@ -88,6 +104,7 @@ export interface Grant {
   evalIds: string[];
   owner: string;
   issuedAt: string;
+  /** Kernel-clock ISO time. Unset is open-ended. A set value that has passed is GRANT_EXPIRED. */
   expiresAt?: string;
   revokeReason?: string;
   fieldNoticeIssuedAt?: string;

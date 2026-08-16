@@ -131,6 +131,11 @@ export class EffectExecutor {
       this.store.updateAction(action.id, "denied");
       throw new AvError(refusal.code, refusal.message);
     }
+    const expired = this.grants.expiredAuthorizedForClass(input.pack.tenantId, input.actionClass);
+    if (expired && !covering) {
+      this.store.updateAction(action.id, "denied");
+      throw new AvError("GRANT_EXPIRED", "Grant has expired");
+    }
     const grantState = this.grants.classState(input.pack.tenantId, input.actionClass, use);
     const askReason = habitatAskReason({
       grants: this.grants,

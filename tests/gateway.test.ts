@@ -10,7 +10,8 @@ import { assertHabitatMayAsk, habitatAskReason } from "../src/grants/ask.js";
 import { GrantBook } from "../src/grants/store.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { PolicyGateway } from "../src/policy/gateway.js";
-import { ALPHAVECTOR_RE_PIN_SHA, signedGenericPack } from "./helpers.js";
+import { AlphaVectorCore } from "../src/kernel.js";
+import { ALPHAVECTOR_RE_PIN_SHA, makeAnchors, signedGenericPack } from "./helpers.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 
@@ -474,5 +475,154 @@ describe("GrantBounds are enforced on the grant path (H1)", () => {
     const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"] });
     expect(() => communicate(ctx, { purpose: "dnc" })).toThrow(PolicyDeniedError);
     expect(ctx.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+});
+
+describe("grant expiry is enforced on the authorize path (H2)", () => {
+  const notice = "Follow-up emails will now send without asking. You can kill this.";
+  const past = "2000-01-01T00:00:00.000Z";
+  const future = "2099-01-01T00:00:00.000Z";
+
+  async function graduate(
+    bounds: { channels?: string[]; purposes?: string[]; ratePerHour?: number; subjectScope?: string[] },
+    expiresAt?: string,
+  ) {
+    const ctx = await setup();
+    const grant = ctx.grants.write({
+      actor: "architect",
+      tenantId: "t1",
+      agentId: ctx.writer.agentId,
+      actionClass: "communicate",
+      state: "authorized",
+      bounds,
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: notice,
+      expiresAt,
+    });
+    return { ...ctx, grant };
+  }
+
+  function communicate(
+    ctx: Awaited<ReturnType<typeof setup>>,
+    extra: { channel?: string; purpose?: string; subject?: string } = {},
+  ) {
+    return ctx.effects.execute({
+      pack: ctx.pack,
+      agent: ctx.writer,
+      actionClass: "communicate",
+      channel: extra.channel ?? "email",
+      purpose: extra.purpose ?? "follow-up",
+      subject: extra.subject ?? "case",
+      surface: "field",
+    });
+  }
+
+  it("keeps the RE fixture pin at 5091328 and does not invent T0–T3 or a vendor host", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const types = readFileSync(path.join(process.cwd(), "src/grants/types.ts"), "utf8");
+    expect(types).toMatch(/export function grantExpiryRefusal/);
+    expect(types).toMatch(/GRANT_EXPIRED/);
+    expect(types).toMatch(/T0-T3 are not accepted/);
+    for (const rel of ["src/grants/store.ts", "src/grants/ask.ts", "src/effects/executor.ts"]) {
+      const src = readFileSync(path.join(process.cwd(), rel), "utf8");
+      expect(src).not.toMatch(/\bT0\b|\bT1\b|\bT2\b|\bT3\b/);
+      expect(src).not.toMatch(/api\.openai\.com|api\.anthropic\.com/);
+      expect(src).not.toMatch(/\b(Desk|Shape|Director|Play|Plant|HIL|Thor)\b/);
+    }
+  });
+
+  it("expired grant is GRANT_EXPIRED, not a card and not a silent yes", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"] }, past);
+    expect(ctx.grant.expiresAt).toBe(past);
+    expect(ctx.grants.get("t1", ctx.writer.agentId, "communicate")?.expiresAt).toBe(past);
+    expect(ctx.grants.classState("t1", "communicate")).toBe("requires_authorization");
+    expect(ctx.grants.authorizedForClass("t1", "communicate")).toBeUndefined();
+    expect(ctx.grants.expiredAuthorizedForClass("t1", "communicate")?.grantId).toBe(ctx.grant.grantId);
+    try {
+      communicate(ctx);
+      throw new Error("should have failed closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("GRANT_EXPIRED");
+      expect((err as AvError).closed).toBe(true);
+      expect((err as AvError).message).toMatch(/expired/i);
+    }
+    expect(ctx.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(ctx.cards.fieldInbox("t1")).toHaveLength(0);
+  });
+
+  it("unexpired grant still authorizes within bounds", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"] }, future);
+    expect(ctx.grant.expiresAt).toBe(future);
+    expect(ctx.grants.classState("t1", "communicate")).toBe("authorized");
+    expect(ctx.grants.authorizedForClass("t1", "communicate")?.grantId).toBe(ctx.grant.grantId);
+    expect(ctx.grants.expiredAuthorizedForClass("t1", "communicate")).toBeUndefined();
+    const before = ctx.cards.fieldInbox("t1").length;
+    const result = communicate(ctx);
+    expect(result.executed).toBe(true);
+    expect(ctx.cards.fieldInbox("t1")).toHaveLength(before);
+    expect(ctx.store.actions.filter((a) => a.status === "executed")).toHaveLength(1);
+  });
+
+  it("missing expiry stays open-ended and still authorizes", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"] });
+    expect(ctx.grant.expiresAt).toBeUndefined();
+    expect(ctx.grants.get("t1", ctx.writer.agentId, "communicate")?.expiresAt).toBeUndefined();
+    expect(ctx.grants.classState("t1", "communicate")).toBe("authorized");
+    expect(ctx.grants.expiredAuthorizedForClass("t1", "communicate")).toBeUndefined();
+    const result = communicate(ctx);
+    expect(result.executed).toBe(true);
+  });
+
+  it("out-of-bound channel on an unexpired grant is still GRANT_BOUNDS", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"] }, future);
+    try {
+      communicate(ctx, { channel: "sms" });
+      throw new Error("should have failed closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("GRANT_BOUNDS");
+      expect((err as AvError).closed).toBe(true);
+    }
+    expect(ctx.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(ctx.cards.fieldInbox("t1")).toHaveLength(0);
+  });
+
+  it("ratePerHour on an unexpired grant is still GRANT_RATE", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"], ratePerHour: 1 }, future);
+    const first = communicate(ctx);
+    expect(first.executed).toBe(true);
+    try {
+      communicate(ctx);
+      throw new Error("should have failed closed on rate");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("GRANT_RATE");
+      expect((err as AvError).closed).toBe(true);
+    }
+    expect(ctx.store.actions.filter((a) => a.status === "executed")).toHaveLength(1);
+    expect(ctx.cards.fieldInbox("t1")).toHaveLength(0);
+  });
+
+  it("missing DATABASE_URL still fails closed (H3)", () => {
+    const prev = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+    try {
+      expect(() => new DurableStore({ env: {} })).toThrow(AvError);
+      try {
+        new DurableStore({ env: { DATABASE_URL: "   " } });
+        expect.fail("blank DATABASE_URL must fail closed");
+      } catch (err) {
+        expect(err).toBeInstanceOf(AvError);
+        expect((err as AvError).code).toBe("DATABASE_URL_REQUIRED");
+        expect((err as AvError).closed).toBe(true);
+      }
+      expect(() => new AlphaVectorCore(makeAnchors().anchors)).toThrow(AvError);
+    } finally {
+      if (prev === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = prev;
+    }
   });
 });
