@@ -17,7 +17,7 @@ export interface FieldHome {
   /** Pack-local AVOIDS facts from loaded bindings. Not a core constant. */
   avoidFacts: Array<{ id: string; label: string }>;
   /** Generic subject records on this tenant's disk. Not an RE column. */
-  records: Array<{ id: string; type: string; label: string }>;
+  records: Array<{ id: string; type: string; label: string; attributes: Record<string, string> }>;
   /**
    * Pack-local record/party kind strings from the loaded pack list.
    * Not hardcoded core types.
@@ -119,10 +119,25 @@ export interface FieldRecordInput {
   label: string;
 }
 
+/**
+ * Field-only record update. recordId is required. Missing fails closed
+ * (`RECORD_ID_REQUIRED`). Unknown fails closed (`RECORD_NOT_FOUND`).
+ * type is a pack string. attributes are generic string keys and values.
+ */
+export interface FieldRecordUpdateInput {
+  actor: PrincipalKind;
+  pack: LoadedPack;
+  recordId: string;
+  type?: string;
+  label?: string;
+  attributes?: Record<string, string>;
+}
+
 export interface FieldRecordResult {
   id: string;
   type: string;
   label: string;
+  attributes: Record<string, string>;
 }
 
 export interface ArchitectHome {

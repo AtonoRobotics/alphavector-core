@@ -13,6 +13,7 @@ import type {
   FieldFactBody,
   FieldProgressBody,
   FieldRecordBody,
+  FieldRecordUpdateBody,
   FieldStartBody,
 } from "./types.js";
 
@@ -206,6 +207,19 @@ export class FieldHttpServer {
         pack,
         type: String(body.type ?? ""),
         label: String(body.label ?? ""),
+      });
+      return;
+    }
+
+    if (method === "POST" && path === "/field/records/update") {
+      const body = (await readJson(req)) as FieldRecordUpdateBody;
+      core.field.update({
+        actor,
+        pack,
+        recordId: body.recordId ? String(body.recordId) : "",
+        type: typeof body.type === "string" ? body.type : body.type === undefined ? undefined : "",
+        label: typeof body.label === "string" ? body.label : body.label === undefined ? undefined : "",
+        attributes: body.attributes,
       });
       return;
     }

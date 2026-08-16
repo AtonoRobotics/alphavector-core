@@ -10,6 +10,12 @@ import { JourneyRuntime } from "../journeys/runtime.js";
 import { evaluateDeclaredPredicates } from "../packs/predicates.js";
 import type { LoadedPack, PackBinding, PredicateDeclaration, PrincipalKind } from "../packs/types.js";
 import { RecordBook } from "../records/book.js";
+import {
+  decodeRecordUpdatePatch,
+  encodeRecordUpdatePatch,
+  parseRecordAttributes,
+} from "../records/store.js";
+import type { RecordUpdatePatch } from "../records/types.js";
 import { AskSurface } from "./ask.js";
 import type {
   FieldAskInput,
@@ -19,6 +25,7 @@ import type {
   FieldProgressInput,
   FieldProgressResult,
   FieldRecordInput,
+  FieldRecordUpdateInput,
   FieldStartInput,
 } from "./types.js";
 
@@ -327,6 +334,35 @@ export class FieldSurface {
   }
 
   /**
+   * Request to update a known record's label, type, and/or attributes.
+   * Issues an owner_instance card. Does not write records.json until approved.
+   * Missing or unknown recordId fails closed.
+   */
+  update(input: FieldRecordUpdateInput): void {
+    this.assertActorIsField(input.actor);
+    const recordId = this.assertKnownRecord(input.pack.tenantId, input.recordId);
+    const patch = this.assertRecordUpdatePatch(input);
+    const subject = encodeRecordUpdatePatch(patch);
+    if (this.cards.wasDenied(input.pack.tenantId, FACT_AGENT, "update", subject, RECORD_CHANNEL)) {
+      throw new AvError(
+        "DENY_IS_TERMINAL",
+        "Deny is terminal; the same action cannot be silently resubmitted",
+      );
+    }
+    const card = this.cards.issue({
+      tenantId: input.pack.tenantId,
+      kind: "owner_instance",
+      actionClass: "update",
+      agentId: FACT_AGENT,
+      purpose: recordId,
+      subject,
+      channel: RECORD_CHANNEL,
+      pack: input.pack,
+    });
+    throw new AuthorizationRequiredError(card.cardId, "Authorization card required before record update");
+  }
+
+  /**
    * Persist or retract only after the owner_instance card is approved.
    * Pending and denied cards do not write. Non-fact/record cards return undefined
    * so communicate approve-then-execute can continue.
@@ -339,6 +375,12 @@ export class FieldSurface {
     }
     if (card.channel === RECORD_CHANNEL && card.actionClass === "create") {
       const record = this.records.put(card.tenantId, { type: card.purpose, label: card.subject });
+      return { id: record.id, present: true };
+    }
+    if (card.channel === RECORD_CHANNEL && card.actionClass === "update") {
+      const recordId = this.assertKnownRecord(card.tenantId, card.purpose);
+      const patch = decodeRecordUpdatePatch(card.subject);
+      const record = this.records.update(card.tenantId, recordId, patch);
       return { id: record.id, present: true };
     }
     if (card.channel !== FACT_CHANNEL) return undefined;
@@ -470,5 +512,35 @@ export class FieldSurface {
       throw new AvError("RECORD_NOT_FOUND", `Unknown record ${recordId}`);
     }
     return recordId;
+  }
+
+  private assertRecordUpdatePatch(input: FieldRecordUpdateInput): RecordUpdatePatch {
+    const patch: RecordUpdatePatch = {};
+    if (input.type !== undefined) {
+      if (!input.type) {
+        throw new AvError("RECORD_TYPE_REQUIRED", "Record type is required");
+      }
+      this.assertFieldSafe(input.type);
+      patch.type = input.type;
+    }
+    if (input.label !== undefined) {
+      if (!input.label) {
+        throw new AvError("RECORD_LABEL_REQUIRED", "Record label is required");
+      }
+      this.assertFieldSafe(input.label);
+      patch.label = input.label;
+    }
+    if (input.attributes !== undefined) {
+      const attributes = parseRecordAttributes(input.attributes, "RECORD_ATTRIBUTES_INVALID");
+      for (const [key, value] of Object.entries(attributes)) {
+        this.assertFieldSafe(key);
+        this.assertFieldSafe(value);
+      }
+      patch.attributes = attributes;
+    }
+    if (patch.type === undefined && patch.label === undefined && patch.attributes === undefined) {
+      throw new AvError("RECORD_UPDATE_EMPTY", "Record update requires type, label, or attributes");
+    }
+    return patch;
   }
 }

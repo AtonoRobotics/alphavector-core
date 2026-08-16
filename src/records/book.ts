@@ -1,8 +1,8 @@
 import { computerRoot } from "../computer/paths.js";
 import { AvError } from "../errors.js";
 import { newId } from "../ids.js";
-import { loadRecordStore, saveRecordStore } from "./store.js";
-import type { TenantRecord } from "./types.js";
+import { loadRecordStore, parseRecordAttributes, saveRecordStore } from "./store.js";
+import type { RecordUpdatePatch, TenantRecord } from "./types.js";
 
 /**
  * Generic tenant records on the computer disk core owns — beside facts.json,
@@ -36,9 +36,12 @@ export class RecordBook {
 
   /**
    * Ungated persist of a generic record. Field path must not call this
-   * until the owner_instance card is approved.
+   * until the owner_instance card is approved. Attributes default to {}.
    */
-  put(tenantId: string, input: { type: string; label: string; id?: string }): TenantRecord {
+  put(
+    tenantId: string,
+    input: { type: string; label: string; id?: string; attributes?: Record<string, string> },
+  ): TenantRecord {
     if (!input.type) {
       throw new AvError("RECORD_TYPE_REQUIRED", "Record type is required");
     }
@@ -50,12 +53,52 @@ export class RecordBook {
       id: input.id ?? newId("rec"),
       type: input.type,
       label: input.label,
+      attributes: parseRecordAttributes(input.attributes ?? {}),
     };
     const list = this.records.get(tenantId) ?? [];
     list.push(record);
     this.records.set(tenantId, list);
     this.persist(tenantId);
     return record;
+  }
+
+  /**
+   * Ungated merge of label, type, and/or attributes on a known record.
+   * Field path must not call this until the owner_instance card is approved.
+   * Unknown id fails closed. Attribute keys merge; existing keys not in the
+   * patch stay. Does not invent keys.
+   */
+  update(tenantId: string, id: string, patch: RecordUpdatePatch): TenantRecord {
+    if (!id) {
+      throw new AvError("RECORD_ID_REQUIRED", "Record id is required");
+    }
+    this.ensure(tenantId);
+    const list = this.records.get(tenantId) ?? [];
+    const index = list.findIndex((record) => record.id === id);
+    if (index < 0) {
+      throw new AvError("RECORD_NOT_FOUND", `Unknown record ${id}`);
+    }
+    const current = list[index]!;
+    if (patch.type !== undefined && !patch.type) {
+      throw new AvError("RECORD_TYPE_REQUIRED", "Record type is required");
+    }
+    if (patch.label !== undefined && !patch.label) {
+      throw new AvError("RECORD_LABEL_REQUIRED", "Record label is required");
+    }
+    const merged = parseRecordAttributes({
+      ...current.attributes,
+      ...parseRecordAttributes(patch.attributes ?? {}),
+    });
+    const next: TenantRecord = {
+      id: current.id,
+      type: patch.type ?? current.type,
+      label: patch.label ?? current.label,
+      attributes: merged,
+    };
+    list[index] = next;
+    this.records.set(tenantId, list);
+    this.persist(tenantId);
+    return next;
   }
 
   private ensure(tenantId: string): void {

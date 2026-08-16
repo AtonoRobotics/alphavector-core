@@ -1031,7 +1031,7 @@ describe("required field path against pinned alphavector-re", () => {
     expect(existsSync(paths.recordsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
     const recA = records.get("t1", recordedA!.id)!;
-    expect(recA).toEqual({ id: recordedA!.id, type, label: "A" });
+    expect(recA).toEqual({ id: recordedA!.id, type, label: "A", attributes: {} });
 
     let createB = "";
     try {
@@ -1327,5 +1327,124 @@ describe("required field path against pinned alphavector-re", () => {
     expect(() =>
       field.create({ actor: "field", pack, type: "record", label: "A" }),
     ).toThrow(/corrupt/i);
+  });
+
+  it("fail-closes on incomplete attribute rows and does not invent keys", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-attr-bad-"));
+    const paths = computerRoot(dir, "t1");
+    await mkdir(path.dirname(paths.recordsFile), { recursive: true });
+    await writeFile(
+      paths.recordsFile,
+      JSON.stringify({
+        records: [{ id: "rec_a", type: "record", label: "A", attributes: { note: 1 } }],
+      }),
+      "utf8",
+    );
+    const { field, pack } = await reFieldStack(undefined, { computerBaseDir: dir });
+    expect(() => field.home("t1", pack)).toThrow(AvError);
+    expect(() => field.home("t1", pack)).toThrow(/corrupt|incomplete/i);
+    expect(() => new RecordBook(dir).list("t1")).toThrow(/corrupt|incomplete/i);
+  });
+
+  it("updates label, type, and attributes only after approve; missing recordId fails closed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-attrs-"));
+    const { pack, field, cards, records, facts } = await reFieldStack(undefined, {
+      computerBaseDir: dir,
+    });
+    const paths = computerRoot(dir, "t1");
+    const type = pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record";
+    const otherType = pack.binding.recordPartyKnowledge.recordKinds[1] ?? `${type}-other`;
+
+    let createId = "";
+    try {
+      field.create({ actor: "field", pack, type, label: "A" });
+      throw new Error("should have required a card");
+    } catch (err) {
+      createId = (err as AuthorizationRequiredError).cardId;
+    }
+    cards.resolve({ cardId: createId, decision: "approved", actor: "field" });
+    const created = field.commitApprovedFact(createId)!;
+    const recId = created.id;
+    expect(records.get("t1", recId)).toEqual({
+      id: recId,
+      type,
+      label: "A",
+      attributes: {},
+    });
+
+    expect(() =>
+      field.update({ actor: "architect", pack, recordId: recId, attributes: { note: "x" } }),
+    ).toThrow(SurfaceViolationError);
+
+    expect(() =>
+      field.update({ actor: "field", pack, recordId: "", attributes: { note: "x" } }),
+    ).toThrow(AvError);
+    expect(() =>
+      field.update({ actor: "field", pack, recordId: "", attributes: { note: "x" } }),
+    ).toThrow(/Record id is required/);
+    expect(() =>
+      field.update({ actor: "field", pack, recordId: "rec_unknown", attributes: { note: "x" } }),
+    ).toThrow(/Unknown record/);
+
+    let deniedAttr = "";
+    try {
+      field.update({ actor: "field", pack, recordId: recId, attributes: { other: "no" } });
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+      deniedAttr = (err as AuthorizationRequiredError).cardId;
+    }
+    expect(cards.get(deniedAttr)?.kind).toBe("owner_instance");
+    expect(records.get("t1", recId)?.attributes).toEqual({});
+    expect(JSON.parse(await readFile(paths.recordsFile, "utf8")).records[0].attributes).toEqual({});
+    expect(() => field.commitApprovedFact(deniedAttr)).toThrow(/approved card/);
+    expect(new RecordBook(dir).get("t1", recId)?.attributes).toEqual({});
+
+    cards.resolve({ cardId: deniedAttr, decision: "denied", actor: "field" });
+    expect(records.get("t1", recId)?.attributes).toEqual({});
+    expect(new RecordBook(dir).get("t1", recId)?.attributes).toEqual({});
+
+    let approvedAttr = "";
+    try {
+      field.update({ actor: "field", pack, recordId: recId, attributes: { note: "hello" } });
+      throw new Error("should have required a card");
+    } catch (err) {
+      approvedAttr = (err as AuthorizationRequiredError).cardId;
+    }
+    expect(() => field.commitApprovedFact(approvedAttr)).toThrow(/approved card/);
+    expect(new RecordBook(dir).get("t1", recId)?.attributes).toEqual({});
+    cards.resolve({ cardId: approvedAttr, decision: "approved", actor: "field" });
+    expect(field.commitApprovedFact(approvedAttr)).toEqual({ id: recId, present: true });
+    expect(records.get("t1", recId)?.attributes).toEqual({ note: "hello" });
+    expect(new RecordBook(dir).get("t1", recId)).toEqual({
+      id: recId,
+      type,
+      label: "A",
+      attributes: { note: "hello" },
+    });
+
+    let labelCard = "";
+    try {
+      field.update({ actor: "field", pack, recordId: recId, label: "Renamed", type: otherType });
+      throw new Error("should have required a card");
+    } catch (err) {
+      labelCard = (err as AuthorizationRequiredError).cardId;
+    }
+    expect(records.get("t1", recId)?.label).toBe("A");
+    expect(records.get("t1", recId)?.type).toBe(type);
+    cards.resolve({ cardId: labelCard, decision: "approved", actor: "field" });
+    field.commitApprovedFact(labelCard);
+    const restarted = new RecordBook(dir).get("t1", recId);
+    expect(restarted).toEqual({
+      id: recId,
+      type: otherType,
+      label: "Renamed",
+      attributes: { note: "hello" },
+    });
+
+    facts.put("t1", "journey.buyer", recId);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
+    expect(new FactBook(dir).presentIds("t1", recId)).toEqual(["journey.buyer"]);
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
   });
 });
