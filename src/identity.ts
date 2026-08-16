@@ -10,6 +10,19 @@ export const PRODUCT = {
   firstPackPackage: "alphavector-re",
 } as const;
 
+/**
+ * Locked Website board hues. No gradients, no glow, no invented RGB.
+ * Hold amber is metal for a held step only — not header, mark, buttons, or success.
+ */
+export const GLASS = {
+  bone: "#F4F1EA",
+  nearBlack: "#0B0B0C",
+  hairline: "#2A2A2D",
+  holdAmber: "#C4A574",
+} as const;
+
+export const GLASS_HUES = [GLASS.bone, GLASS.nearBlack, GLASS.hairline, GLASS.holdAmber] as const;
+
 export const FORBIDDEN_PRODUCT_NAMES = [
   "Alpha Agent",
   "AlphaAgent",
@@ -27,6 +40,8 @@ export const FORBIDDEN_PRODUCT_NAMES = [
   "The Agency",
   "Omniflow",
   "Oracle",
+  "VEYRA",
+  "Agent OS",
 ] as const;
 
 export function assertNotConsumerBrand(name: string): void {

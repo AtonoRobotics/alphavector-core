@@ -282,6 +282,11 @@ describe("computer primitive", () => {
     const html = await (await import("node:fs/promises")).readFile(session.viewerPath, "utf8");
     expect(html).toContain("Architect attach");
     expect(html).toContain("writer");
+    expect(html).toContain("#0B0B0C");
+    expect(html).toContain("#2A2A2D");
+    expect(html).not.toContain("#111");
+    expect(html).not.toContain("#eee");
+    expect(html).not.toContain("#C4A574");
   });
 });
 

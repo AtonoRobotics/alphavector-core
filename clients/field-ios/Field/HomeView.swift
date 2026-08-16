@@ -1,5 +1,12 @@
 import SwiftUI
 
+private enum FieldGlass {
+    static let bone = Color("Bone")
+    static let nearBlack = Color("NearBlack")
+    static let hairline = Color("Hairline")
+    static let holdAmber = Color("HoldAmber")
+}
+
 struct HomeView: View {
     @StateObject private var api = FieldAPI()
     @State private var home: FieldHome?
@@ -31,7 +38,7 @@ struct HomeView: View {
                     ForEach(home?.journeyKinds ?? []) { item in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.label).font(.headline)
-                            Text(item.id).foregroundStyle(.secondary)
+                            Text(item.id).foregroundStyle(FieldGlass.hairline)
                             Button("Open") { Task { await openKind(item) } }
                         }
                     }
@@ -47,7 +54,7 @@ struct HomeView: View {
                     ForEach(home?.journeys ?? []) { journey in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(journey.kind).font(.headline)
-                            Text(journey.objective).foregroundStyle(.secondary)
+                            Text(journey.objective).foregroundStyle(FieldGlass.hairline)
                             Button("Request follow-up") { Task { await requestFollowUp(journey) } }
                         }
                     }
@@ -56,8 +63,8 @@ struct HomeView: View {
                     ForEach(home?.records ?? []) { record in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(record.label).font(.headline)
-                            Text("\(record.type) · \(record.id)").foregroundStyle(.secondary)
-                            Text(attributePairs(record.attributes)).foregroundStyle(.secondary)
+                            Text("\(record.type) · \(record.id)").foregroundStyle(FieldGlass.hairline)
+                            Text(attributePairs(record.attributes)).foregroundStyle(FieldGlass.hairline)
                             Button(record.id == selectedRecordId ? "Selected" : "Select") {
                                 selectedRecordId = record.id
                                 status = "Selected record \(record.id)"
@@ -79,12 +86,12 @@ struct HomeView: View {
                         .autocorrectionDisabled()
                     TextField("Attribute value", text: $attrValue)
                     Button("Set attribute") { Task { await setAttribute() } }
-                    Button("Retract record", role: .destructive) { Task { await retractSelectedRecord() } }
+                    Button("Retract record") { Task { await retractSelectedRecord() } }
                     ForEach(selectedAttributeRows) { row in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(row.key).font(.headline)
-                            Text(row.value).foregroundStyle(.secondary)
-                            Button("Retract", role: .destructive) {
+                            Text(row.value).foregroundStyle(FieldGlass.hairline)
+                            Button("Retract") {
                                 Task { await retractAttribute(row.key) }
                             }
                         }
@@ -94,7 +101,7 @@ struct HomeView: View {
                     ForEach(home?.purposeFacts ?? []) { item in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.label).font(.headline)
-                            Text(item.id).foregroundStyle(.secondary)
+                            Text(item.id).foregroundStyle(FieldGlass.hairline)
                             Button("Record") { Task { await recordListedFact(item.id, before: "Select a record before recording a purpose") } }
                         }
                     }
@@ -103,10 +110,10 @@ struct HomeView: View {
                     ForEach(home?.avoidFacts ?? []) { item in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.label).font(.headline)
-                            Text(item.id).foregroundStyle(.secondary)
+                            Text(item.id).foregroundStyle(FieldGlass.hairline)
                             HStack {
                                 Button("Record") { Task { await recordListedFact(item.id, before: "Select a record before recording an avoid") } }
-                                Button("Retract", role: .destructive) { Task { await retractListedFact(item.id, before: "Select a record before retracting an avoid") } }
+                                Button("Retract") { Task { await retractListedFact(item.id, before: "Select a record before retracting an avoid") } }
                             }
                         }
                     }
@@ -116,16 +123,16 @@ struct HomeView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Button("Record") { Task { await recordTypedFact() } }
-                    Button("Retract", role: .destructive) { Task { await retractTypedFact() } }
+                    Button("Retract") { Task { await retractTypedFact() } }
                 }
                 Section("Cards") {
                     ForEach(home?.inbox ?? []) { card in
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(card.purpose).font(.headline)
-                            Text("\(card.subject) · \(card.channel)").foregroundStyle(.secondary)
+                            Text(card.purpose).font(.headline).foregroundStyle(FieldGlass.holdAmber)
+                            Text("\(card.subject) · \(card.channel)").foregroundStyle(FieldGlass.hairline)
                             HStack {
                                 Button(card.approve) { Task { await approve(card) } }
-                                Button(card.deny, role: .destructive) { Task { await deny(card) } }
+                                Button(card.deny) { Task { await deny(card) } }
                             }
                         }
                     }
@@ -142,12 +149,23 @@ struct HomeView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(FieldGlass.nearBlack)
+            .foregroundStyle(FieldGlass.bone)
             .navigationTitle("AV Dev Field")
+            .toolbarBackground(FieldGlass.nearBlack, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
             .safeAreaInset(edge: .bottom) {
-                Text(status)
-                    .font(.footnote)
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(status)
+                        .font(.footnote)
+                    Text("Alpha Vector LLC")
+                        .font(.footnote)
+                }
+                .foregroundStyle(FieldGlass.bone)
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(FieldGlass.nearBlack)
             }
             .disabled(busy)
         }

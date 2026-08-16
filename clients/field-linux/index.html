@@ -5,56 +5,80 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AV Dev Field</title>
   <style>
-    :root { color-scheme: light; font-family: ui-sans-serif, system-ui, sans-serif; }
-    body { margin: 0; background: #f4f1ea; color: #1c1916; }
-    main { max-width: 42rem; margin: 0 auto; padding: 1.5rem; }
-    h1 { font-size: 1.4rem; margin: 0 0 0.25rem; }
-    p.lead { margin: 0 0 1.25rem; color: #5c564e; }
-    section { background: #fff; border: 1px solid #d9d2c5; border-radius: 12px; padding: 1rem; margin-bottom: 1rem; }
-    h2 { font-size: 1rem; margin: 0 0 0.75rem; }
+    :root {
+      --bone: #F4F1EA;
+      --near-black: #0B0B0C;
+      --hairline: #2A2A2D;
+      --hold: #C4A574;
+      color-scheme: dark;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-weight: 400;
+    }
+    body { margin: 0; background: var(--near-black); color: var(--bone); }
+    main { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1.5rem 0; }
+    header { padding-bottom: 0.75rem; border-bottom: 1px solid var(--hairline); }
+    h1 { font-size: 1rem; font-weight: 500; margin: 0 0 0.25rem; }
+    p.lead { margin: 0; font-size: 0.85rem; }
+    .band { padding: 1rem 0; border-bottom: 1px solid var(--hairline); }
+    h2 { font-size: 0.85rem; font-weight: 500; margin: 0 0 0.75rem; }
     label { display: block; font-size: 0.8rem; margin: 0.5rem 0 0.2rem; }
-    input, select, textarea { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #c9c1b3; border-radius: 8px; }
-    button { margin: 0.4rem 0.4rem 0 0; padding: 0.45rem 0.8rem; border: 0; border-radius: 8px; background: #1c1916; color: #fff; cursor: pointer; }
-    button.secondary { background: #6b645b; }
-    button.deny { background: #8a2b2b; }
+    input, select, textarea {
+      width: 100%; box-sizing: border-box; padding: 0.5rem;
+      border: 1px solid var(--hairline); background: var(--near-black); color: var(--bone);
+    }
+    button {
+      margin: 0.4rem 0.4rem 0 0; padding: 0.45rem 0.8rem;
+      border: 1px solid var(--hairline); background: var(--near-black); color: var(--bone); cursor: pointer;
+      font-weight: 400;
+    }
     ul { list-style: none; padding: 0; margin: 0; }
-    li { border-top: 1px solid #eee; padding: 0.6rem 0; }
+    li { border-top: 1px solid var(--hairline); padding: 0.6rem 0; }
     li:first-child { border-top: 0; }
-    .meta { color: #5c564e; font-size: 0.85rem; }
-    #status { min-height: 1.2rem; font-size: 0.9rem; margin-bottom: 1rem; }
-    #status.err { color: #8a2b2b; }
+    .meta { font-size: 0.85rem; }
+    #status { min-height: 1.2rem; font-size: 0.9rem; margin: 0.75rem 0; }
+    .held { border-left: 1px solid var(--hold); padding-left: 0.75rem; }
+    .held strong { color: var(--hold); font-weight: 500; }
+    footer { max-width: 42rem; margin: 0 auto; padding: 1rem 1.5rem 1.5rem; font-size: 0.75rem; }
   </style>
 </head>
 <body>
   <main>
-    <h1>AV Dev Field</h1>
-    <p class="lead">Required field path. Create a record, set or retract a key on the selected record, retract the selected record, open a pack journey, record a pack purpose or avoid on the selected record, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
+    <header>
+      <h1>AV Dev Field</h1>
+      <p class="lead">Architect is not on this surface.</p>
+    </header>
     <div id="status"></div>
 
-    <section>
+    <section class="band" aria-label="Session">
       <h2>Session</h2>
       <label for="token">Issued field token</label>
       <input id="token" autocomplete="off" spellcheck="false" placeholder="Paste a token Architect issued" />
       <button id="load" type="button" class="secondary">Load home</button>
     </section>
 
-    <section>
-      <h2>Journeys</h2>
+    <section class="band" aria-label="Live">
+      <h2>Live</h2>
       <ul id="journey-kinds"></ul>
       <label for="kind">Start</label>
       <select id="kind"></select>
       <label for="objective">Objective</label>
       <input id="objective" />
       <button id="start" type="button">Start journey</button>
-    </section>
-
-    <section>
-      <h2>Started journeys</h2>
       <ul id="journeys"></ul>
     </section>
 
-    <section>
-      <h2>Records</h2>
+    <section class="band" aria-label="Tape">
+      <h2>Tape</h2>
+      <ul id="outbound"></ul>
+    </section>
+
+    <section class="band" aria-label="Held">
+      <h2>Held</h2>
+      <ul id="cards"></ul>
+    </section>
+
+    <section class="band" aria-label="Artifact">
+      <h2>Artifact</h2>
       <ul id="records"></ul>
       <label for="record-type">Type</label>
       <select id="record-type"></select>
@@ -72,43 +96,22 @@
       <ul id="record-attributes"></ul>
     </section>
 
-    <section>
-      <h2>Purpose</h2>
+    <section class="band" aria-label="Form">
+      <h2>Form</h2>
       <ul id="purpose-facts"></ul>
-    </section>
-
-    <section>
-      <h2>Avoids</h2>
       <ul id="avoid-facts"></ul>
-    </section>
-
-    <section>
-      <h2>Facts</h2>
       <label for="fact-id">Fact id</label>
       <input id="fact-id" autocomplete="off" spellcheck="false" placeholder="Generic fact id" />
       <button id="record" type="button">Record</button>
       <button id="retract" type="button" class="secondary">Retract</button>
-    </section>
-
-    <section>
-      <h2>Cards</h2>
-      <ul id="cards"></ul>
-    </section>
-
-    <section>
-      <h2>Ask (optional)</h2>
       <label for="ask-text">Text</label>
       <input id="ask-text" value="please read the file" />
       <label for="ask-class">Action class</label>
       <input id="ask-class" value="read" />
       <button id="ask" type="button" class="secondary">Send Ask</button>
     </section>
-
-    <section>
-      <h2>Outbound</h2>
-      <ul id="outbound"></ul>
-    </section>
   </main>
+  <footer>Alpha Vector LLC</footer>
   <script>
     const statusEl = document.getElementById("status");
     let selectedRecordId = "";
@@ -224,7 +227,7 @@
          <button type="button" data-progress="${escapeHtml(j.id)}" data-kind="${escapeHtml(j.kind)}">Request follow-up</button></li>`
       );
       renderList("cards", home.inbox, (c) =>
-        `<li><strong>${escapeHtml(c.purpose)}</strong> · ${escapeHtml(c.subject)} · ${escapeHtml(c.channel)}
+        `<li class="held"><strong>${escapeHtml(c.purpose)}</strong> · ${escapeHtml(c.subject)} · ${escapeHtml(c.channel)}
          <div class="meta">${escapeHtml(c.cardId)}</div>
          <button type="button" data-approve="${escapeHtml(c.cardId)}">${escapeHtml(c.approve)}</button>
          <button type="button" class="deny" data-deny="${escapeHtml(c.cardId)}">${escapeHtml(c.deny)}</button></li>`
