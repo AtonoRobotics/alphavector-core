@@ -1,5 +1,5 @@
 import { AvError } from "../errors.js";
-import type { AdapterCredentials, AdapterInput, CognitiveIntent } from "./types.js";
+import type { AdapterCredentials, AdapterInput, CognitiveIntent, LabeledMemory } from "./types.js";
 
 /**
  * Vendor-shaped think hop. Not the CI intent mapper. Not the SDK loop.
@@ -24,6 +24,12 @@ export interface VendorThinkHandles {
   recordId?: string;
   /** Loaded skill bodies. Omitted when the store is empty. */
   skills?: Array<{ name: string; description: string; body: string }>;
+  /**
+   * Durable labeled memory the think pass actually receives (HK-072).
+   * Always present. Empty store is empty labeled memory, not omitted.
+   * A missing field means the wake thought without inject.
+   */
+  memory: LabeledMemory;
 }
 
 /** OpenAI-compatible chat-completions body. Secret is never in this object. */
@@ -50,6 +56,7 @@ export function vendorThinkHandles(input: AdapterInput): VendorThinkHandles {
       ? { recordId: input.run.recordId ?? input.event.recordId }
       : {}),
     ...(skills.length ? { skills } : {}),
+    memory: input.memory,
   };
 }
 

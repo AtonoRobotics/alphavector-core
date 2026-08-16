@@ -926,7 +926,7 @@ export class HabitatKernel {
       pendingIntent: undefined,
       updatedAt: nowIso(),
     });
-    const memory = this.injectMemory(event.tenantId, worker.agent.agentId);
+    const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
     const intent = await this.adapter.think({
       pass: "worker",
@@ -1231,15 +1231,14 @@ export class HabitatKernel {
     return loadSkillFiles(this.opts.computerBaseDir, tenantId);
   }
 
+  /**
+   * Load durable disk memory for think. Empty store is empty labeled memory.
+   * Missing disk or corrupt files fail closed. An unlabeled stub is a diary.
+   */
   private injectMemory(tenantId: string, agentId: string): LabeledMemory {
-    if (!this.opts.computerBaseDir) {
-      return {
-        profile: { label: "profile", agentId, body: null },
-        logs: { label: "logs", agentId, entries: [] },
-        recall: { label: "recall", scope: `agent:${agentId}`, items: [] },
-      };
-    }
-    return this.memory.labeled(tenantId, agentId);
+    const memory = this.memory.labeled(tenantId, agentId);
+    this.assertLabeled(memory);
+    return memory;
   }
 
   private assertLabeled(memory: LabeledMemory): void {
