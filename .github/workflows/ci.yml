@@ -34,3 +34,30 @@ jobs:
       - run: npm run prepare:image
       - run: npm test
       - run: npm run build
+
+  field-ios:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Xcode and Field schemes
+        working-directory: clients/field-ios
+        run: |
+          xcodebuild -version
+          xcodebuild -project Field.xcodeproj -list
+      - name: Compile Field iOS (unsigned)
+        working-directory: clients/field-ios
+        run: |
+          xcodebuild \
+            -project Field.xcodeproj \
+            -scheme Field \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+      - name: Upload Field.app
+        uses: actions/upload-artifact@v4
+        with:
+          name: field-ios
+          path: clients/field-ios/build/Build/Products/Debug-iphonesimulator/Field.app
