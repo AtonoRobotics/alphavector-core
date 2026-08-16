@@ -54,3 +54,11 @@ export class ComputerError extends AvError {
     this.name = "ComputerError";
   }
 }
+
+/** Production deploy is incomplete. Fail closed — do not invent a live tenant. */
+export class DeployIncompleteError extends AvError {
+  constructor(message: string) {
+    super("DEPLOY_INCOMPLETE", message, true);
+    this.name = "DeployIncompleteError";
+  }
+}

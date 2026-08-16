@@ -30,6 +30,11 @@ export class PackLoader {
     private readonly anchors: TrustAnchors,
   ) {}
 
+  /** Trust anchors this loader re-verifies against. Product deploy uses these. */
+  trustAnchors(): TrustAnchors {
+    return this.anchors;
+  }
+
   load(input: {
     tenantId: string;
     binding: unknown;

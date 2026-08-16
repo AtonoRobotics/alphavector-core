@@ -22,6 +22,11 @@ export class FieldTokenBook {
 
   constructor(private readonly computerBaseDir?: string) {}
 
+  /** Tenant computer root this book persists beside. Missing → in-process only. */
+  baseDir(): string | undefined {
+    return this.computerBaseDir;
+  }
+
   /**
    * Issue a credential. `presented` is a secret looked up on this tenant.
    * Omit or leave empty only to bootstrap the first Architect. A caller-supplied
