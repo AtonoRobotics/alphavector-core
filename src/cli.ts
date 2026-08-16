@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { architectBindAdapter } from "./auth/architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "./auth/architect-adapter-credentials.js";
-import { architectBindConnector } from "./auth/architect-connectors.js";
+import { architectBindConnector, architectWriteConnectorCredentials } from "./auth/architect-connectors.js";
 import { architectWriteDeadline } from "./auth/architect-deadlines.js";
 import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
 import { architectWriteRoutine } from "./auth/architect-routines.js";
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | bind-deadline",
+        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -96,6 +96,9 @@ async function main(): Promise<void> {
       );
       console.log(
         "bind-connector writes tenants/{id}/connector-bind.json. Field cannot bind, see, or edit. Temporal is not the bus.",
+      );
+      console.log(
+        "set-connector-credentials writes tenants/{id}/connector-credentials.json. Not on the bind. Field cannot set credentials.",
       );
       console.log(
         "bind-deadline writes tenants/{id}/deadlines.json. Field cannot author, see, or edit. Temporal is not the bus.",
@@ -186,6 +189,27 @@ async function main(): Promise<void> {
       );
       return;
     }
+    if (sub === "set-connector-credentials") {
+      const connectorId = flag(flags, "--connector-id");
+      const secret = flag(flags, "--secret") ?? flag(flags, "--api-key");
+      if (!connectorId) throw new Error("architect set-connector-credentials requires --connector-id");
+      if (!secret) throw new Error("architect set-connector-credentials requires --secret");
+      const written = architectWriteConnectorCredentials({
+        tenantId,
+        connectorId,
+        secret,
+        computerBaseDir: dir,
+        architectToken,
+      });
+      console.log(
+        JSON.stringify(
+          { ok: true, tenantId: written.tenantId, connectorId: written.connectorId, writtenBy: written.writtenBy },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     if (sub === "bind-deadline") {
       const deadlineId = flag(flags, "--deadline-id");
       const dueAt = flag(flags, "--due-at");
@@ -209,7 +233,7 @@ async function main(): Promise<void> {
       return;
     }
     throw new Error(
-      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | bind-deadline",
+      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline",
     );
   }
   if (cmd === "field-serve") {
