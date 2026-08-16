@@ -1545,4 +1545,95 @@ describe("required field path against pinned alphavector-re", () => {
     });
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
   });
+
+  it("retracts a whole record only after approve; missing recordId fails closed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-retract-"));
+    const { pack, field, cards, records } = await reFieldStack(undefined, {
+      computerBaseDir: dir,
+    });
+    const paths = computerRoot(dir, "t1");
+    const type = pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record";
+
+    let keepId = "";
+    try {
+      field.create({ actor: "field", pack, type, label: "Keep" });
+      throw new Error("should have required a card");
+    } catch (err) {
+      keepId = (err as AuthorizationRequiredError).cardId;
+    }
+    cards.resolve({ cardId: keepId, decision: "approved", actor: "field" });
+    const keepRecId = field.commitApprovedFact(keepId)!.id;
+
+    let createId = "";
+    try {
+      field.create({ actor: "field", pack, type, label: "Gone" });
+      throw new Error("should have required a card");
+    } catch (err) {
+      createId = (err as AuthorizationRequiredError).cardId;
+    }
+    cards.resolve({ cardId: createId, decision: "approved", actor: "field" });
+    const recId = field.commitApprovedFact(createId)!.id;
+
+    expect(() => field.retractRecord({ actor: "architect", pack, recordId: recId })).toThrow(
+      SurfaceViolationError,
+    );
+
+    expect(() => field.retractRecord({ actor: "field", pack, recordId: "" })).toThrow(AvError);
+    expect(() => field.retractRecord({ actor: "field", pack, recordId: "" })).toThrow(
+      /Record id is required/,
+    );
+    expect(() => field.retractRecord({ actor: "field", pack, recordId: "rec_unknown" })).toThrow(
+      /Unknown record/,
+    );
+    expect(records.get("t1", recId)?.label).toBe("Gone");
+    expect(records.get("t1", keepRecId)?.label).toBe("Keep");
+
+    let deniedId = "";
+    try {
+      field.retractRecord({ actor: "field", pack, recordId: recId });
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+      deniedId = (err as AuthorizationRequiredError).cardId;
+    }
+    expect(cards.get(deniedId)?.kind).toBe("owner_instance");
+    expect(cards.get(deniedId)?.actionClass).toBe("delete");
+    expect(cards.get(deniedId)?.channel).toBe("records");
+    expect(() => field.commitApprovedFact(deniedId)).toThrow(/approved card/);
+    expect(records.get("t1", recId)?.label).toBe("Gone");
+    expect(JSON.parse(await readFile(paths.recordsFile, "utf8")).records.map((r: { id: string }) => r.id)).toEqual(
+      expect.arrayContaining([keepRecId, recId]),
+    );
+
+    cards.resolve({ cardId: deniedId, decision: "denied", actor: "field" });
+    expect(records.get("t1", recId)?.label).toBe("Gone");
+    expect(() => field.retractRecord({ actor: "field", pack, recordId: recId })).toThrow(
+      /Deny is terminal/,
+    );
+
+    let approvedId = "";
+    try {
+      field.retractRecord({ actor: "field", pack, recordId: keepRecId });
+      throw new Error("should have required a card");
+    } catch (err) {
+      approvedId = (err as AuthorizationRequiredError).cardId;
+    }
+    expect(() => field.commitApprovedFact(approvedId)).toThrow(/approved card/);
+    expect(new RecordBook(dir).get("t1", keepRecId)?.label).toBe("Keep");
+    cards.resolve({ cardId: approvedId, decision: "approved", actor: "field" });
+    expect(field.commitApprovedFact(approvedId)).toEqual({ id: keepRecId, present: false });
+    expect(records.get("t1", keepRecId)).toBeUndefined();
+    expect(records.get("t1", recId)?.label).toBe("Gone");
+    expect(new RecordBook(dir).get("t1", keepRecId)).toBeUndefined();
+    expect(new RecordBook(dir).get("t1", recId)).toEqual({
+      id: recId,
+      type,
+      label: "Gone",
+      attributes: {},
+    });
+    expect(JSON.parse(await readFile(paths.recordsFile, "utf8")).records).toEqual([
+      expect.objectContaining({ id: recId, label: "Gone" }),
+    ]);
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+  });
 });

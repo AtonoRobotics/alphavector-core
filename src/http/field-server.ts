@@ -14,6 +14,7 @@ import type {
   FieldProgressBody,
   FieldRecordAttributeRetractBody,
   FieldRecordBody,
+  FieldRecordRetractBody,
   FieldRecordUpdateBody,
   FieldStartBody,
 } from "./types.js";
@@ -247,6 +248,16 @@ export class FieldHttpServer {
         pack,
         recordId: body.recordId ? String(body.recordId) : "",
         key: body.key ? String(body.key) : "",
+      });
+      return;
+    }
+
+    if (method === "POST" && path === "/field/records/retract") {
+      const body = (await readJson(req)) as FieldRecordRetractBody;
+      core.field.retractRecord({
+        actor,
+        pack,
+        recordId: body.recordId ? String(body.recordId) : "",
       });
       return;
     }

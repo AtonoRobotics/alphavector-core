@@ -70,6 +70,11 @@ export interface FieldRecordAttributeRetractBody {
   key?: string;
 }
 
+/** Retract a whole record. recordId required. Missing fails closed. */
+export interface FieldRecordRetractBody {
+  recordId?: string;
+}
+
 export interface FieldApproveResult {
   card: { cardId: string; status: string };
   journey?: Journey;

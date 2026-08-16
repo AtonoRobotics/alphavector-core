@@ -144,6 +144,16 @@ export interface FieldRecordAttributeRetractInput {
   key: string;
 }
 
+/**
+ * Field-only retract of a whole known record. Missing recordId fails closed
+ * (`RECORD_ID_REQUIRED`). Unknown fails closed (`RECORD_NOT_FOUND`).
+ */
+export interface FieldRecordRetractInput {
+  actor: PrincipalKind;
+  pack: LoadedPack;
+  recordId: string;
+}
+
 export interface FieldRecordResult {
   id: string;
   type: string;

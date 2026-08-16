@@ -26,6 +26,7 @@ import type {
   FieldProgressResult,
   FieldRecordAttributeRetractInput,
   FieldRecordInput,
+  FieldRecordRetractInput,
   FieldRecordUpdateInput,
   FieldStartInput,
 } from "./types.js";
@@ -392,6 +393,35 @@ export class FieldSurface {
   }
 
   /**
+   * Request to retract a whole known record. Issues an owner_instance card
+   * with actionClass delete so it does not collide with attribute retract
+   * (records + retract, subject is the key) or fact retract (facts + retract).
+   * Does not write records.json until approved. Missing or unknown recordId
+   * fails closed.
+   */
+  retractRecord(input: FieldRecordRetractInput): void {
+    this.assertActorIsField(input.actor);
+    const recordId = this.assertKnownRecord(input.pack.tenantId, input.recordId);
+    if (this.cards.wasDenied(input.pack.tenantId, FACT_AGENT, "delete", recordId, RECORD_CHANNEL)) {
+      throw new AvError(
+        "DENY_IS_TERMINAL",
+        "Deny is terminal; the same action cannot be silently resubmitted",
+      );
+    }
+    const card = this.cards.issue({
+      tenantId: input.pack.tenantId,
+      kind: "owner_instance",
+      actionClass: "delete",
+      agentId: FACT_AGENT,
+      purpose: recordId,
+      subject: recordId,
+      channel: RECORD_CHANNEL,
+      pack: input.pack,
+    });
+    throw new AuthorizationRequiredError(card.cardId, "Authorization card required before record retract");
+  }
+
+  /**
    * Persist or retract only after the owner_instance card is approved.
    * Pending and denied cards do not write. Non-fact/record cards return undefined
    * so communicate approve-then-execute can continue.
@@ -411,6 +441,11 @@ export class FieldSurface {
       const patch = decodeRecordUpdatePatch(card.subject);
       const record = this.records.update(card.tenantId, recordId, patch);
       return { id: record.id, present: true };
+    }
+    if (card.channel === RECORD_CHANNEL && card.actionClass === "delete") {
+      const recordId = this.assertKnownRecord(card.tenantId, card.purpose);
+      this.records.remove(card.tenantId, recordId);
+      return { id: recordId, present: false };
     }
     if (card.channel === RECORD_CHANNEL && card.actionClass === "retract") {
       const recordId = this.assertKnownRecord(card.tenantId, card.purpose);
