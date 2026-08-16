@@ -207,7 +207,7 @@ describe("required field path against pinned alphavector-re", () => {
     const { pack, field, cards, agents, facts, records } = await reFieldStack();
     const rec = putSubject(records, pack);
     facts.put("t1", "journey.buyer", rec.id);
-    facts.put("t1", "purpose.follow-up", rec.id);
+    facts.put("t1", "purpose.follow-up");
     const journey = field.start({
       actor: "field",
       pack,
@@ -263,7 +263,7 @@ describe("required field path against pinned alphavector-re", () => {
     const { pack, field, cards, agents, facts, records } = await reFieldStack();
     const rec = putSubject(records, pack);
     facts.put("t1", "journey.buyer", rec.id);
-    facts.put("t1", "purpose.follow-up", rec.id);
+    facts.put("t1", "purpose.follow-up");
     const journey = field.start({
       actor: "field",
       pack,
@@ -587,6 +587,7 @@ describe("required field path against pinned alphavector-re", () => {
       journeyId: journey.id,
       agent,
       actionClass: "read",
+      subject: rec.id,
     });
     expect(advanced.effect?.executed).toBe(true);
   });
