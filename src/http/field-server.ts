@@ -8,7 +8,13 @@ import { AuthorizationRequiredError, AvError, SurfaceViolationError } from "../e
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
 import { fieldLinuxPagePath } from "./field-boot.js";
-import type { FieldAskBody, FieldFactBody, FieldProgressBody, FieldStartBody } from "./types.js";
+import type {
+  FieldAskBody,
+  FieldFactBody,
+  FieldProgressBody,
+  FieldRecordBody,
+  FieldStartBody,
+} from "./types.js";
 
 const CORS = {
   "access-control-allow-origin": "*",
@@ -172,13 +178,34 @@ export class FieldHttpServer {
 
     if (method === "POST" && path === "/field/facts") {
       const body = (await readJson(req)) as FieldFactBody;
-      core.field.record({ actor, pack, id: String(body.id ?? "") });
+      core.field.record({
+        actor,
+        pack,
+        id: String(body.id ?? ""),
+        recordId: body.recordId ? String(body.recordId) : undefined,
+      });
       return;
     }
 
     if (method === "POST" && path === "/field/facts/retract") {
       const body = (await readJson(req)) as FieldFactBody;
-      core.field.retract({ actor, pack, id: String(body.id ?? "") });
+      core.field.retract({
+        actor,
+        pack,
+        id: String(body.id ?? ""),
+        recordId: body.recordId ? String(body.recordId) : undefined,
+      });
+      return;
+    }
+
+    if (method === "POST" && path === "/field/records") {
+      const body = (await readJson(req)) as FieldRecordBody;
+      core.field.create({
+        actor,
+        pack,
+        type: String(body.type ?? ""),
+        label: String(body.label ?? ""),
+      });
       return;
     }
 
@@ -257,7 +284,12 @@ export class FieldHttpServer {
     const card = core.field.resolveCard({ actor, cardId, decision: "approved" });
     const fact = core.field.commitApprovedFact(cardId);
     if (fact) {
-      this.json(res, 200, { card: { cardId: card.cardId, status: card.status }, fact });
+      const record = this.opts.core.records.get(this.opts.tenantId, fact.id);
+      this.json(res, 200, {
+        card: { cardId: card.cardId, status: card.status },
+        fact,
+        ...(record ? { record } : {}),
+      });
       return;
     }
     const pending = this.pending.get(cardId);
@@ -345,7 +377,10 @@ export class FieldHttpServer {
     }
     if (err instanceof AvError) {
       const status =
-        err.code === "JOURNEY_NOT_FOUND" || err.code === "CARD_NOT_FOUND" || err.code === "AGENT_NOT_FOUND"
+        err.code === "JOURNEY_NOT_FOUND" ||
+          err.code === "CARD_NOT_FOUND" ||
+          err.code === "AGENT_NOT_FOUND" ||
+          err.code === "RECORD_NOT_FOUND"
           ? 404
           : err.code === "POLICY_DENIED" ||
               err.code === "DENY_IS_TERMINAL" ||
@@ -353,7 +388,8 @@ export class FieldHttpServer {
             ? 403
             : err.code === "CARD_STORE_CORRUPT" ||
                 err.code === "TOKEN_STORE_CORRUPT" ||
-                err.code === "FACT_STORE_CORRUPT"
+                err.code === "FACT_STORE_CORRUPT" ||
+                err.code === "RECORD_STORE_CORRUPT"
               ? 500
               : 400;
       this.json(res, status, { error: err.code, message: err.message });

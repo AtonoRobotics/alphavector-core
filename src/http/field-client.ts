@@ -56,23 +56,32 @@ export class FieldClient {
   }
 
   /** Issues an owner_instance card. Persist happens only after approve. */
-  record(id: string): Promise<{ id: string; present: boolean }> {
-    return this.request("POST", "/field/facts", { id });
+  record(id: string, recordId?: string): Promise<{ id: string; present: boolean }> {
+    return this.request("POST", "/field/facts", recordId ? { id, recordId } : { id });
   }
 
   /** Issues an owner_instance card. Retract happens only after approve. */
-  retract(id: string): Promise<{ id: string; present: boolean }> {
-    return this.request("POST", "/field/facts/retract", { id });
+  retract(id: string, recordId?: string): Promise<{ id: string; present: boolean }> {
+    return this.request("POST", "/field/facts/retract", recordId ? { id, recordId } : { id });
+  }
+
+  /** Issues an owner_instance card. Persist happens only after approve. */
+  create(type: string, label: string): Promise<{ id: string; type: string; label: string }> {
+    return this.request("POST", "/field/records", { type, label });
   }
 
   /**
    * Page path: POST /field/facts or /field/facts/retract, then approve the
    * owner_instance card. Persist happens only after approve.
    */
-  async requestFactCard(id: string, op: "record" | "retract" = "record"): Promise<string> {
+  async requestFactCard(
+    id: string,
+    op: "record" | "retract" = "record",
+    recordId?: string,
+  ): Promise<string> {
     try {
-      if (op === "record") await this.record(id);
-      else await this.retract(id);
+      if (op === "record") await this.record(id, recordId);
+      else await this.retract(id, recordId);
       throw new Error("expected authorization card before fact write");
     } catch (err) {
       if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
@@ -80,6 +89,35 @@ export class FieldClient {
       }
       return err.cardId;
     }
+  }
+
+  /**
+   * Page path: POST /field/records, then approve the owner_instance card.
+   * Persist happens only after approve.
+   */
+  async requestRecordCard(type: string, label: string): Promise<string> {
+    try {
+      await this.create(type, label);
+      throw new Error("expected authorization card before record create");
+    } catch (err) {
+      if (!(err instanceof FieldHttpError) || err.code !== "AUTHORIZATION_REQUIRED" || !err.cardId) {
+        throw err;
+      }
+      return err.cardId;
+    }
+  }
+
+  /** Same create path the Linux page uses, then approve. */
+  async createApprovedRecord(
+    type: string,
+    label: string,
+  ): Promise<NonNullable<FieldApproveResult["record"]>> {
+    const cardId = await this.requestRecordCard(type, label);
+    const approved = await this.approve(cardId);
+    if (!approved.record) {
+      throw new Error("record create approve did not persist");
+    }
+    return approved.record;
   }
 
   /**
@@ -108,8 +146,11 @@ export class FieldClient {
    * Record a generic fact through the existing card path: request → approve → persist.
    * Not a back door — same routes as the Linux page.
    */
-  async recordApprovedFact(id: string): Promise<NonNullable<FieldApproveResult["fact"]>> {
-    const cardId = await this.requestFactCard(id, "record");
+  async recordApprovedFact(
+    id: string,
+    recordId?: string,
+  ): Promise<NonNullable<FieldApproveResult["fact"]>> {
+    const cardId = await this.requestFactCard(id, "record", recordId);
     const approved = await this.approve(cardId);
     if (!approved.fact?.present) {
       throw new Error(`fact record approve did not persist ${id}`);
@@ -152,8 +193,10 @@ export class FieldClient {
     const kind = home.journeyKinds[0];
     if (!kind) throw new Error("loaded pack has no journey kinds");
     await this.openApproved(kind.id);
+    const recordType = home.recordKinds[0]?.id ?? "record";
+    const subject = await this.createApprovedRecord(recordType, "Subject");
     const purpose = this.communicateRequiresPurpose(home);
-    await this.recordApprovedFact(purpose.id);
+    await this.recordApprovedFact(purpose.id, subject.id);
     const journey = await this.start(kind.id, `Work this ${kind.label} journey`);
     let cardId = "";
     try {
@@ -161,7 +204,7 @@ export class FieldClient {
         actionClass: "communicate",
         channel: "email",
         purpose: purpose.id.slice("purpose.".length),
-        subject: kind.id,
+        subject: subject.id,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {

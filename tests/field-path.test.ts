@@ -12,6 +12,7 @@ import { EffectExecutor } from "../src/effects/executor.js";
 import { AvError, AuthorizationRequiredError, PolicyDeniedError, SurfaceViolationError } from "../src/errors.js";
 import { FactBook } from "../src/facts/book.js";
 import { GrantBook } from "../src/grants/store.js";
+import { RecordBook } from "../src/records/book.js";
 import { JourneyRuntime } from "../src/journeys/runtime.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { PolicyGateway } from "../src/policy/gateway.js";
@@ -51,9 +52,10 @@ async function reFieldStack(
   const effects = new EffectExecutor(new PolicyGateway(), grants, cards, store);
   const ask = new AskSurface(store);
   const facts = new FactBook(opts?.computerBaseDir);
-  const field = new FieldSurface(cards, store, grants, journeys, effects, ask, facts);
+  const records = new RecordBook(opts?.computerBaseDir);
+  const field = new FieldSurface(cards, store, grants, journeys, effects, ask, facts, records);
   const agents = new AgentRuntime().instantiateFromPack(loaded.loaded, "architect");
-  return { pack: loaded.loaded, field, cards, store, grants, agents, ask, facts };
+  return { pack: loaded.loaded, field, cards, store, grants, agents, ask, facts, records };
 }
 
 describe("required field path against pinned alphavector-re", () => {
@@ -812,6 +814,103 @@ describe("required field path against pinned alphavector-re", () => {
         objective: "Work this buyer journey",
         conditions: [REQUIRED],
       }),
+    ).toThrow(/corrupt/i);
+  });
+
+  it("creates a record only after approve; DNC on A blocks communicate about A not B", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-subject-"));
+    const { pack, field, cards, agents, facts, records } = await reFieldStack(undefined, {
+      computerBaseDir: dir,
+    });
+    const paths = computerRoot(dir, "t1");
+    const type = pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record";
+    expect(type).not.toMatch(/listing_id|person_id|household_id|buyer_id/i);
+
+    expect(() =>
+      field.create({ actor: "architect", pack, type, label: "A" }),
+    ).toThrow(SurfaceViolationError);
+
+    let createA = "";
+    try {
+      field.create({ actor: "field", pack, type, label: "A" });
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+      createA = (err as AuthorizationRequiredError).cardId;
+    }
+    expect(cards.get(createA)?.kind).toBe("owner_instance");
+    expect(existsSync(paths.recordsFile)).toBe(false);
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+    expect(records.list("t1")).toEqual([]);
+    expect(() => field.commitApprovedFact(createA)).toThrow(/approved card/);
+    expect(existsSync(paths.recordsFile)).toBe(false);
+
+    cards.resolve({ cardId: createA, decision: "approved", actor: "field" });
+    const recordedA = field.commitApprovedFact(createA);
+    expect(recordedA?.present).toBe(true);
+    expect(recordedA?.id).toMatch(/^rec_/);
+    expect(paths.recordsFile).toBe(path.join(dir, "tenants", "t1", "records.json"));
+    expect(existsSync(paths.recordsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+    const recA = records.get("t1", recordedA!.id)!;
+    expect(recA).toEqual({ id: recordedA!.id, type, label: "A" });
+
+    let createB = "";
+    try {
+      field.create({ actor: "field", pack, type, label: "B" });
+      throw new Error("should have required a card");
+    } catch (err) {
+      createB = (err as AuthorizationRequiredError).cardId;
+    }
+    cards.resolve({ cardId: createB, decision: "approved", actor: "field" });
+    const recordedB = field.commitApprovedFact(createB);
+    const recB = records.get("t1", recordedB!.id)!;
+    expect(recB.label).toBe("B");
+
+    facts.put("t1", "journey.buyer");
+    facts.put("t1", "purpose.follow-up", recA.id);
+    facts.put("t1", "consent.dnc", recA.id);
+    facts.put("t1", "purpose.follow-up", recB.id);
+    expect(facts.presentIds("t1")).toEqual(["journey.buyer"]);
+    expect(facts.presentIds("t1", recA.id)).toEqual(
+      expect.arrayContaining(["purpose.follow-up", "consent.dnc"]),
+    );
+    expect(facts.presentIds("t1", recB.id)).toEqual(["purpose.follow-up"]);
+    expect(facts.presentIds("t1", recB.id)).not.toContain("consent.dnc");
+
+    const journey = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+    });
+    const followUp = agents.find((a) => a.name === "Follow-up")!;
+    const communicate = {
+      actor: "field" as const,
+      pack,
+      journeyId: journey.id,
+      agent: followUp,
+      actionClass: "communicate",
+      channel: "email",
+      purpose: "follow-up",
+    };
+    expect(() => field.progress({ ...communicate, subject: recA.id })).toThrow(/AVOIDS present/);
+    expect(() => field.progress({ ...communicate, subject: recA.id })).toThrow(/fail closed/);
+    expect(() => field.progress({ ...communicate, subject: recB.id })).toThrow(
+      AuthorizationRequiredError,
+    );
+  });
+
+  it("fail-closes on a corrupt record store and does not invent a record", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-bad-"));
+    const paths = computerRoot(dir, "t1");
+    await mkdir(path.dirname(paths.recordsFile), { recursive: true });
+    await writeFile(paths.recordsFile, "{not-json", "utf8");
+    const { pack, field } = await reFieldStack(undefined, { computerBaseDir: dir });
+    expect(() => field.home("t1", pack)).toThrow(AvError);
+    expect(() => field.home("t1", pack)).toThrow(/corrupt/i);
+    expect(() =>
+      field.create({ actor: "field", pack, type: "record", label: "A" }),
     ).toThrow(/corrupt/i);
   });
 });

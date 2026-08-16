@@ -16,6 +16,13 @@ export interface FieldHome {
   purposeFacts: Array<{ id: string; label: string }>;
   /** Pack-local AVOIDS facts from loaded bindings. Not a core constant. */
   avoidFacts: Array<{ id: string; label: string }>;
+  /** Generic subject records on this tenant's disk. Not an RE column. */
+  records: Array<{ id: string; type: string; label: string }>;
+  /**
+   * Pack-local record/party kind strings from the loaded pack list.
+   * Not hardcoded core types.
+   */
+  recordKinds: Array<{ id: string; label: string }>;
 }
 
 export interface AskRequest {
@@ -78,11 +85,28 @@ export interface FieldFactInput {
   actor: PrincipalKind;
   pack: LoadedPack;
   id: string;
+  /** Attach this fact to a subject record. Absent = tenant-global (Open / journey). */
+  recordId?: string;
 }
 
 export interface FieldFactResult {
   id: string;
   present: boolean;
+  recordId?: string;
+}
+
+/** Field-only record create. type is a pack string or a generic label. */
+export interface FieldRecordInput {
+  actor: PrincipalKind;
+  pack: LoadedPack;
+  type: string;
+  label: string;
+}
+
+export interface FieldRecordResult {
+  id: string;
+  type: string;
+  label: string;
 }
 
 export interface ArchitectHome {

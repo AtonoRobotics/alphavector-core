@@ -34,7 +34,10 @@ function parseFact(raw: unknown): TenantFact {
   if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id) {
     throw new AvError("FACT_STORE_CORRUPT", "Fact store is corrupt; refusing to invent a fact");
   }
-  return { id: raw.id };
+  if (raw.recordId !== undefined && (typeof raw.recordId !== "string" || !raw.recordId)) {
+    throw new AvError("FACT_STORE_CORRUPT", "Fact store is corrupt; refusing to invent a fact");
+  }
+  return raw.recordId ? { id: raw.id, recordId: raw.recordId } : { id: raw.id };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

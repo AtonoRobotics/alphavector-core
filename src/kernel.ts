@@ -11,6 +11,7 @@ import { EffectExecutor } from "./effects/executor.js";
 import { EvalRunner } from "./eval/runner.js";
 import { FactBook } from "./facts/book.js";
 import { GrantBook } from "./grants/store.js";
+import { RecordBook } from "./records/book.js";
 import { JourneyRuntime } from "./journeys/runtime.js";
 import path from "node:path";
 import { FilePackRegistry } from "./packs/file-registry.js";
@@ -37,6 +38,7 @@ export class AlphaVectorCore {
   readonly cards: CardBook;
   readonly fieldTokens: FieldTokenBook;
   readonly facts: FactBook;
+  readonly records: RecordBook;
   readonly store = new DurableStore();
   readonly gateway = new PolicyGateway();
   readonly effects: EffectExecutor;
@@ -57,6 +59,7 @@ export class AlphaVectorCore {
     this.cards = new CardBook(computerBaseDir);
     this.fieldTokens = new FieldTokenBook(computerBaseDir);
     this.facts = new FactBook(computerBaseDir);
+    this.records = new RecordBook(computerBaseDir);
     this.effects = new EffectExecutor(this.gateway, this.grants, this.cards, this.store);
     this.journeys = new JourneyRuntime(this.store);
     this.ask = new AskSurface(this.store);
@@ -68,6 +71,7 @@ export class AlphaVectorCore {
       this.effects,
       this.ask,
       this.facts,
+      this.records,
     );
   }
 

@@ -6,6 +6,7 @@ export * from "./agents/index.js";
 export * from "./policy/index.js";
 export * from "./auth/index.js";
 export * from "./facts/index.js";
+export * from "./records/index.js";
 export * from "./grants/index.js";
 export * from "./computer/index.js";
 export * from "./data/index.js";
