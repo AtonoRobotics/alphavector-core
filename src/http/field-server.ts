@@ -427,6 +427,7 @@ export class FieldHttpServer {
                 err.code === "FACT_STORE_CORRUPT" ||
                 err.code === "RECORD_STORE_CORRUPT" ||
                 err.code === "RUN_STORE_CORRUPT" ||
+                err.code === "WORKER_STORE_CORRUPT" ||
                 err.code === "MEMORY_STORE_CORRUPT"
               ? 500
               : 400;
