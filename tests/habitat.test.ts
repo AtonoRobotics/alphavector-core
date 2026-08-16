@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
@@ -340,6 +341,34 @@ async function liveField(
     url,
     server,
   };
+}
+
+function runArchitectCli(
+  args: string[],
+  opts: { computerBaseDir: string; architectToken?: string },
+): { stdout: string; stderr: string; status: number } {
+  const viteNode = path.join(process.cwd(), "node_modules/vite-node/dist/cli.mjs");
+  const cli = path.join(process.cwd(), "src/cli.ts");
+  try {
+    const stdout = execFileSync(process.execPath, [viteNode, cli, ...args], {
+      encoding: "utf8",
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        AV_COMPUTER_DIR: opts.computerBaseDir,
+        ...(opts.architectToken ? { AV_ARCHITECT_TOKEN: opts.architectToken } : {}),
+      },
+      timeout: 30_000,
+    });
+    return { stdout, stderr: "", status: 0 };
+  } catch (err) {
+    const e = err as { status?: number | null; stdout?: string; stderr?: string };
+    return {
+      stdout: typeof e.stdout === "string" ? e.stdout : "",
+      stderr: typeof e.stderr === "string" ? e.stderr : "",
+      status: typeof e.status === "number" ? e.status : 1,
+    };
+  }
 }
 
 /** Product boot: no adapter option. DeepAgentsAdapter is the field-serve default. */
@@ -3603,6 +3632,83 @@ describe("D10 connector wakes", () => {
     expect(fieldSrc).not.toMatch(/pickAgent/);
     expect(fieldSrc).toMatch(/connectors\?/);
     expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/connectors/);
+    const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(cliSrc).toMatch(/architectBindConnector/);
+    expect(cliSrc).toMatch(/bind-connector writes tenants\/\{id\}\/connector-bind\.json/);
+    expect(cliSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+  });
+
+  it("Architect CLI bind-connector writes tenants/{id}/connector-bind.json; habitat path still works", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-connector-cli-"));
+    const { core, field, architectToken } = await liveField("t1", dir);
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.runId).toMatch(/^run_/);
+    const worker = core.habitat.activeWorker("t1");
+    const goalsBefore = core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective);
+
+    const out = runArchitectCli(
+      ["architect", "bind-connector", "--tenant", "t1", "--connector-id", "mls", "--architect-token", architectToken!],
+      { computerBaseDir: dir },
+    );
+    expect(out.status).toBe(0);
+    expect(out.stdout).toMatch(/"connectorId": "mls"/);
+    expect(out.stdout).toMatch(/"boundBy": "architect"/);
+
+    const paths = computerRoot(dir, "t1");
+    expect(paths.connectorBindFile).toBe(path.join(dir, "tenants", "t1", "connector-bind.json"));
+    expect(existsSync(paths.connectorBindFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "connector-bind.json"))).toBe(false);
+    const raw = JSON.parse(readFileSync(paths.connectorBindFile, "utf8")) as {
+      connectors: Array<{ connectorId: string; boundBy: string; requiresCredentials: boolean }>;
+    };
+    expect(raw.connectors).toHaveLength(1);
+    expect(raw.connectors[0]).toMatchObject({
+      connectorId: "mls",
+      boundBy: "architect",
+      requiresCredentials: false,
+    });
+    expect(JSON.stringify(raw)).not.toMatch(/apiKey|secret|credential|password/);
+
+    const delivered = await core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" });
+    expect(delivered.run?.runId).toBe(run!.runId);
+    expect(delivered.launchedWorker).toBe(false);
+    expect(delivered.talkingDidHeavyWork).toBe(false);
+    expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
+    expect(core.habitat.getRun("t1")?.goal).toBe(started.journey.objective);
+    expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker?.workerId);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "connector" && w.runId === run!.runId)).toBe(true);
+    expect(core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective)).toEqual(goalsBefore);
+  });
+
+  it("Architect CLI --requires-credentials still fails closed without a secret write", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-connector-cli-creds-"));
+    const { core, field, architectToken } = await liveField("t1", dir);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    const out = runArchitectCli(
+      [
+        "architect",
+        "bind-connector",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "crm",
+        "--requires-credentials",
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(out.status).toBe(0);
+    expect(existsSync(computerRoot(dir, "t1").connectorBindFile)).toBe(true);
+    expect(existsSync(computerRoot(dir, "t1").connectorCredentialsFile)).toBe(false);
+    await expect(core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "crm" })).rejects.toMatchObject({
+      code: "CONNECTOR_CREDENTIALS_MISSING",
+      closed: true,
+    });
+    expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "connector")).toBe(false);
   });
 
   it("Architect-written bind + open run + connector event attaches with kind connector, same runId, labeled memory, no new goal or worker", async () => {
@@ -3813,6 +3919,17 @@ describe("D10 connector wakes", () => {
         architectToken: fieldToken,
       }),
     ).toThrow(/cannot bind|field token|connector/i);
+    const fieldCli = runArchitectCli(
+      ["architect", "bind-connector", "--tenant", "t1", "--connector-id", "mls", "--architect-token", fieldToken],
+      { computerBaseDir: dir },
+    );
+    expect(fieldCli.status).not.toBe(0);
+    expect(`${fieldCli.stdout}\n${fieldCli.stderr}`).toMatch(/cannot bind|field token|connector/i);
+    const shellCli = runArchitectCli(["architect", "bind-connector", "--tenant", "t1", "--connector-id", "mls"], {
+      computerBaseDir: dir,
+    });
+    expect(shellCli.status).not.toBe(0);
+    expect(`${shellCli.stdout}\n${shellCli.stderr}`).toMatch(/Shell is not Architect/);
     expect(existsSync(computerRoot(dir, "t1").connectorBindFile)).toBe(false);
 
     const home = await field.home();

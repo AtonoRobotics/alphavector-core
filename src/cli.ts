@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { architectBindAdapter } from "./auth/architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "./auth/architect-adapter-credentials.js";
+import { architectBindConnector } from "./auth/architect-connectors.js";
 import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/architect-field-token.js";
 import { architectWriteRoutine } from "./auth/architect-routines.js";
 import { FieldClient } from "./http/field-client.js";
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine",
+        "Architect (off the field home screen). Commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -91,6 +92,9 @@ async function main(): Promise<void> {
       );
       console.log(
         "bind-routine writes tenants/{id}/routines.json. Field cannot author routines. Temporal is not the bus.",
+      );
+      console.log(
+        "bind-connector writes tenants/{id}/connector-bind.json. Field cannot bind, see, or edit. Temporal is not the bus.",
       );
       return;
     }
@@ -159,8 +163,27 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ ok: true, tenantId: written.tenantId, routineId: written.routineId, boundBy: written.boundBy }, null, 2));
       return;
     }
+    if (sub === "bind-connector") {
+      const connectorId = flag(flags, "--connector-id");
+      if (!connectorId) throw new Error("architect bind-connector requires --connector-id");
+      const bound = architectBindConnector({
+        tenantId,
+        connectorId,
+        requiresCredentials: flags.includes("--requires-credentials"),
+        computerBaseDir: dir,
+        architectToken,
+      });
+      console.log(
+        JSON.stringify(
+          { ok: true, tenantId: bound.tenantId, connectorId: bound.connectorId, boundBy: bound.boundBy },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     throw new Error(
-      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine",
+      "architect commands: issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector",
     );
   }
   if (cmd === "field-serve") {
