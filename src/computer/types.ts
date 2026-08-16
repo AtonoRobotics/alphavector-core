@@ -17,6 +17,8 @@ export interface ComputerPaths {
   recordsFile: string;
   /** Habitat run records. Control state, beside cards.json, never inside disk/. */
   runsFile: string;
+  /** Habitat worker book. Control state, beside runs.json, never a business fact. */
+  workersFile: string;
   /** Replayable wake log. Beside runs.json, never inside disk/. */
   wakeLogFile: string;
   /** CS-012 disk memory (profile, dated logs, scoped recall). Not the in-process MemoryTiers array. */

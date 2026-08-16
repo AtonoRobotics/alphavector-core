@@ -23,6 +23,7 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     recordsFile: path.join(root, "records.json"),
     // Habitat control state. Same reason as cards: not a business fact, not on agent disk/.
     runsFile: path.join(root, "runs.json"),
+    workersFile: path.join(root, "workers.json"),
     wakeLogFile: path.join(root, "wake-log.json"),
     memoryDir: path.join(root, "memory"),
     skillsDir: path.join(root, "skills"),
