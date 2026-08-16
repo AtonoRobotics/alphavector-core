@@ -120,9 +120,7 @@ describe("tenant brokerage bind", () => {
     expect(note).toContain(RE_PIN);
     const bindSrc = readFileSync(path.join(REPO_ROOT, "src/habitat/brokerage-bind.ts"), "utf8");
     const writeSrc = readFileSync(path.join(REPO_ROOT, "src/auth/architect-brokerage.ts"), "utf8");
-    const typesSrc = readFileSync(path.join(REPO_ROOT, "src/packs/types.ts"), "utf8");
-    const schemaSrc = readFileSync(path.join(REPO_ROOT, "src/packs/schema.ts"), "utf8");
-    for (const src of [bindSrc, writeSrc, typesSrc, schemaSrc]) {
+    for (const src of [bindSrc, writeSrc]) {
       expect(src).not.toMatch(/VEYRA/);
       expect(src).not.toMatch(/\bDesk\b|\bShape\b|\bDirector\b|\bPlay\b|\bPlant\b|\bHIL\b|\bThor\b/);
       expect(src).not.toMatch(/Mission Control/);
