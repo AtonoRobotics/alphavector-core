@@ -7,7 +7,13 @@ import { MemoryTiers } from "../src/agents/memory.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { EvalRunner } from "../src/eval/runner.js";
 import { AvError } from "../src/errors.js";
-import { createDeepAgent, DeepAgentsAdapter, HABITAT_OWNED, WorkerBook } from "../src/habitat/index.js";
+import {
+  createDeepAgent,
+  DeepAgentsAdapter,
+  HABITAT_OWNED,
+  isPidAlive,
+  WorkerBook,
+} from "../src/habitat/index.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
@@ -24,30 +30,14 @@ import {
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
 
-function pidAlive(pid: number | undefined): boolean {
-  if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const state = stat.slice(stat.lastIndexOf(")") + 2).charAt(0);
-    return state !== "Z";
-  } catch {
-    return false;
-  }
-}
-
 /** HTTP start does not hold. Wait until the booked pid is gone (or a zombie). */
 function waitForPidDead(pid: number | undefined, ms = 2000): boolean {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    if (!pidAlive(pid)) return true;
+    if (!isPidAlive(pid)) return true;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
   }
-  return !pidAlive(pid);
+  return !isPidAlive(pid);
 }
 
 afterEach(async () => {
@@ -750,7 +740,7 @@ describe("D10 §6 field verbs", () => {
     expect(booked?.branch).toBe(worker.branch);
     expect(existsSync(worker.trailerPath)).toBe(true);
     expect(second.core.habitat.trailerExists("t1")).toBe(true);
-    expect(pidAlive(booked?.pid)).toBe(false);
+    expect(isPidAlive(booked?.pid)).toBe(false);
 
     const follow = await second.field.start("buyer", started.journey.objective, started.record.id);
     expect(follow.id).toBeDefined();
@@ -778,22 +768,22 @@ describe("D10 §6 field verbs", () => {
     const held = new WorkerBook(dir).launch({ tenantId: "t1", runId: run.runId, hold: true });
     expect(held.workerId).toBe(worker.workerId);
     expect(held.trailerPath).toBe(worker.trailerPath);
-    expect(pidAlive(held.pid)).toBe(true);
+    expect(isPidAlive(held.pid)).toBe(true);
 
     const second = await liveField("t1", dir, { field: first.fieldToken });
     expect(second.core.habitat.activeWorker("t1")?.pid).toBe(held.pid);
-    expect(pidAlive(second.core.habitat.activeWorker("t1")?.pid)).toBe(true);
+    expect(isPidAlive(second.core.habitat.activeWorker("t1")?.pid)).toBe(true);
 
     await second.field.start("buyer", started.journey.objective, started.record.id);
     expect(second.core.habitat.getRun("t1")?.runId).toBe(run.runId);
     expect(second.core.habitat.getRun("t1")?.workerId).toBe(worker.workerId);
     expect(second.core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
     expect(second.core.habitat.activeWorker("t1")?.pid).toBe(held.pid);
-    expect(pidAlive(second.core.habitat.activeWorker("t1")?.pid)).toBe(true);
+    expect(isPidAlive(second.core.habitat.activeWorker("t1")?.pid)).toBe(true);
 
     await second.field.kill("stop");
     expect(second.core.habitat.activeWorker("t1")).toBeUndefined();
-    expect(pidAlive(held.pid)).toBe(false);
+    expect(isPidAlive(held.pid)).toBe(false);
   });
 
   it("field kill after dead-pid relaunch tears the trailer down and clears the book", async () => {

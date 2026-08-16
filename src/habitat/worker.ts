@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentRecord } from "../agents/types.js";
@@ -112,10 +112,10 @@ export class WorkerBook {
     if (!worker) return;
     if (worker.pid) {
       try {
-        process.kill(-worker.pid, "SIGTERM");
+        process.kill(worker.pid, "SIGTERM");
       } catch {
         try {
-          process.kill(worker.pid, "SIGTERM");
+          process.kill(-worker.pid, "SIGTERM");
         } catch {
           // already gone
         }
@@ -152,18 +152,27 @@ export class WorkerBook {
     if (skills?.length) copySkillsToTrailer(skills, record.trailerPath);
     const execFile = path.join(record.trailerPath, "coder-exec.mjs");
     writeFileSync(execFile, CODER_EXEC_SOURCE, "utf8");
-    const child = spawn(process.execPath, [execFile], {
-      cwd: record.trailerPath,
-      detached: true,
-      stdio: "ignore",
-      env: {
-        ...process.env,
-        AV_CODER_HOLD: hold ? "1" : "0",
-      },
-    });
-    child.on("exit", () => {});
-    child.unref();
-    const next: WorkerRecord = { ...record, pid: child.pid };
+    const env = { ...process.env, AV_CODER_HOLD: hold ? "1" : "0" };
+    // Not detached: an exited HTTP-start child must be reaped so kill(0) is ESRCH.
+    // HTTP start does not hold — spawnSync waits for the executor to write and exit.
+    let pid: number | undefined;
+    if (hold) {
+      const child = spawn(process.execPath, [execFile], {
+        cwd: record.trailerPath,
+        stdio: "ignore",
+        env,
+      });
+      child.on("exit", () => {});
+      pid = child.pid;
+    } else {
+      const child = spawnSync(process.execPath, [execFile], {
+        cwd: record.trailerPath,
+        stdio: "ignore",
+        env,
+      });
+      pid = child.pid ?? undefined;
+    }
+    const next: WorkerRecord = { ...record, pid };
     this.workers.set(record.tenantId, next);
     this.persist(record.tenantId);
     return next;
@@ -180,15 +189,23 @@ export class WorkerBook {
   }
 
   private initBranch(trailerPath: string, branch: string): void {
-    execFileSync("git", ["init"], { cwd: trailerPath, stdio: "ignore" });
+    try {
+      execFileSync("git", ["init"], { cwd: trailerPath, stdio: "ignore" });
+    } catch {
+      // Leftover trailer may already be a repo. Keep the directory.
+    }
     writeFileSync(path.join(trailerPath, ".branch"), `${branch}\n`, "utf8");
     try {
       execFileSync("git", ["checkout", "-B", branch], { cwd: trailerPath, stdio: "ignore" });
     } catch {
-      execFileSync("git", ["symbolic-ref", "HEAD", `refs/heads/${branch}`], {
-        cwd: trailerPath,
-        stdio: "ignore",
-      });
+      try {
+        execFileSync("git", ["symbolic-ref", "HEAD", `refs/heads/${branch}`], {
+          cwd: trailerPath,
+          stdio: "ignore",
+        });
+      } catch {
+        // Branch file is enough; do not throw away the trailer.
+      }
     }
   }
 }
@@ -294,26 +311,31 @@ function parseAgent(raw: unknown, tenantId: string): AgentRecord {
   };
 }
 
-function isPidAlive(pid: number | undefined): boolean {
+/** Live only if the pid is running and not a zombie. Directory presence is irrelevant. */
+export function isPidAlive(pid: number | undefined): boolean {
   if (pid === undefined || !Number.isInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
   } catch {
     return false;
   }
-  // kill(0) succeeds for zombies. HTTP start does not hold; the exited
-  // child is not a live worker even if the parent has not reaped it.
-  return !isZombiePid(pid);
-}
-
-function isZombiePid(pid: number): boolean {
+  const proc = `/proc/${pid}`;
+  if (!existsSync(proc)) return false;
   try {
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    const state = stat.slice(stat.lastIndexOf(")") + 2).charAt(0);
-    return state === "Z";
+    const status = readFileSync(path.join(proc, "status"), "utf8");
+    const stateLine = status.split("\n").find((line) => line.startsWith("State:"));
+    if (stateLine && stateLine.slice("State:".length).trim().charAt(0) === "Z") return false;
   } catch {
     return false;
   }
+  try {
+    const stat = readFileSync(path.join(proc, "stat"), "utf8");
+    const state = stat.slice(stat.lastIndexOf(")") + 2).charAt(0);
+    if (state === "Z") return false;
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
