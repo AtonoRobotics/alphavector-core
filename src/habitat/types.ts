@@ -2,18 +2,27 @@ import type { AgentRecord } from "../agents/types.js";
 import type { LoadedPack } from "../packs/types.js";
 import type { StemDecision } from "./stem.js";
 
-/** Wake kinds. Connector, deadline, routine, and mail are live wakes. */
-export type WakeKind =
-  | "field_start"
-  | "field_ask"
-  | "field_continue"
-  | "card_decide"
-  | "worker_done"
-  | "kill"
-  | "deadline"
-  | "connector"
-  | "routine"
-  | "mail";
+/**
+ * Closed v1 wake kinds (HK-011). Existing names stay: field_continue,
+ * card_decide, connector. This slice adds architect_message and worker_failed.
+ * Adding a kind outside this set is a spec change.
+ */
+export const WAKE_KINDS = [
+  "field_start",
+  "field_ask",
+  "field_continue",
+  "card_decide",
+  "worker_done",
+  "worker_failed",
+  "kill",
+  "deadline",
+  "connector",
+  "routine",
+  "mail",
+  "architect_message",
+] as const;
+
+export type WakeKind = (typeof WAKE_KINDS)[number];
 
 export type RunStatus =
   | "open"
@@ -50,7 +59,10 @@ export interface WakeEvent {
   workerId?: string;
   /** Stored routine id. Required for kind "routine"; pack declaration is not enough. */
   routineId?: string;
-  /** Existing pack agent who receives the mail. Required for kind "mail". */
+  /**
+   * Existing pack agent who receives mail, or the addressed role-agent on
+   * architect_message. Absent architect_message loads the orchestrator.
+   */
   addresseeId?: string;
   /** Stored mail id. Required for kind "mail"; in-process AgentMail is not enough. */
   mailId?: string;

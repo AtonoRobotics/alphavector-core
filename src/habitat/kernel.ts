@@ -118,6 +118,8 @@ export class HabitatKernel {
   private frozenNow?: string;
   private timer?: ReturnType<typeof setInterval>;
   private computer?: ComputerHost;
+  /** Tenants whose worker teardown is expected (done / fail / kill). Not a crash. */
+  private readonly expectedTeardown = new Set<string>();
 
   constructor(private readonly opts: HabitatKernelOptions) {
     this.runs = new RunStore(opts.computerBaseDir);
@@ -231,6 +233,7 @@ export class HabitatKernel {
   /**
    * Trailer isolation as a record. Habitat isolation is trailer.
    * `exists` is the directory; `live` is the booked pid.
+   * A read. Does not emit worker_failed. Does not relaunch.
    */
   isolation(tenantId: string): HabitatIsolationRecord {
     const worker = this.workers.get(tenantId);
@@ -288,6 +291,12 @@ export class HabitatKernel {
     }
     if (event.kind === "worker_done") {
       return this.workerDone(event, opts?.holdWorker === true);
+    }
+    if (event.kind === "worker_failed") {
+      return this.workerFailed(event);
+    }
+    if (event.kind === "architect_message") {
+      return this.architectMessageWake(event, decision);
     }
     if (event.kind === "field_ask") {
       return this.fieldAsk(event, decision);
@@ -365,8 +374,9 @@ export class HabitatKernel {
   }
 
   /**
-   * Product ticker body. Habitat owns this clock. Calls fireDue (routines)
-   * and fireDueDeadlines per tenant. Same clock — not a second Temporal-like bus.
+   * Product ticker body. Habitat owns this clock. Calls fireDue (routines),
+   * fireDueDeadlines, and reapCrashedWorkers per tenant. Same clock — not a
+   * second Temporal-like bus. isolation() is a read and does not reap.
    * Typed fail (ONE_GOAL, ADAPTER_UNBOUND, NO_OPEN_RUN, *_STORE_CORRUPT, ...) is
    * swallowed so the interval keeps ticking. Does not invent routines or deadlines.
    */
@@ -388,7 +398,30 @@ export class HabitatKernel {
       } catch {
         // keep ticking
       }
+      try {
+        await this.reapCrashedWorkers(tenantId);
+      } catch {
+        // keep ticking
+      }
     }
+  }
+
+  /**
+   * Held coder pid died in this process. Emit worker_failed and wake the
+   * orchestrator. Not worker_done. Not kill. isolation() does not call this.
+   * A booked dead pid after restart (not held by this WorkerBook instance) is
+   * not a crash — field_start + awaiting_card may relaunch that workerId.
+   */
+  private async reapCrashedWorkers(tenantId: string): Promise<void> {
+    if (this.expectedTeardown.has(tenantId)) return;
+    const worker = this.workers.get(tenantId);
+    if (!worker?.pid || !this.workers.isHeldHere(tenantId)) return;
+    if (this.workers.isLive(tenantId)) return;
+    await this.reportWorkerFailed({
+      tenantId,
+      workerId: worker.workerId,
+      reason: "worker_exited",
+    });
   }
 
   /**
@@ -824,10 +857,15 @@ export class HabitatKernel {
   }
 
   private requireExistingAgent(tenantId: string, agentId: string): void {
+    this.requireExistingAgentRecord(tenantId, agentId);
+  }
+
+  private requireExistingAgentRecord(tenantId: string, agentId: string): AgentRecord {
     const found = this.opts.agents.list(tenantId).find((a) => a.agentId === agentId);
     if (!found) {
-      throw new AvError("AGENT_NOT_FOUND", "Mail requires an existing agent; refusing to invent or impersonate");
+      throw new AvError("AGENT_NOT_FOUND", "Requires an existing agent; refusing to invent or impersonate");
     }
+    return found;
   }
 
   /**
@@ -880,6 +918,184 @@ export class HabitatKernel {
     }
     return {
       run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory,
+    };
+  }
+
+  /**
+   * Architect message (HK-011). Kernel wake, not sit(). Loads the orchestrator,
+   * or the addressed role-agent when addresseeId is present. Unknown addressee
+   * fails closed — not a silent no-op. Attach only; no implicit start.
+   * Product entry is architectDeliverMessage (Architect credential). Field cannot forge it.
+   */
+  async deliverArchitectMessage(input: {
+    tenantId: string;
+    body: string;
+    addresseeId?: string;
+  }): Promise<WakeResult> {
+    const run = this.runs.get(input.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Architect message requires an open run; no implicit start");
+    }
+    const addresseeId = input.addresseeId?.trim();
+    if (addresseeId) {
+      this.requireExistingAgent(input.tenantId, addresseeId);
+    }
+    return this.wake({
+      kind: "architect_message",
+      tenantId: input.tenantId,
+      pack: this.packs.get(input.tenantId),
+      addresseeId: addresseeId || undefined,
+      fromAgentId: "architect",
+      goal: input.body,
+      runId: run.runId,
+    });
+  }
+
+  /**
+   * Worker failure (HK-011). Typed wake, not worker_done, not an untyped error.
+   * Tears the failed trailer down and wakes the orchestrator. Does not complete
+   * the goal and does not record worker_done.
+   */
+  async reportWorkerFailed(input: {
+    tenantId: string;
+    workerId?: string;
+    reason?: string;
+  }): Promise<WakeResult> {
+    const run = this.runs.get(input.tenantId);
+    this.expectedTeardown.add(input.tenantId);
+    try {
+      return await this.wake({
+        kind: "worker_failed",
+        tenantId: input.tenantId,
+        pack: this.packs.get(input.tenantId),
+        workerId: input.workerId ?? run?.workerId,
+        reason: input.reason,
+        runId: run?.runId,
+      });
+    } finally {
+      this.expectedTeardown.delete(input.tenantId);
+    }
+  }
+
+  /**
+   * Architect message: a wake on the open run. Does not mint a run or a goal.
+   * No addressee → load the orchestrator. Addressee present → load that
+   * role-agent. Talking stays thin — no pickAgent, no coder launch.
+   */
+  private async architectMessageWake(
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+  ): Promise<WakeResult> {
+    const run = this.runs.get(event.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Architect message requires an open run; no implicit start");
+    }
+    const addresseeId = event.addresseeId?.trim();
+    const loaded =
+      addresseeId
+        ? this.requireExistingAgentRecord(event.tenantId, addresseeId)
+        : this.requireOrchestrator(event.tenantId);
+    const memory = this.injectMemory(event.tenantId, loaded.agentId);
+    this.assertLabeled(memory);
+    const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const skills = this.injectSkills(event.tenantId);
+    const talking = await this.adapter.think({
+      pass: "talking",
+      event,
+      run,
+      memory,
+      skills,
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    this.validateTalking(talking);
+    this.wakeLog.append({
+      kind: "architect_message",
+      tenantId: event.tenantId,
+      runId: run.runId,
+      at: nowIso(),
+      decision,
+      detail: {
+        fromAgentId: "architect",
+        loadedAgentId: loaded.agentId,
+        ...(addresseeId ? { addresseeId } : {}),
+      },
+    });
+    return {
+      run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory,
+    };
+  }
+
+  /**
+   * Worker failed: tear the trailer down, then wake the orchestrator.
+   * Not worker_done. Does not complete the goal. Talking stays thin.
+   */
+  private async workerFailed(event: WakeEvent): Promise<WakeResult> {
+    const run = this.runs.get(event.tenantId);
+    const decision = stem(event);
+    this.wakeLog.append({
+      kind: "worker_failed",
+      tenantId: event.tenantId,
+      runId: run?.runId,
+      at: nowIso(),
+      decision,
+      detail: { workerId: event.workerId ?? run?.workerId, reason: event.reason ?? "worker_failed" },
+    });
+    this.expectedTeardown.add(event.tenantId);
+    try {
+      this.workers.teardown(event.tenantId);
+    } finally {
+      this.expectedTeardown.delete(event.tenantId);
+    }
+
+    if (!run || isTerminal(run.status)) {
+      const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
+      return {
+        run,
+        wokeOrchestrator: decision.wakeOrchestrator,
+        wokeOps: decision.wakeOps,
+        launchedWorker: false,
+        talkingDidHeavyWork: false,
+        memory,
+      };
+    }
+
+    const open = this.runs.put({
+      ...run,
+      status: "talking",
+      pendingCardId: undefined,
+      pendingEffect: undefined,
+      pendingIntent: undefined,
+      updatedAt: nowIso(),
+    });
+    const orch = this.requireOrchestrator(event.tenantId);
+    const memory = this.injectMemory(event.tenantId, orch.agentId);
+    this.assertLabeled(memory);
+    const pack = event.pack ?? this.packs.get(event.tenantId);
+    const resolved = this.requireThinkBind(event.tenantId, pack);
+    const skills = this.injectSkills(event.tenantId);
+    const talking = await this.adapter.think({
+      pass: "talking",
+      event,
+      run: open,
+      memory,
+      skills,
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    this.validateTalking(talking);
+    return {
+      run: open,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1176,7 +1392,12 @@ export class HabitatKernel {
       decision,
       detail: { workerId: event.workerId ?? run?.workerId },
     });
-    this.workers.teardown(event.tenantId);
+    this.expectedTeardown.add(event.tenantId);
+    try {
+      this.workers.teardown(event.tenantId);
+    } finally {
+      this.expectedTeardown.delete(event.tenantId);
+    }
 
     if (!run || isTerminal(run.status)) {
       this.opts.orchestrator.completeGoal(event.tenantId);
@@ -1277,7 +1498,12 @@ export class HabitatKernel {
       decision: stem(event),
       detail: { reason: event.reason ?? "kill" },
     });
-    this.workers.teardown(event.tenantId);
+    this.expectedTeardown.add(event.tenantId);
+    try {
+      this.workers.teardown(event.tenantId);
+    } finally {
+      this.expectedTeardown.delete(event.tenantId);
+    }
     this.opts.orchestrator.completeGoal(event.tenantId);
     const next = run
       ? this.runs.put({
@@ -1592,5 +1818,6 @@ function nonempty(value: string | undefined): boolean {
 
 function defaultUntil(kind: WakeEvent["kind"]): "talking" | "card" | "done" {
   if (kind === "field_start" || kind === "routine") return "card";
+  if (kind === "architect_message" || kind === "worker_failed") return "done";
   return "done";
 }

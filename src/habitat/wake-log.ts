@@ -3,7 +3,7 @@ import { AvError } from "../errors.js";
 import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 import { loadRunStore } from "./run-store.js";
 import { stem, type StemDecision } from "./stem.js";
-import type { WakeEvent, WakeKind, WakeLogEntry } from "./types.js";
+import { WAKE_KINDS, type WakeEvent, type WakeKind, type WakeLogEntry } from "./types.js";
 
 export interface TenantWakeLog {
   entries: WakeLogEntry[];
@@ -69,18 +69,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Replay admits only typed kinds. Unknown kind is WAKE_LOG_MISMATCH.
+ * HK-011: architect_message and worker_failed belong here. Do not invent a kind.
+ */
 const KNOWN_WAKE_KINDS: ReadonlySet<WakeKind> = new Set([
   "field_start",
   "field_ask",
   "field_continue",
   "card_decide",
   "worker_done",
+  "worker_failed",
   "kill",
   "deadline",
   "connector",
   "routine",
   "mail",
+  "architect_message",
 ]);
+
+for (const kind of WAKE_KINDS) {
+  if (!KNOWN_WAKE_KINDS.has(kind)) {
+    throw new AvError("WAKE_LOG_MISMATCH", "Wake-log kinds must cover the closed WakeKind set");
+  }
+}
 
 export interface WakeLogReplayResult {
   passed: boolean;
@@ -131,7 +143,8 @@ export function replayWakeLog(entries: unknown, context?: WakeLogReplayContext):
         kind === "field_continue" ||
         kind === "routine" ||
         kind === "mail" ||
-        kind === "deadline") &&
+        kind === "deadline" ||
+        kind === "architect_message") &&
       !runId
     ) {
       return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };

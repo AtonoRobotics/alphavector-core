@@ -124,7 +124,9 @@ export function adapterThink(input: AdapterInput): CognitiveIntent {
       input.event.kind === "field_ask" ||
       input.event.kind === "field_continue" ||
       input.event.kind === "mail" ||
-      input.event.kind === "deadline"
+      input.event.kind === "deadline" ||
+      input.event.kind === "architect_message" ||
+      input.event.kind === "worker_failed"
     ) {
       return { pass: "talking", act: "follow_up" };
     }
