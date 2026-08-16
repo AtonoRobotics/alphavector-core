@@ -24,7 +24,7 @@ import {
   type WorkerRecord,
 } from "./types.js";
 import { WakeBus } from "./wake-bus.js";
-import { replayWakeLog, WakeLog } from "./wake-log.js";
+import { replayWakeLog, replayWakeLogFromDisk, WakeLog } from "./wake-log.js";
 import { WorkerBook } from "./worker.js";
 
 export interface HabitatKernelOptions {
@@ -142,7 +142,11 @@ export class HabitatKernel {
   }
 
   replay(tenantId: string): ReturnType<typeof replayWakeLog> {
-    return replayWakeLog(this.wakeLog.list(tenantId));
+    if (this.opts.computerBaseDir) {
+      return replayWakeLogFromDisk(this.opts.computerBaseDir, tenantId);
+    }
+    const run = this.runs.get(tenantId);
+    return replayWakeLog(this.wakeLog.list(tenantId), { runs: run ? [run] : [] });
   }
 
   /**

@@ -1,5 +1,5 @@
 import type { WakeLogEntry } from "../habitat/types.js";
-import { replayWakeLog } from "../habitat/wake-log.js";
+import { replayWakeLog, replayWakeLogFromDisk, type WakeLogReplayResult } from "../habitat/wake-log.js";
 import type { LoadedPack } from "../packs/types.js";
 
 export interface EvalResult {
@@ -19,8 +19,13 @@ export class EvalRunner {
     return { passed: failed.length === 0, failed };
   }
 
-  /** Replay habitat facilities from a wake log. No model. */
-  replayFacilities(entries: WakeLogEntry[]): ReturnType<typeof replayWakeLog> {
-    return replayWakeLog(entries);
+  /** Replay habitat facilities from a wake log or tenant disk. No model. */
+  replayFacilities(
+    source: readonly WakeLogEntry[] | { computerBaseDir: string; tenantId: string },
+  ): WakeLogReplayResult {
+    if ("computerBaseDir" in source) {
+      return replayWakeLogFromDisk(source.computerBaseDir, source.tenantId);
+    }
+    return replayWakeLog(source);
   }
 }
