@@ -118,26 +118,48 @@ export class FieldClient {
   }
 
   /**
+   * Field action on a pack journey kind. Issues an owner_instance card for
+   * `journey.{kindId}` via POST /field/facts. Persist happens only after approve.
+   * Does not start the journey and does not record purpose/PREFERS/AVOIDS facts.
+   */
+  open(kindId: string): Promise<string> {
+    return this.requestFactCard(this.journeyFactId(kindId));
+  }
+
+  /** Same Open path the Linux page uses, then approve. For tests/demo only. */
+  openApproved(kindId: string): Promise<NonNullable<FieldApproveResult["fact"]>> {
+    return this.recordApprovedFact(this.journeyFactId(kindId));
+  }
+
+  /** Generic journey slot from a pack kind id. Not an RE column. */
+  journeyFactId(kindId: string): string {
+    return `journey.${kindId}`;
+  }
+
+  /**
    * Completes one pack journey and one owner card approve against a live field API.
    * Used by the Linux client so a reviewer can finish the required path today.
-   * Records authored journey.buyer and purpose.follow-up through the fact card
-   * path before start/progress. Does not mint tokens or skip the card.
+   * Opens the buyer kind through the Open path, then records purpose.follow-up
+   * separately before communicate. Does not mint tokens or skip the card.
    */
   async completeBuyerJourneyAndCard(): Promise<{
     journey: Journey;
     cardId: string;
     effect: NonNullable<FieldProgressResult["effect"]>;
   }> {
-    await this.recordApprovedFact("journey.buyer");
+    const home = await this.home();
+    const kind = home.journeyKinds[0];
+    if (!kind) throw new Error("loaded pack has no journey kinds");
+    await this.openApproved(kind.id);
     await this.recordApprovedFact("purpose.follow-up");
-    const journey = await this.start("buyer", "Work this buyer journey");
+    const journey = await this.start(kind.id, `Work this ${kind.label} journey`);
     let cardId = "";
     try {
       await this.progress(journey.id, {
         actionClass: "communicate",
         channel: "email",
         purpose: "follow-up",
-        subject: "buyer",
+        subject: kind.id,
       });
       throw new Error("expected authorization card before execute");
     } catch (err) {

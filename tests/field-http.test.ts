@@ -105,7 +105,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "transaction",
       "past-client",
     ]);
-    await field.recordApprovedFact("journey.buyer");
+    await field.openApproved("buyer");
     const journey = await field.start("buyer", "Work this buyer journey");
     expect(journey.journeyKind).toBe("buyer");
     expect(journey.status).toBe("open");
@@ -157,14 +157,14 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       const body = (await res.json()) as { error: string };
       expect(body.error).toBe("UNAUTHORIZED");
     }
-    await field.recordApprovedFact("journey.buyer");
+    await field.openApproved("buyer");
     const journey = await field.start("buyer", "Work this buyer journey");
     expect(journey.journeyKind).toBe("buyer");
   });
 
   it("denies a revoked issued token and does not invent a session", async () => {
     const { url, tenantId, fieldIssued, core, field, tokens } = await liveField("revoke");
-    await field.recordApprovedFact("journey.buyer");
+    await field.openApproved("buyer");
     const journey = await field.start("buyer", "Work this buyer journey");
     expect(journey.status).toBe("open");
     core.fieldTokens.revoke({
@@ -197,7 +197,16 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       code: "SURFACE_VIOLATION",
       message: expect.stringMatching(/field user/),
     });
-    await field.recordApprovedFact("journey.buyer");
+    await expect(architect.open("buyer")).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+      message: expect.stringMatching(/field user/),
+    });
+    await expect(architect.record("journey.buyer")).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    await field.openApproved("buyer");
     const journey = await field.start("buyer", "Work this buyer journey");
     expect(journey.journeyKind).toBe("buyer");
   });
@@ -219,7 +228,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
   it("serves a Linux-openable field client that can complete a journey and a card", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-linux-page-"));
-    const { url, field, tokens, tenantId } = await liveField("linux", dir);
+    const { url, field, tokens, tenantId, pack } = await liveField("linux", dir);
     const page = await fetch(url);
     expect(page.headers.get("content-type")).toMatch(/text\/html/);
     const html = await page.text();
@@ -232,6 +241,15 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/id="retract"/);
     expect(html).toMatch(/\/field\/facts/);
     expect(html).toMatch(/\/field\/facts\/retract/);
+    expect(html).toMatch(/id="journey-kinds"/);
+    expect(html).toMatch(/home\.journeyKinds/);
+    expect(html).toMatch(/data-open=/);
+    expect(html).toMatch(/>Open</);
+    expect(html).toMatch(/"journey\." \+ t\.dataset\.open/);
+    expect(html).not.toMatch(/journey\.buyer/);
+    expect(html).not.toMatch(/k\.id === ["']buyer["']/);
+    expect(html).not.toContain("Work this buyer journey");
+    expect(html).not.toMatch(/selected=["']buyer["']/);
     expect(html).not.toMatch(/listing_id|person_id|household_id|buyer_id/i);
     expect(html).not.toContain(tokens.field);
     expect(html).not.toMatch(/window\.FIELD_DEFAULTS/);
@@ -241,6 +259,10 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).not.toContain(`field-${tenantId}`);
     expect(html).not.toMatch(/architectControls|pick a model|edit prompt|inspect temporal|configure tool/i);
     expect(html).not.toMatch(/Desk|Shape|Director|Play|Plant|HIL|Thor|Mission Control/);
+
+    const home = await field.home();
+    expect(home.journeyKinds.map((k) => k.id)).toEqual(pack.binding.journeyKinds.map((k) => k.id));
+    expect(home.journeyKinds.every((k) => k.id && k.label)).toBe(true);
 
     const done = await field.completeBuyerJourneyAndCard();
     expect(done.journey.journeyKind).toBe("buyer");
@@ -417,7 +439,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       message: expect.stringMatching(/REQUIRES missing/),
     });
 
-    const recorded = await field.recordApprovedFact("journey.buyer");
+    const recorded = await field.openApproved("buyer");
     expect(recorded).toEqual({ id: "journey.buyer", present: true });
     expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
@@ -427,7 +449,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const journey = await field.start("buyer", "Work this buyer journey");
     expect(journey.journeyKind).toBe("buyer");
 
-    await field.recordApprovedFact("journey.seller");
+    await field.openApproved("seller");
     const seller = await field.start("seller", "Work this seller journey");
     expect(seller.journeyKind).toBe("seller");
 
@@ -461,6 +483,69 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       status: 403,
       code: "PREDICATE_CLOSED",
       message: expect.stringMatching(/AVOIDS present/),
+    });
+  });
+
+  it("opens a pack journey kind through the fact card path without starting it", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-open-kind-"));
+    const { field, architect, tenantId, pack } = await liveField("open-kind", dir);
+    const paths = computerRoot(dir, tenantId);
+    const kind = pack.binding.journeyKinds[0];
+    expect(kind?.id).toBe("buyer");
+
+    await expect(field.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/REQUIRES missing|fail closed/),
+    });
+
+    const cardId = await field.open(kind.id);
+    expect(cardId).toMatch(/^card_/);
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+
+    const approved = await field.approve(cardId);
+    expect(approved.card.status).toBe("approved");
+    expect(approved.fact).toEqual({ id: field.journeyFactId(kind.id), present: true });
+    expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
+    expect(existsSync(paths.factsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`);
+    expect(journey.journeyKind).toBe(kind.id);
+    expect(journey.status).toBe("open");
+
+    await expect(
+      field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "follow-up",
+        subject: kind.id,
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/REQUIRES missing/),
+    });
+    await field.recordApprovedFact("purpose.follow-up");
+    await expect(
+      field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: "follow-up",
+        subject: kind.id,
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "AUTHORIZATION_REQUIRED",
+    });
+
+    await expect(architect.open(kind.id)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
     });
   });
 
