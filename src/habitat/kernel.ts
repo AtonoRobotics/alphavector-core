@@ -409,6 +409,7 @@ export class HabitatKernel {
     } else {
       this.requireExistingAgent(input.tenantId, fromAgentId);
     }
+    readTenantMail(this.opts.computerBaseDir, input.tenantId);
     const run = this.runs.get(input.tenantId);
     if (!run || isTerminal(run.status)) {
       throw new AvError("NO_OPEN_RUN", "Mail requires an open run; no implicit start");
