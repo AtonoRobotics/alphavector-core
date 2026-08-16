@@ -11,6 +11,13 @@ struct FieldJourneyRow: Codable, Identifiable, Hashable {
     var objective: String
 }
 
+struct FieldRecordRow: Codable, Identifiable, Hashable {
+    var id: String
+    var type: String
+    var label: String
+    var attributes: [String: String]
+}
+
 struct FieldCard: Codable, Identifiable, Hashable {
     var cardId: String
     var purpose: String
@@ -32,6 +39,10 @@ struct FieldHome: Codable {
     var inbox: [FieldCard]
     var outboundLog: [FieldOutbound]
     var journeyKinds: [FieldJourneyKind]
+    var purposeFacts: [FieldJourneyKind]
+    var avoidFacts: [FieldJourneyKind]
+    var records: [FieldRecordRow]
+    var recordKinds: [FieldJourneyKind]
 }
 
 struct FieldJourney: Codable {
@@ -39,6 +50,7 @@ struct FieldJourney: Codable {
     var journeyKind: String
     var objective: String
     var status: String
+    var recordId: String?
 }
 
 struct FieldEffect: Codable {
@@ -52,10 +64,18 @@ struct FieldProgressResult: Codable {
     var effect: FieldEffect?
 }
 
+struct FieldFactResult: Codable {
+    var id: String
+    var present: Bool
+    var recordId: String?
+}
+
 struct FieldApproveResult: Codable {
     var card: FieldResolvedCard
     var journey: FieldJourney?
     var effect: FieldEffect?
+    var fact: FieldFactResult?
+    var record: FieldRecordRow?
 }
 
 struct FieldResolvedCard: Codable {
@@ -75,6 +95,11 @@ struct FieldProgressBody: Codable {
     var purpose: String?
     var subject: String?
     var note: String?
+}
+
+struct FieldRecordUpdateBody: Codable {
+    var recordId: String
+    var attributes: [String: String]
 }
 
 enum FieldClientError: Error, LocalizedError {

@@ -16,11 +16,11 @@ final class FieldAPI: ObservableObject {
         try await request(method: "GET", path: "/field/home")
     }
 
-    func start(journeyKind: String, objective: String) async throws -> FieldJourney {
+    func start(journeyKind: String, objective: String, recordId: String) async throws -> FieldJourney {
         try await request(
             method: "POST",
             path: "/field/journeys",
-            body: ["journeyKind": journeyKind, "objective": objective]
+            body: ["journeyKind": journeyKind, "objective": objective, "recordId": recordId]
         )
     }
 
@@ -49,10 +49,70 @@ final class FieldAPI: ObservableObject {
         )
     }
 
+    /// Issues an owner_instance card. Persist happens only after approve.
+    func record(id: String, recordId: String) async throws {
+        try await send(method: "POST", path: "/field/facts", body: ["id": id, "recordId": recordId])
+    }
+
+    /// Issues an owner_instance card. Retract happens only after approve.
+    func retract(id: String, recordId: String) async throws {
+        try await send(
+            method: "POST",
+            path: "/field/facts/retract",
+            body: ["id": id, "recordId": recordId]
+        )
+    }
+
+    /// Field Open: record `journey.{kindId}` on the subject record. Same path as Linux.
+    func open(kindId: String, recordId: String) async throws {
+        try await record(id: "journey.\(kindId)", recordId: recordId)
+    }
+
+    /// Issues an owner_instance card. Persist happens only after approve.
+    func create(type: String, label: String) async throws {
+        try await send(method: "POST", path: "/field/records", body: ["type": type, "label": label])
+    }
+
+    /// Issues an owner_instance card. Persist happens only after approve.
+    func update(recordId: String, attributes: [String: String]) async throws {
+        try await send(
+            method: "POST",
+            path: "/field/records/update",
+            body: FieldRecordUpdateBody(recordId: recordId, attributes: attributes)
+        )
+    }
+
+    /// Issues an owner_instance card. Persist happens only after approve.
+    func retractAttribute(recordId: String, key: String) async throws {
+        try await send(
+            method: "POST",
+            path: "/field/records/attributes/retract",
+            body: ["recordId": recordId, "key": key]
+        )
+    }
+
+    /// Issues an owner_instance card. Persist happens only after approve.
+    func retractRecord(recordId: String) async throws {
+        try await send(method: "POST", path: "/field/records/retract", body: ["recordId": recordId])
+    }
+
     private struct CardsEnvelope: Codable { var cards: [FieldCard] }
     private struct Ok: Codable { var ok: Bool }
 
     private func request<T: Decodable>(method: String, path: String, body: Encodable? = nil) async throws -> T {
+        let data = try await sendData(method: method, path: path, body: body)
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw FieldClientError.decoding
+        }
+    }
+
+    private func send(method: String, path: String, body: Encodable? = nil) async throws {
+        _ = try await sendData(method: method, path: path, body: body)
+    }
+
+    private func sendData(method: String, path: String, body: Encodable? = nil) async throws -> Data {
         guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
             throw FieldClientError.decoding
         }
@@ -74,11 +134,7 @@ final class FieldAPI: ObservableObject {
                 cardId: parsed?.cardId
             )
         }
-        do {
-            return try JSONDecoder().decode(T.self, from: data)
-        } catch {
-            throw FieldClientError.decoding
-        }
+        return data
     }
 }
 
