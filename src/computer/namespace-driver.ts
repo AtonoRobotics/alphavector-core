@@ -22,7 +22,7 @@ import {
 } from "./image.js";
 import { captureDesktopPng, ensureRealDesktop, stopDesktop } from "./desktop.js";
 import { applyTenantNet, netnsExists, planTenantNet, teardownTenantNet } from "./egress.js";
-import { assertSafeRelPath, computerRoot } from "./paths.js";
+import { assertSafeRelPath, computerRoot, resolveInsideDisk } from "./paths.js";
 import { readJsonFile, writeJsonAtomic } from "../persist/json-file.js";
 import type {
   ComputerDriver,
@@ -206,7 +206,10 @@ export class NamespaceComputerDriver implements ComputerDriver {
     await this.requireRunning(tenantId);
     const safe = assertSafeRelPath(relPath);
     const paths = computerRoot(this.baseDir, tenantId);
-    const abs = path.join(paths.disk, safe);
+    const abs = await resolveInsideDisk(paths.disk, safe);
+    if (!abs) {
+      return { path: safe, exists: false };
+    }
     try {
       const st = await stat(abs);
       if (st.isDirectory()) {
@@ -223,7 +226,8 @@ export class NamespaceComputerDriver implements ComputerDriver {
         encoding: binary ? "binary" : "utf8",
         content: binary ? undefined : utf8,
       };
-    } catch {
+    } catch (err) {
+      if (err instanceof ComputerError) throw err;
       return { path: safe, exists: false };
     }
   }

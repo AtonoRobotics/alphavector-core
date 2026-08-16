@@ -1,4 +1,6 @@
+import { realpath } from "node:fs/promises";
 import path from "node:path";
+import { ComputerError } from "../errors.js";
 import type { ComputerPaths } from "./types.js";
 
 export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
@@ -52,4 +54,37 @@ export function assertSafeRelPath(relPath: string): string {
     throw new Error(`Refusing path ${relPath}`);
   }
   return normalized;
+}
+
+function assertInsideDisk(diskReal: string, resolved: string): void {
+  if (resolved === diskReal || resolved.startsWith(`${diskReal}${path.sep}`)) {
+    return;
+  }
+  throw new ComputerError("PATH_ESCAPES_DISK", "Refusing path that does not stay inside the tenant disk");
+}
+
+/**
+ * Containment after resolution is the control. Lexical checks are not sufficient.
+ * `realpath` the candidate and require it stay inside `realpath(disk)`.
+ */
+export async function resolveInsideDisk(disk: string, relPath: string): Promise<string | undefined> {
+  const safe = assertSafeRelPath(relPath);
+  let diskReal: string;
+  try {
+    diskReal = await realpath(disk);
+  } catch {
+    throw new ComputerError("PATH_ESCAPES_DISK", "Tenant disk is not resolvable");
+  }
+  const joined = path.resolve(diskReal, safe);
+  let resolved: string;
+  try {
+    resolved = await realpath(joined);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw new ComputerError("PATH_ESCAPES_DISK", "Refusing path that does not stay inside the tenant disk");
+  }
+  assertInsideDisk(diskReal, resolved);
+  return resolved;
 }

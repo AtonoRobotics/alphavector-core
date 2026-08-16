@@ -1,12 +1,15 @@
-import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { DockerComputerDriver } from "../src/computer/docker-driver.js";
 import { planTenantNet } from "../src/computer/egress.js";
 import { ComputerHost } from "../src/computer/host.js";
 import { extractRootfs, stampImage } from "../src/computer/image.js";
+import { resolveInsideDisk } from "../src/computer/paths.js";
+import { ComputerError } from "../src/errors.js";
 import { REPO_ROOT } from "./helpers.js";
 
 const hosts: ComputerHost[] = [];
@@ -155,6 +158,26 @@ describe("computer primitive", () => {
     await expect(host.readFile("tenant-a", ".secrets/password")).rejects.toThrow(/never sees passwords/);
   });
 
+  it("readFile fails closed when a symlink would leave the tenant disk", async () => {
+    const { host, baseDir } = await bootEnv();
+    await host.start("tenant-a");
+    const disk = path.join(baseDir, "tenants", "tenant-a", "disk");
+    const outside = path.join(baseDir, "tenants", "tenant-a", "outside.txt");
+    await writeFile(outside, "outside-fixture");
+    await writeFile(path.join(disk, "inside.txt"), "inside-ok");
+    await symlink(outside, path.join(disk, "leave"));
+
+    await expect(host.readFile("tenant-a", "leave")).rejects.toMatchObject({
+      name: "ComputerError",
+      code: "PATH_ESCAPES_DISK",
+      closed: true,
+    });
+
+    const inside = await host.readFile("tenant-a", "inside.txt");
+    expect(inside.exists).toBe(true);
+    expect(inside.content).toBe("inside-ok");
+  });
+
   it("agent shell cat of the secrets path fails", async () => {
     const { host, baseDir } = await bootEnv();
     await host.start("tenant-a");
@@ -259,5 +282,50 @@ describe("computer primitive", () => {
     const html = await (await import("node:fs/promises")).readFile(session.viewerPath, "utf8");
     expect(html).toContain("Architect attach");
     expect(html).toContain("writer");
+  });
+});
+
+describe("tenant disk containment", () => {
+  it("resolveInsideDisk keeps ordinary files and refuses a leaving symlink", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "av-disk-"));
+    const disk = path.join(root, "disk");
+    await mkdir(disk);
+    await writeFile(path.join(disk, "ok.txt"), "ok");
+    await writeFile(path.join(root, "outside.txt"), "outside-fixture");
+    await symlink(path.join(root, "outside.txt"), path.join(disk, "leave"));
+
+    const inside = await resolveInsideDisk(disk, "ok.txt");
+    expect(inside).toBe(await realpath(path.join(disk, "ok.txt")));
+
+    await expect(resolveInsideDisk(disk, "missing.txt")).resolves.toBeUndefined();
+
+    await expect(resolveInsideDisk(disk, "leave")).rejects.toMatchObject({
+      name: "ComputerError",
+      code: "PATH_ESCAPES_DISK",
+      closed: true,
+    });
+    await expect(resolveInsideDisk(disk, "leave")).rejects.toBeInstanceOf(ComputerError);
+
+    await expect(resolveInsideDisk(disk, "../outside.txt")).rejects.toThrow(/Refusing path/);
+  });
+
+  it("docker driver readFile uses the same containment check", async () => {
+    const baseDir = await mkdtemp(path.join(os.tmpdir(), "av-dock-"));
+    const disk = path.join(baseDir, "tenants", "tenant-a", "disk");
+    await mkdir(disk, { recursive: true });
+    await writeFile(path.join(disk, "ok.txt"), "ok");
+    await writeFile(path.join(baseDir, "tenants", "tenant-a", "outside.txt"), "outside-fixture");
+    await symlink(path.join(baseDir, "tenants", "tenant-a", "outside.txt"), path.join(disk, "leave"));
+
+    const driver = new DockerComputerDriver(baseDir);
+    const inside = await driver.readFile("tenant-a", "ok.txt");
+    expect(inside.exists).toBe(true);
+    expect(inside.content).toBe("ok");
+
+    await expect(driver.readFile("tenant-a", "leave")).rejects.toMatchObject({
+      name: "ComputerError",
+      code: "PATH_ESCAPES_DISK",
+      closed: true,
+    });
   });
 });

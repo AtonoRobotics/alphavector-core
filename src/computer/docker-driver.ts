@@ -5,7 +5,7 @@ import path from "node:path";
 import { ComputerError } from "../errors.js";
 import { captureDesktopPng, ensureRealDesktop, stopDesktop } from "./desktop.js";
 import { applyDockerAllowlist, planTenantNet } from "./egress.js";
-import { assertSafeRelPath, computerRoot } from "./paths.js";
+import { assertSafeRelPath, computerRoot, resolveInsideDisk } from "./paths.js";
 import { readJsonFile, writeJsonAtomic } from "../persist/json-file.js";
 import type {
   ComputerDriver,
@@ -135,7 +135,10 @@ export class DockerComputerDriver implements ComputerDriver {
 
   async readFile(tenantId: string, relPath: string): Promise<StructuredFile> {
     const safe = assertSafeRelPath(relPath);
-    const abs = path.join(computerRoot(this.baseDir, tenantId).disk, safe);
+    const abs = await resolveInsideDisk(computerRoot(this.baseDir, tenantId).disk, safe);
+    if (!abs) {
+      return { path: safe, exists: false };
+    }
     try {
       const { stat } = await import("node:fs/promises");
       const st = await stat(abs);
@@ -149,7 +152,8 @@ export class DockerComputerDriver implements ComputerDriver {
         encoding: "utf8",
         content: buf.toString("utf8"),
       };
-    } catch {
+    } catch (err) {
+      if (err instanceof ComputerError) throw err;
       return { path: safe, exists: false };
     }
   }
