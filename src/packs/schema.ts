@@ -119,6 +119,31 @@ export function assertCompletePack(raw: unknown): PackBinding {
     throw new PackLoadError("PACK_INCOMPLETE", "fieldLanguageMap is required");
   }
 
+  if (raw.adapter !== undefined) {
+    if (!isRecord(raw.adapter)) {
+      throw new PackLoadError("PACK_INCOMPLETE", "adapter must be an object when present");
+    }
+    if ("apiKey" in raw.adapter || "secret" in raw.adapter || "credential" in raw.adapter) {
+      throw new PackLoadError("PACK_INVALID", "Provider credentials SHALL NOT live on the pack adapter declaration");
+    }
+    if ("tier" in raw.adapter || "trustTier" in raw.adapter || "t0" in raw.adapter || "T0" in raw.adapter) {
+      throw new PackLoadError("PACK_INVALID", "DEC-017 is not accepted; do not invent T0-T3 numbers");
+    }
+    if (raw.adapter.allowList !== undefined) {
+      if (
+        !Array.isArray(raw.adapter.allowList) ||
+        raw.adapter.allowList.some((item) => typeof item !== "string" || !item.trim())
+      ) {
+        throw new PackLoadError("PACK_INCOMPLETE", "adapter.allowList must be a string array when present");
+      }
+    }
+    if (raw.adapter.defaultModelId !== undefined) {
+      if (typeof raw.adapter.defaultModelId !== "string" || !raw.adapter.defaultModelId.trim()) {
+        throw new PackLoadError("PACK_INCOMPLETE", "adapter.defaultModelId must be a non-empty string when present");
+      }
+    }
+  }
+
   return raw as unknown as PackBinding;
 }
 

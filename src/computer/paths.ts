@@ -28,6 +28,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     memoryDir: path.join(root, "memory"),
     skillsDir: path.join(root, "skills"),
     trailersDir: path.join(root, "trailers"),
+    // Architect adapter bind. Same reason as field-tokens: not field UI, not on agent disk/.
+    adapterBindFile: path.join(root, "adapter-bind.json"),
   };
 }
 
