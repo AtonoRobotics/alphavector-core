@@ -83,7 +83,7 @@ export class DeepAgentsAdapter implements CognitiveAdapter {
  */
 export function adapterThink(input: AdapterInput): CognitiveIntent {
   if (input.pass === "talking") {
-    if (input.event.kind === "field_ask" || input.event.kind === "mail") {
+    if (input.event.kind === "field_ask" || input.event.kind === "mail" || input.event.kind === "deadline") {
       return { pass: "talking", act: "follow_up" };
     }
     return { pass: "talking", act: "launch_worker", workerType: "coder" };
