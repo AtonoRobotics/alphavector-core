@@ -356,11 +356,62 @@ describe("D10 §6 habitat kernel", () => {
     expect(replayed.runIds).toEqual([run!.runId]);
     expect(DeepAgentsAdapter.invocations).toBe(before);
 
+    const onDisk = JSON.parse(readFileSync(computerRoot(dir, "t1").wakeLogFile, "utf8")) as {
+      entries: Array<{ kind: string; decision?: { wakeOrchestrator: boolean; wakeOps: boolean } }>;
+    };
+    expect(onDisk.entries.length).toBeGreaterThan(0);
+    expect(onDisk.entries.some((e) => e.kind === "field_start")).toBe(true);
+    expect(onDisk.entries.some((e) => e.kind === "field_ask")).toBe(true);
+    for (const entry of onDisk.entries) {
+      expect(entry.decision).toEqual({
+        wakeOrchestrator: expect.any(Boolean),
+        wakeOps: expect.any(Boolean),
+      });
+    }
+
     const replaySrc = readFileSync(path.join(process.cwd(), "src/habitat/wake-log.ts"), "utf8");
     expect(replaySrc).toMatch(/stem\(/);
+    expect(replaySrc).toMatch(/stemDecisionsEqual/);
     expect(replaySrc).not.toMatch(/createDeepAgent|\.think\(/);
     const evalSrc = readFileSync(path.join(process.cwd(), "src/eval/runner.ts"), "utf8");
     expect(evalSrc).not.toMatch(/createDeepAgent|\.think\(/);
+  });
+
+  it("HTTP start then ask, tampered stored stem decision fails replay with WAKE_LOG_MISMATCH", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-tamper-"));
+    const { field } = await liveField("t1", dir);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    await field.ask("status?", "read");
+    const wakeLogFile = computerRoot(dir, "t1").wakeLogFile;
+    const log = JSON.parse(readFileSync(wakeLogFile, "utf8")) as {
+      entries: Array<{ kind: string; decision: { wakeOrchestrator: boolean; wakeOps: boolean } }>;
+    };
+    const target = log.entries.find((e) => e.kind === "field_ask") ?? log.entries[0];
+    expect(target.decision).toBeDefined();
+    target.decision.wakeOps = !target.decision.wakeOps;
+    writeFileSync(wakeLogFile, `${JSON.stringify(log)}\n`, "utf8");
+
+    const replayed = new EvalRunner().replayFacilities({ computerBaseDir: dir, tenantId: "t1" });
+    expect(replayed.passed).toBe(false);
+    expect(replayed.error).toBe("WAKE_LOG_MISMATCH");
+  });
+
+  it("HTTP start then ask, missing stored stem decision fails replay closed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-no-decision-"));
+    const { field } = await liveField("t1", dir);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    await field.ask("status?", "read");
+    const wakeLogFile = computerRoot(dir, "t1").wakeLogFile;
+    const log = JSON.parse(readFileSync(wakeLogFile, "utf8")) as {
+      entries: Array<{ kind: string; decision?: { wakeOrchestrator: boolean; wakeOps: boolean } }>;
+    };
+    const target = log.entries.find((e) => e.kind === "field_start") ?? log.entries[0];
+    delete target.decision;
+    writeFileSync(wakeLogFile, `${JSON.stringify(log)}\n`, "utf8");
+
+    const replayed = new EvalRunner().replayFacilities({ computerBaseDir: dir, tenantId: "t1" });
+    expect(replayed.passed).toBe(false);
+    expect(replayed.error).toBe("WAKE_LOG_MISMATCH");
   });
 
   it("missing wake-log file fails closed", async () => {
@@ -396,15 +447,22 @@ describe("D10 §6 habitat kernel", () => {
     expect(empty.passed).toBe(false);
     expect(empty.error).toBe("WAKE_LOG_EMPTY");
 
+    const fieldAskDecision = { wakeOrchestrator: true, wakeOps: false };
     const unknown = runner.replayFacilities([
-      { seq: 1, kind: "not_a_kind" as "field_start", tenantId: "t1", at },
+      { seq: 1, kind: "not_a_kind" as "field_start", tenantId: "t1", at, decision: fieldAskDecision },
     ]);
     expect(unknown.passed).toBe(false);
     expect(unknown.error).toBe("WAKE_LOG_MISMATCH");
 
-    const askWithoutRun = runner.replayFacilities([{ seq: 1, kind: "field_ask", tenantId: "t1", at }]);
+    const askWithoutRun = runner.replayFacilities([
+      { seq: 1, kind: "field_ask", tenantId: "t1", at, decision: fieldAskDecision },
+    ]);
     expect(askWithoutRun.passed).toBe(false);
     expect(askWithoutRun.error).toBe("WAKE_LOG_MISMATCH");
+
+    const missingDecision = runner.replayFacilities([{ seq: 1, kind: "field_start", tenantId: "t1", at } as never]);
+    expect(missingDecision.passed).toBe(false);
+    expect(missingDecision.error).toBe("WAKE_LOG_MISMATCH");
 
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-mismatch-"));
     const paths = computerRoot(dir, "t1");
@@ -412,7 +470,16 @@ describe("D10 §6 habitat kernel", () => {
     writeFileSync(
       paths.wakeLogFile,
       `${JSON.stringify({
-        entries: [{ seq: 1, kind: "field_ask", tenantId: "t1", runId: "run_other", at }],
+        entries: [
+          {
+            seq: 1,
+            kind: "field_ask",
+            tenantId: "t1",
+            runId: "run_other",
+            at,
+            decision: { wakeOrchestrator: true, wakeOps: false },
+          },
+        ],
       })}\n`,
       "utf8",
     );

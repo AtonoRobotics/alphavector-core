@@ -1,5 +1,6 @@
 import type { AgentRecord } from "../agents/types.js";
 import type { LoadedPack } from "../packs/types.js";
+import type { StemDecision } from "./stem.js";
 
 /** Wake kinds for this slice. Deadline / connector / routine / mail are types only. */
 export type WakeKind =
@@ -79,6 +80,8 @@ export interface WakeLogEntry {
   tenantId: string;
   runId?: string;
   at: string;
+  /** Stem decision persisted at append. Missing on replay is fail-closed. */
+  decision: StemDecision;
   detail?: Record<string, unknown>;
 }
 
