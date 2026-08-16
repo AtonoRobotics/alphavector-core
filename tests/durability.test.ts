@@ -1,9 +1,11 @@
+import { randomBytes } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentRuntime } from "../src/agents/runtime.js";
 import { ComputerHost } from "../src/computer/host.js";
+import { DurableStore } from "../src/data/store.js";
 import { FilePackRegistry } from "../src/packs/file-registry.js";
 import { PackLoader } from "../src/packs/loader.js";
 import { REPO_ROOT, signedGenericPack } from "./helpers.js";
@@ -19,6 +21,36 @@ afterEach(async () => {
     }
   }
   hosts.length = 0;
+});
+
+describe("durable PostgreSQL ledger", () => {
+  it("reloads parties, journeys, actions, evidence, outcomes, and interactions from the same DATABASE_URL", () => {
+    const schema = `av_dur_${randomBytes(8).toString("hex")}`;
+    const first = new DurableStore({ schema });
+    const party = first.createParty("t1", "contact", "Alex");
+    const journey = first.createJourney("t1", "inquiry", "Keep the ledger");
+    const action = first.proposeAction({
+      tenantId: "t1",
+      actionClass: "read",
+      agentId: "agent-1",
+    });
+    const evidence = first.addEvidence({
+      tenantId: "t1",
+      kind: "note",
+      payload: { kept: true },
+      producedBy: "agent-1",
+    });
+    const outcome = first.addOutcome("t1", action.id, "Independent");
+    const interaction = first.addInteraction("t1", "email", [party.id], "Noted");
+
+    const second = new DurableStore({ schema });
+    expect(second.parties).toEqual([party]);
+    expect(second.journeys).toEqual([journey]);
+    expect(second.actions).toEqual([action]);
+    expect(second.evidence).toEqual([evidence]);
+    expect(second.outcomes).toEqual([outcome]);
+    expect(second.interactions).toEqual([interaction]);
+  });
 });
 
 describe("durable pack registry", () => {
