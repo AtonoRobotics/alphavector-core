@@ -32,7 +32,10 @@ describe("product boot trust anchors DEC-019 / CS-093", () => {
     expect(bootSrc).not.toMatch(/generateEd25519/);
     expect(bootSrc).not.toMatch(/signPack/);
     expect(bootSrc).not.toMatch(/generateKeyPairSync/);
+    expect(bootSrc).not.toMatch(/BUNDLED_PACK/);
+    expect(bootSrc).not.toMatch(/fixtures\/packs\/alphavector-re/);
     expect(bootSrc).toMatch(/resolveProductTrustAnchors/);
+    expect(bootSrc).toMatch(/packs\.active/);
     const listenSrc = readFileSync(path.join(REPO_ROOT, "src/http/field-listen.ts"), "utf8");
     expect(listenSrc).not.toMatch(/generateEd25519|signPack|generateKeyPairSync/);
     expect(listenSrc).toMatch(/bootFieldCore\(tenantId, \{ computerBaseDir: opts\.computerBaseDir \}\)/);

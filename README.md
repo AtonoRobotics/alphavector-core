@@ -21,7 +21,7 @@ The core (DEC-001-A) hosts a signed domain pack. It supplies:
 
 - A Linux computer per tenant (real container or namespace, not an in-process fake). Agents share the machine and the disk. Desktops are per-agent. Image update keeps files and logins. Reset-from-snapshot is last resort.
 - An unbounded agent runtime (DEC-027). No product-constant N. Named agents, personas, skills, memory, inter-agent mail. The pack authors the org chart. The field user does not spawn agents, write personas, or add skills.
-- Pack load (DEC-019). Signed binding. Unsigned, incomplete, or unsigned-owner packs fail closed. One active pack per tenant.
+- Pack load (DEC-019). Signed binding. Product boot hydrates the signed active pack from the registry and re-verifies on read-back. Unsigned, incomplete, or unsigned-owner packs fail closed. One active pack per tenant. No baked domain fixture is a boot default.
 - A policy gateway at every external effect. Rule bodies are pack. Graduation does not strip policy.
 - Authorization cards. Authorization is the default (DEC-010). Deny is terminal. Architect cards do not appear on the field surface.
 - A pack-agnostic data plane (DEC-026): generic party, record, journey, assertion, memory tiers, retrieval, graph. PostgreSQL is the only business truth. Memory cannot become facts.
