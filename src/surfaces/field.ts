@@ -6,6 +6,7 @@ import type { Journey } from "../data/types.js";
 import type { EffectExecutor } from "../effects/executor.js";
 import { FactBook } from "../facts/book.js";
 import type { GrantBook } from "../grants/store.js";
+import { invokeConnectorWorld } from "../habitat/connector-world.js";
 import { JourneyRuntime } from "../journeys/runtime.js";
 import { evaluateDeclaredPredicates } from "../packs/predicates.js";
 import type { LoadedPack, PackBinding, PredicateDeclaration, PrincipalKind } from "../packs/types.js";
@@ -136,6 +137,7 @@ export class FieldSurface {
     private readonly askSurface: AskSurface = new AskSurface(store),
     private readonly facts: FactBook = new FactBook(),
     private readonly records: RecordBook = new RecordBook(),
+    private readonly computerBaseDir?: string,
   ) {}
 
   home(tenantId: string, pack?: LoadedPack): FieldHome {
@@ -210,8 +212,10 @@ export class FieldSurface {
    * Progress an open pack journey. Ask is optional and is not required to advance.
    * External effects go through EffectExecutor so owner cards fire; card deny is
    * terminal via CardBook.wasDenied (no second deny store).
+   * Approved external effects invoke the live connector handle and reach the
+   * world, or throw typed fail-closed, before commit / writing executed.
    */
-  progress(input: FieldProgressInput): FieldProgressResult {
+  async progress(input: FieldProgressInput): Promise<FieldProgressResult> {
     this.assertActorIsField(input.actor);
     if (input.note) this.assertFieldSafe(input.note);
     const journey = this.store.journeys.find((j) => j.id === input.journeyId);
@@ -257,16 +261,7 @@ export class FieldSurface {
       }
       if (input.purpose) this.assertFieldSafe(input.purpose);
       if (input.subject) this.assertFieldSafe(input.subject);
-      effect = this.effects.execute({
-        pack: input.pack,
-        agent: input.agent,
-        actionClass: input.actionClass,
-        channel: input.channel,
-        purpose: input.purpose,
-        subject: input.subject ?? journey.journeyKind,
-        surface: "field",
-        approvedCardId: input.approvedCardId,
-      });
+      effect = await this.executeApprovedProgress(this.effects, input, journey.journeyKind);
     }
 
     this.journeys.progress(journey.id);
@@ -283,6 +278,54 @@ export class FieldSurface {
       producedBy: input.agent?.agentId ?? "field",
     });
     return { journey, effect, recordedPrefers };
+  }
+
+  /**
+   * Admission then a live connector handle, or typed fail-closed.
+   * Writing executed without a world call is autonomy theater.
+   * Same habitat live-handle path: connector-bind.json + credentials, then commit.
+   */
+  private async executeApprovedProgress(
+    effects: EffectExecutor,
+    input: FieldProgressInput & { actionClass: string; agent: NonNullable<FieldProgressInput["agent"]> },
+    journeyKind: string,
+  ) {
+    const subject = input.subject ?? journeyKind;
+    const admitted = effects.execute({
+      pack: input.pack,
+      agent: input.agent,
+      actionClass: input.actionClass,
+      channel: input.channel,
+      purpose: input.purpose,
+      subject,
+      surface: "field",
+      approvedCardId: input.approvedCardId,
+      recordExecution: false,
+    });
+    if (admitted.executed) return admitted;
+    await invokeConnectorWorld({
+      computerBaseDir: this.computerBaseDir,
+      tenantId: input.pack.tenantId,
+      pack: input.pack,
+      actionClass: input.actionClass,
+      channel: input.channel,
+      purpose: input.purpose,
+      subject,
+    });
+    return effects.commitExternal(
+      admitted.actionId,
+      {
+        pack: input.pack,
+        agent: input.agent,
+        actionClass: input.actionClass,
+        channel: input.channel,
+        purpose: input.purpose,
+        subject,
+        surface: "field",
+        approvedCardId: input.approvedCardId,
+      },
+      admitted.policyDecision,
+    );
   }
 
   /**

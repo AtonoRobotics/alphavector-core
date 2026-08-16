@@ -81,6 +81,7 @@ export class AlphaVectorCore {
       this.ask,
       this.facts,
       this.records,
+      computerBaseDir,
     );
     this.habitat = new HabitatKernel({
       computerBaseDir,

@@ -302,7 +302,7 @@ export class FieldHttpServer {
     const journey = core.store.journeys.find((j) => j.id === journeyId && j.tenantId === tenantId);
     const agent = body.actionClass ? this.boundPackAgent() : undefined;
     try {
-      const result = core.field.progress({
+      const result = await core.field.progress({
         actor,
         pack,
         journeyId,
@@ -369,7 +369,7 @@ export class FieldHttpServer {
     const listed = core.agents.list(this.opts.tenantId).find((a) => a.agentId === pending.agentId);
     const worker = core.habitat.activeWorkerAgent(this.opts.tenantId);
     const agent = listed ?? (worker?.agentId === pending.agentId ? worker : undefined);
-    const result = core.field.progress({
+    const result = await core.field.progress({
       actor,
       pack,
       journeyId: pending.journeyId,

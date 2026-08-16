@@ -51,7 +51,10 @@ export interface FieldStartInput {
   conditions?: readonly string[];
 }
 
-/** Field-only progress. Ask is an optional sidecar; effects go through EffectExecutor. */
+/**
+ * Field-only progress. Ask is an optional sidecar; effects go through EffectExecutor.
+ * Approved external effects must reach the world before writing executed.
+ */
 export interface FieldProgressInput {
   actor: PrincipalKind;
   pack: LoadedPack;

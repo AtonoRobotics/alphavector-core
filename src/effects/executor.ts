@@ -20,8 +20,9 @@ export interface EffectInput {
   claimedAuthorityFromMail?: boolean;
   assumedRoutineAutonomy?: boolean;
   /**
-   * Habitat sets false, invokes the live connector, then commitExternal.
-   * Default true keeps FieldSurface.progress ledger-only (leftover).
+   * Habitat and FieldSurface.progress set false, invoke the live connector,
+   * then commitExternal. Default true is leftover for raw EffectExecutor
+   * callers that have not closed this door.
    */
   recordExecution?: boolean;
 }
