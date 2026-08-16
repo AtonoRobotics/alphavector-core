@@ -1,7 +1,7 @@
 /** Generic tenant fact. Pack-local id string; not an RE or Mission Control type. */
 export interface TenantFact {
   id: string;
-  /** Subject record id when the fact is about a person/record. Absent = tenant-global. */
+  /** Subject record this fact is about. Writes require it. Absent on disk is skipped, not a global bucket. */
   recordId?: string;
 }
 

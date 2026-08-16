@@ -210,6 +210,9 @@ export class FieldSurface {
       throw new AvError("JOURNEY_NOT_FOUND", `Unknown journey ${input.journeyId}`);
     }
     this.assertPackJourneyKind(input.pack, journey.journeyKind);
+    if (!journey.recordId) {
+      throw new AvError("RECORD_ID_REQUIRED", "Record id is required");
+    }
     const recordedPrefers = this.assertDeclaredPredicates(
       input.pack.tenantId,
       [this.journeyBinding(input.pack, journey.journeyKind)],

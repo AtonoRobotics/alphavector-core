@@ -11,7 +11,13 @@ import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { AlphaVectorCore } from "../src/kernel.js";
 import type { PackBinding } from "../src/packs/types.js";
-import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, createOpenStart, signedRePackMutated } from "./helpers.js";
+import {
+  ALPHAVECTOR_RE_PIN_SHA,
+  REPO_ROOT,
+  createOpenStart,
+  expectPresentIdsDeniedWithoutRecord,
+  signedRePackMutated,
+} from "./helpers.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const REQUIRED = "condition.required";
@@ -405,6 +411,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(fieldSrc).toMatch(/assertKnownRecord\(tenantId, subject\)/);
     expect(fieldSrc).not.toMatch(/this\.facts\.presentIds\(tenantId\)\s*;/);
     expect(fieldSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
+    const bookSrc = await readFile(path.join(REPO_ROOT, "src/facts/book.ts"), "utf8");
+    expect(bookSrc).not.toMatch(/const GLOBAL/);
+    expect(bookSrc).not.toMatch(/recordId \?\? GLOBAL/);
+    expect(bookSrc).toMatch(/RECORD_ID_REQUIRED/);
+    expect(bookSrc).toMatch(/presentIds\(tenantId: string, recordId: string\)/);
+    expect(bookSrc).toMatch(/put\(tenantId: string, id: string, recordId: string\)/);
+    expect(bookSrc).toMatch(/retract\(tenantId: string, id: string, recordId: string\)/);
 
     const home = await field.home();
     expect(home.journeyKinds.map((k) => k.id)).toEqual(pack.binding.journeyKinds.map((k) => k.id));
@@ -453,8 +466,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const done = await field.completeBuyerJourneyAndCard();
     expect(done.journey.journeyKind).toBe("buyer");
     expect(done.effect.executed).toBe(true);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     const subject = (await field.home()).records[0];
     expect(subject?.id).toMatch(/^rec_/);
     expect(done.journey.recordId).toBe(subject!.id);
@@ -462,7 +474,6 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
     );
     for (const id of collectAvoidFactIds(pack.binding)) {
-      expect(new FactBook(dir).presentIds(tenantId)).not.toContain(id);
       expect(new FactBook(dir).presentIds(tenantId, subject!.id)).not.toContain(id);
     }
 
@@ -472,8 +483,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
     const recordCardId = await field.requestFactCard(REQUIRED, "record", subject!.id);
     expect(existsSync(paths.factsFile)).toBe(true);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     const recorded = await field.approve(recordCardId);
     expect(recorded.fact).toEqual({ id: REQUIRED, present: true, recordId: subject!.id });
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual(
@@ -486,15 +496,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
 
     const retractCardId = await field.requestFactCard(REQUIRED, "retract", subject!.id);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
       expect.arrayContaining(["journey.buyer", "purpose.follow-up", REQUIRED]),
     );
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
     const retracted = await field.approve(retractCardId);
     expect(retracted.fact).toEqual({ id: REQUIRED, present: false, recordId: subject!.id });
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
       expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
     );
@@ -503,8 +511,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const scripted = await field.completeFactRecordAndRetract("demo.fact", subject!.id);
     expect(scripted.recorded).toEqual({ id: "demo.fact", present: true, recordId: subject!.id });
     expect(scripted.retracted).toEqual({ id: "demo.fact", present: false, recordId: subject!.id });
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("demo.fact");
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(
       expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
     );
@@ -591,7 +598,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const cardId = await field.requestFactCard(REQUIRED, "record", rec.id);
     expect(existsSync(paths.factsFile)).toBe(false);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
     await expect(field.start("buyer", "Work this buyer journey", rec.id)).rejects.toMatchObject({
       status: 403,
@@ -607,7 +614,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8"))).toEqual({
       facts: [{ id: REQUIRED, recordId: rec.id }],
     });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([REQUIRED]);
 
     const journey = await field.start("buyer", "Work this buyer journey", rec.id);
@@ -643,7 +650,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       code: "DENY_IS_TERMINAL",
     });
     expect(existsSync(paths.factsFile)).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
   });
 
   it("authored pin fail-closes buyer start until journey.buyer is approved on disk", async () => {
@@ -670,7 +677,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, buyerRec.id)).toEqual(["journey.buyer"]);
 
     const journey = await field.start("buyer", "Work this buyer journey", buyerRec.id);
@@ -739,7 +746,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(cardId).toMatch(/^card_/);
     expect(existsSync(paths.factsFile)).toBe(false);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
 
     const approved = await field.approve(cardId);
@@ -752,7 +759,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain("purpose.follow-up");
 
@@ -824,7 +831,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const rec = await field.createApprovedRecord(home.recordKinds[0]?.id ?? "record", "Subject");
     await field.openApproved(kind.id, rec.id);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain("purpose.follow-up");
 
@@ -836,7 +843,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const cardId = await field.requestFactCard(purpose.id, "record", rec.id);
     expect(cardId).toMatch(/^card_/);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([
@@ -858,7 +865,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const approved = await field.approve(cardId);
     expect(approved.fact).toEqual({ id: purpose.id, present: true, recordId: rec.id });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
       expect.arrayContaining(["journey.buyer", purpose.id]),
     );
@@ -926,14 +933,14 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const rec = await field.createApprovedRecord(home.recordKinds[0]?.id ?? "record", "Subject");
     await field.openApproved(kind.id, rec.id);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain(avoided.id);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain("purpose.follow-up");
 
     const avoidCardId = await field.requestFactCard(avoided.id, "record", rec.id);
     expect(avoidCardId).toMatch(/^card_/);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([
@@ -942,16 +949,17 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const recordedAvoid = await field.approve(avoidCardId);
     expect(recordedAvoid.fact).toEqual({ id: avoided.id, present: true, recordId: rec.id });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
       expect.arrayContaining(["journey.buyer", avoided.id]),
     );
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain("purpose.follow-up");
 
     const retractId = await field.requestFactCard(avoided.id, "retract", rec.id);
     const retracted = await field.approve(retractId);
     expect(retracted.fact).toEqual({ id: avoided.id, present: false, recordId: rec.id });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(["journey.buyer"]);
 
     const purpose = field.communicateRequiresPurpose(home);
@@ -969,11 +977,11 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     } catch (err) {
       expect(err).toMatchObject({ status: 409, code: "AUTHORIZATION_REQUIRED" });
     }
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain(avoided.id);
 
     const unapprovedAvoid = await field.requestFactCard(avoided.id, "record", rec.id);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain(avoided.id);
     try {
       await field.progress(journey.id, {
@@ -1017,11 +1025,11 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     });
     const restored = await field.approve(restoreId);
     expect(restored.fact).toEqual({ id: avoided.id, present: false, recordId: rec.id });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
       expect.arrayContaining(["journey.buyer", purpose.id]),
     );
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).not.toContain(avoided.id);
 
     try {
@@ -1105,8 +1113,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     await field.recordApprovedFact(purpose.id, recA.id);
     await field.recordApprovedFact(avoided.id, recA.id);
     await field.recordApprovedFact(purpose.id, recB.id);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("journey.buyer");
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, recA.id)).toEqual(
       expect.arrayContaining([purpose.id, avoided.id]),
     );
@@ -1115,8 +1122,6 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       expect.arrayContaining(["journey.buyer", purpose.id]),
     );
     expect(new FactBook(dir).presentIds(tenantId, recB.id)).not.toContain(avoided.id);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(purpose.id);
-    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
 
     const journey = await field.start(kind.id, `Work this ${kind.label} journey`, recB.id);
     expect(journey.recordId).toBe(recB.id);
@@ -1172,7 +1177,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const unapproved = await field.open(kind.id, recA.id);
     expect(unapproved).toMatch(/^card_/);
     expect(existsSync(paths.factsFile)).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, recA.id)).toEqual([]);
     expect(new FactBook(dir).presentIds(tenantId, recB.id)).toEqual([]);
 
@@ -1185,7 +1190,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual([
       { id: "journey.buyer", recordId: recA.id },
     ]);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, recA.id)).toEqual(["journey.buyer"]);
     expect(new FactBook(dir).presentIds(tenantId, recB.id)).toEqual([]);
 
@@ -1253,7 +1258,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(openMissing.status).toBe(400);
     expect(await openMissing.json()).toMatchObject({ error: "RECORD_ID_REQUIRED" });
     expect(existsSync(computerRoot(dir, tenantId).factsFile)).toBe(true);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
 
     await expect(field.open(kind.id, "rec_unknown")).rejects.toMatchObject({
       status: 404,
@@ -1298,14 +1303,14 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         expect(unknown.status).toBe(404);
         expect(await unknown.json()).toMatchObject({ error: "RECORD_NOT_FOUND" });
       }
-      expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+      expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
       expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
     }
 
     const cardId = await field.requestFactCard(REQUIRED, "record", rec.id);
     expect(cardId).toMatch(/^card_/);
     expect(existsSync(computerRoot(dir, tenantId).factsFile)).toBe(false);
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
   });
 
@@ -1353,7 +1358,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       status: 409,
       code: "AUTHORIZATION_REQUIRED",
     });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), tenantId);
     expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual(
       expect.arrayContaining([field.journeyFactId(kind.id), purpose.id]),
     );
