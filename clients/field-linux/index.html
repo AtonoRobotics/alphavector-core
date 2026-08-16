@@ -28,7 +28,7 @@
 <body>
   <main>
     <h1>AV Dev Field</h1>
-    <p class="lead">Required field path. Create a record, set a key and value on the selected record, open a pack journey, record a pack purpose or avoid on the selected record, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
+    <p class="lead">Required field path. Create a record, set or retract a key on the selected record, open a pack journey, record a pack purpose or avoid on the selected record, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
     <div id="status"></div>
 
     <section>
@@ -185,7 +185,8 @@
           }))
         : [];
       renderList("record-attributes", attrRows, (a) =>
-        `<li><strong>${a.key}</strong><div class="meta">${a.value}</div></li>`
+        `<li><strong>${a.key}</strong><div class="meta">${a.value}</div>
+         <button type="button" class="secondary" data-attr-retract="${a.key}">Retract</button></li>`
       );
       renderList("purpose-facts", home.purposeFacts, (p) =>
         `<li><strong>${p.label}</strong><div class="meta">${p.id}</div>
@@ -378,6 +379,28 @@
           selectedRecordId = t.dataset.selectRecord;
           setStatus("Selected record " + selectedRecordId);
           await refresh();
+          return;
+        }
+        if (t.dataset.attrRetract) {
+          try {
+            if (!selectedRecord()) {
+              setStatus("Select a record before retracting an attribute", true);
+              return;
+            }
+            try {
+              await api("POST", "/field/records/attributes/retract", {
+                recordId: selectedRecord(),
+                key: t.dataset.attrRetract,
+              });
+              setStatus("Attribute retract completed without a card");
+            } catch (err) {
+              if (err.cardId) setStatus("Card required: " + err.cardId);
+              else throw err;
+            }
+            await refresh();
+          } catch (err) {
+            setStatus(err.message, true);
+          }
           return;
         }
         if (t.dataset.purpose) {

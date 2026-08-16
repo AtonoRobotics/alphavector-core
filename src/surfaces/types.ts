@@ -133,6 +133,17 @@ export interface FieldRecordUpdateInput {
   attributes?: Record<string, string>;
 }
 
+/**
+ * Field-only retract of one attribute key on a known record.
+ * Missing recordId or key fails closed. Unknown key fails closed.
+ */
+export interface FieldRecordAttributeRetractInput {
+  actor: PrincipalKind;
+  pack: LoadedPack;
+  recordId: string;
+  key: string;
+}
+
 export interface FieldRecordResult {
   id: string;
   type: string;

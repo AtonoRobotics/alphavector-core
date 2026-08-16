@@ -101,6 +101,42 @@ export class RecordBook {
     return next;
   }
 
+  /**
+   * Ungated remove of one attribute key on a known record.
+   * Field path must not call this until the owner_instance card is approved.
+   * Unknown id or unknown/blank key fails closed. Does not invent keys.
+   */
+  retractAttribute(tenantId: string, id: string, key: string): TenantRecord {
+    if (!id) {
+      throw new AvError("RECORD_ID_REQUIRED", "Record id is required");
+    }
+    if (!key) {
+      throw new AvError("RECORD_ATTRIBUTE_KEY_REQUIRED", "Attribute key is required");
+    }
+    this.ensure(tenantId);
+    const list = this.records.get(tenantId) ?? [];
+    const index = list.findIndex((record) => record.id === id);
+    if (index < 0) {
+      throw new AvError("RECORD_NOT_FOUND", `Unknown record ${id}`);
+    }
+    const current = list[index]!;
+    if (!(key in current.attributes)) {
+      throw new AvError("RECORD_ATTRIBUTE_NOT_FOUND", `Unknown attribute key ${key}`);
+    }
+    const nextAttributes = { ...current.attributes };
+    delete nextAttributes[key];
+    const next: TenantRecord = {
+      id: current.id,
+      type: current.type,
+      label: current.label,
+      attributes: nextAttributes,
+    };
+    list[index] = next;
+    this.records.set(tenantId, list);
+    this.persist(tenantId);
+    return next;
+  }
+
   private ensure(tenantId: string): void {
     const failed = this.corrupt.get(tenantId);
     if (failed) throw failed;
