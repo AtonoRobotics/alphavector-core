@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentRuntime } from "../src/agents/runtime.js";
 import { CardBook } from "../src/auth/cards.js";
@@ -8,7 +10,9 @@ import { assertHabitatMayAsk, habitatAskReason } from "../src/grants/ask.js";
 import { GrantBook } from "../src/grants/store.js";
 import { MemoryPackRegistry, PackLoader } from "../src/packs/loader.js";
 import { PolicyGateway } from "../src/policy/gateway.js";
-import { signedGenericPack } from "./helpers.js";
+import { ALPHAVECTOR_RE_PIN_SHA, signedGenericPack } from "./helpers.js";
+
+const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 
 async function setup() {
   const { anchors, binding } = await signedGenericPack();
@@ -305,5 +309,170 @@ describe("policy gateway + auth cards", () => {
     expect(store.actions.some((a) => a.status === "executed")).toBe(false);
     expect(cards.fieldInbox("t1")).toHaveLength(1);
     expect(habitatAskReason({ grants, tenantId: "t1", actionClass: "communicate" })).toBe("no_grant");
+  });
+});
+
+describe("GrantBounds are enforced on the grant path (H1)", () => {
+  const notice = "Follow-up emails will now send without asking. You can kill this.";
+
+  async function graduate(
+    bounds: { channels?: string[]; purposes?: string[]; ratePerHour?: number; subjectScope?: string[] },
+  ) {
+    const ctx = await setup();
+    ctx.grants.write({
+      actor: "architect",
+      tenantId: "t1",
+      agentId: ctx.writer.agentId,
+      actionClass: "communicate",
+      state: "authorized",
+      bounds,
+      owner: "architect-1",
+      evidenceIds: ["ev1"],
+      evalIds: ["eval1"],
+      fieldNotice: notice,
+    });
+    return ctx;
+  }
+
+  function communicate(
+    ctx: Awaited<ReturnType<typeof setup>>,
+    extra: { channel?: string; purpose?: string; subject?: string } = {},
+  ) {
+    return ctx.effects.execute({
+      pack: ctx.pack,
+      agent: ctx.writer,
+      actionClass: "communicate",
+      channel: extra.channel ?? "email",
+      purpose: extra.purpose ?? "follow-up",
+      subject: extra.subject ?? "case",
+      surface: "field",
+    });
+  }
+
+  it("keeps the RE fixture pin at 5091328 and does not invent T0–T3", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const types = readFileSync(path.join(process.cwd(), "src/grants/types.ts"), "utf8");
+    expect(types).toMatch(/export interface GrantBounds/);
+    expect(types).toMatch(/T0-T3 are not accepted/);
+    for (const rel of ["src/grants/store.ts", "src/grants/ask.ts", "src/effects/executor.ts"]) {
+      const src = readFileSync(path.join(process.cwd(), rel), "utf8");
+      expect(src).not.toMatch(/\bT0\b|\bT1\b|\bT2\b|\bT3\b/);
+      expect(src).not.toMatch(/api\.openai\.com|api\.anthropic\.com/);
+    }
+  });
+
+  it("in-bound use of a class grant still executes without a second card", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"], subjectScope: ["case"] });
+    const before = ctx.cards.fieldInbox("t1").length;
+    expect(ctx.grants.classState("t1", "communicate")).toBe("authorized");
+    expect(
+      ctx.grants.classState("t1", "communicate", {
+        channel: "email",
+        purpose: "follow-up",
+        subject: "case",
+      }),
+    ).toBe("authorized");
+    const result = communicate(ctx);
+    expect(result.executed).toBe(true);
+    expect(ctx.cards.fieldInbox("t1")).toHaveLength(before);
+    expect(ctx.store.actions.filter((a) => a.status === "executed")).toHaveLength(1);
+    expect(habitatAskReason({
+      grants: ctx.grants,
+      tenantId: "t1",
+      actionClass: "communicate",
+      channel: "email",
+      purpose: "follow-up",
+      subject: "case",
+    })).toBeUndefined();
+  });
+
+  it("out-of-bound channel is GRANT_BOUNDS, not a silent yes", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"] });
+    expect(
+      ctx.grants.classState("t1", "communicate", { channel: "sms", purpose: "follow-up", subject: "case" }),
+    ).toBe("requires_authorization");
+    expect(ctx.grants.authorizedForClass("t1", "communicate", { channel: "sms", purpose: "follow-up" })).toBeUndefined();
+    try {
+      communicate(ctx, { channel: "sms" });
+      throw new Error("should have failed closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("GRANT_BOUNDS");
+      expect((err as AvError).closed).toBe(true);
+      expect((err as AvError).message).toMatch(/channel/i);
+    }
+    expect(ctx.store.actions.some((a) => a.status === "executed")).toBe(false);
+    expect(ctx.cards.fieldInbox("t1")).toHaveLength(0);
+  });
+
+  it("out-of-bound purpose is GRANT_BOUNDS, not a silent yes", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"] });
+    try {
+      communicate(ctx, { purpose: "newsletter" });
+      throw new Error("should have failed closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("GRANT_BOUNDS");
+      expect((err as AvError).message).toMatch(/purpose/i);
+    }
+    expect(ctx.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("subject outside subjectScope is GRANT_BOUNDS, not a silent yes", async () => {
+    const ctx = await graduate({
+      channels: ["email"],
+      purposes: ["follow-up"],
+      subjectScope: ["case"],
+    });
+    try {
+      communicate(ctx, { subject: "other-case" });
+      throw new Error("should have failed closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("GRANT_BOUNDS");
+      expect((err as AvError).message).toMatch(/subject/i);
+    }
+    expect(ctx.store.actions.some((a) => a.status === "executed")).toBe(false);
+    const inbound = communicate(ctx, { subject: "case" });
+    expect(inbound.executed).toBe(true);
+  });
+
+  it("ratePerHour is enforced from the action log; a set rate is not ignored", async () => {
+    const ctx = await graduate({
+      channels: ["email"],
+      purposes: ["follow-up"],
+      ratePerHour: 1,
+    });
+    expect(
+      ctx.grants.classState("t1", "communicate", {
+        channel: "email",
+        purpose: "follow-up",
+      }),
+    ).toBe("requires_authorization");
+    expect(
+      ctx.grants.classState("t1", "communicate", {
+        channel: "email",
+        purpose: "follow-up",
+        executedInLastHour: 0,
+      }),
+    ).toBe("authorized");
+    const first = communicate(ctx);
+    expect(first.executed).toBe(true);
+    try {
+      communicate(ctx);
+      throw new Error("should have failed closed on rate");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect((err as AvError).code).toBe("GRANT_RATE");
+      expect((err as AvError).closed).toBe(true);
+    }
+    expect(ctx.store.actions.filter((a) => a.status === "executed")).toHaveLength(1);
+    expect(ctx.cards.fieldInbox("t1")).toHaveLength(0);
+  });
+
+  it("graduation still cannot strip the policy gateway", async () => {
+    const ctx = await graduate({ channels: ["email"], purposes: ["follow-up"] });
+    expect(() => communicate(ctx, { purpose: "dnc" })).toThrow(PolicyDeniedError);
+    expect(ctx.store.actions.some((a) => a.status === "executed")).toBe(false);
   });
 });

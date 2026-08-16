@@ -19,6 +19,64 @@ export interface GrantBounds {
   subjectScope?: string[];
 }
 
+/**
+ * Proposed use checked against persisted GrantBounds.
+ * Omitted dimensions are unconstrained only when the grant also omits them.
+ * A set bound with no matching use is out of bound — fail closed.
+ */
+export interface GrantUse {
+  channel?: string;
+  purpose?: string;
+  subject?: string;
+  /**
+   * Executed uses of this class in the last hour, from the durable action log.
+   * Required when ratePerHour is set — a missing count is not a silent yes.
+   */
+  executedInLastHour?: number;
+}
+
+export type GrantBoundsCode = "GRANT_BOUNDS" | "GRANT_RATE";
+
+/**
+ * Why this use may not consume an authorized grant.
+ * Undefined means the grant covers the use (or the bound is unset).
+ */
+export function grantBoundsRefusal(
+  bounds: GrantBounds,
+  use: GrantUse,
+): { code: GrantBoundsCode; message: string } | undefined {
+  if (bounds.channels && bounds.channels.length > 0) {
+    if (use.channel === undefined || !bounds.channels.includes(use.channel)) {
+      return { code: "GRANT_BOUNDS", message: "Grant does not cover this channel" };
+    }
+  }
+  if (bounds.purposes && bounds.purposes.length > 0) {
+    if (use.purpose === undefined || !bounds.purposes.includes(use.purpose)) {
+      return { code: "GRANT_BOUNDS", message: "Grant does not cover this purpose" };
+    }
+  }
+  if (bounds.subjectScope && bounds.subjectScope.length > 0) {
+    if (use.subject === undefined || !bounds.subjectScope.includes(use.subject)) {
+      return { code: "GRANT_BOUNDS", message: "Grant does not cover this subject" };
+    }
+  }
+  if (bounds.ratePerHour !== undefined) {
+    if (!Number.isFinite(bounds.ratePerHour) || bounds.ratePerHour < 0) {
+      return { code: "GRANT_RATE", message: "Grant ratePerHour is not a usable limit; fail closed" };
+    }
+    if (use.executedInLastHour === undefined) {
+      return {
+        code: "GRANT_RATE",
+        message: "Grant ratePerHour is set; refusing without an execution count",
+      };
+    }
+    if (use.executedInLastHour >= bounds.ratePerHour) {
+      return { code: "GRANT_RATE", message: "Grant ratePerHour exceeded" };
+    }
+  }
+  return undefined;
+}
+
 export interface Grant {
   grantId: string;
   tenantId: string;

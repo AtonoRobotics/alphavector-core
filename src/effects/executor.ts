@@ -4,9 +4,23 @@ import type { CardBook } from "../auth/cards.js";
 import type { DurableStore } from "../data/store.js";
 import { assertHabitatMayAsk, habitatAskReason } from "../grants/ask.js";
 import type { GrantBook } from "../grants/store.js";
+import { grantBoundsRefusal, type GrantUse } from "../grants/types.js";
 import type { LoadedPack } from "../packs/types.js";
 import type { PolicyGateway } from "../policy/gateway.js";
 import type { EffectRequest } from "../policy/types.js";
+
+const HOUR_MS = 60 * 60 * 1000;
+
+function executedInLastHour(store: DurableStore, tenantId: string, actionClass: string): number {
+  const cutoff = new Date(Date.now() - HOUR_MS).toISOString();
+  return store.actions.filter(
+    (action) =>
+      action.tenantId === tenantId &&
+      action.actionClass === actionClass &&
+      action.status === "executed" &&
+      action.updatedAt >= cutoff,
+  ).length;
+}
 
 export interface EffectInput {
   pack: LoadedPack;
@@ -101,12 +115,32 @@ export class EffectExecutor {
       throw new AvError("DENY_IS_TERMINAL", "Deny is terminal; the same action cannot be silently resubmitted");
     }
 
-    const grantState = this.grants.classState(input.pack.tenantId, input.actionClass);
+    const use: GrantUse = {
+      channel: input.channel,
+      purpose: input.purpose,
+      subject: input.subject,
+      executedInLastHour: executedInLastHour(this.store, input.pack.tenantId, input.actionClass),
+    };
+    const covering = this.grants.authorizedForClass(input.pack.tenantId, input.actionClass, use);
+    const classGrant = this.grants.authorizedForClass(input.pack.tenantId, input.actionClass);
+    if (classGrant && !covering) {
+      const refusal = grantBoundsRefusal(classGrant.bounds, use) ?? {
+        code: "GRANT_BOUNDS" as const,
+        message: "Grant does not cover this use",
+      };
+      this.store.updateAction(action.id, "denied");
+      throw new AvError(refusal.code, refusal.message);
+    }
+    const grantState = this.grants.classState(input.pack.tenantId, input.actionClass, use);
     const askReason = habitatAskReason({
       grants: this.grants,
       tenantId: input.pack.tenantId,
       actionClass: input.actionClass,
       ceiling: verb.ceiling,
+      channel: input.channel,
+      purpose: input.purpose,
+      subject: input.subject,
+      executedInLastHour: use.executedInLastHour,
     });
     const needsCard = grantState !== "authorized" || verb.ceiling === "human_decision";
     if (needsCard) {
@@ -147,7 +181,12 @@ export class EffectExecutor {
    * Admission without a world call must not use this.
    */
   commitExternal(actionId: string, input: EffectInput, policyDecision: string): EffectResult {
-    const grantState = this.grants.classState(input.pack.tenantId, input.actionClass);
+    const grantState = this.grants.classState(input.pack.tenantId, input.actionClass, {
+      channel: input.channel,
+      purpose: input.purpose,
+      subject: input.subject,
+      executedInLastHour: executedInLastHour(this.store, input.pack.tenantId, input.actionClass),
+    });
     this.store.updateAction(actionId, "executed");
     this.store.addEvidence({
       tenantId: input.pack.tenantId,

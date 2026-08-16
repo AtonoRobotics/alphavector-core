@@ -1297,6 +1297,9 @@ export class HabitatKernel {
       tenantId: pack.tenantId,
       actionClass,
       ceiling: verb?.ceiling,
+      channel: intent.channel ?? "unspecified",
+      purpose: intent.purpose ?? "unspecified",
+      subject: intent.subject ?? "unspecified",
     });
     try {
       const effect = await this.executeApprovedEffect(pack, agent, {
