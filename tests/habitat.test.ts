@@ -62,11 +62,35 @@ type VendorHttpCapture = {
   body: unknown;
 };
 
-/** Local HTTP double. Product think must fetch this; it is not a canned in-process return. */
+function thinkHandlesFromChatBody(body: unknown): { pass?: string; kind?: string; recordId?: string } {
+  const rec = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  const messages = Array.isArray(rec.messages) ? rec.messages : [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const content = (msg as { content?: unknown }).content;
+    if (typeof content !== "string") continue;
+    try {
+      const parsed = JSON.parse(content) as { pass?: string; kind?: string; recordId?: string };
+      if (parsed && typeof parsed === "object" && (parsed.pass || parsed.kind)) return parsed;
+    } catch {
+      // system text is not handle JSON
+    }
+  }
+  return {};
+}
+
+function chatCompletionsEnvelope(intent: CognitiveIntent): string {
+  return JSON.stringify({
+    choices: [{ message: { role: "assistant", content: JSON.stringify(intent) } }],
+  });
+}
+
+/** Local HTTP double. Speaks chat-completions. Product think must fetch this. */
 async function startVendorThinkDouble(opts?: {
   apiKey?: string;
   rejectAuth?: boolean;
   talking?: CognitiveIntent;
+  unusable?: boolean;
 }): Promise<{ url: string; requests: VendorHttpCapture[]; close: () => Promise<void> }> {
   const requests: VendorHttpCapture[] = [];
   const expectedKey = opts?.apiKey ?? VENDOR_FIXTURE_KEY;
@@ -89,13 +113,23 @@ async function startVendorThinkDouble(opts?: {
         authorization: typeof req.headers.authorization === "string" ? req.headers.authorization : undefined,
         body,
       });
-      const rec = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+      if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "not_found" }));
+        return;
+      }
       if (opts?.rejectAuth || req.headers.authorization !== `Bearer ${expectedKey}`) {
         res.writeHead(401, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "unauthorized" }));
         return;
       }
-      const intent =
+      if (opts?.unusable) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "not-an-intent" } }] }));
+        return;
+      }
+      const rec = thinkHandlesFromChatBody(body);
+      const intent: CognitiveIntent =
         opts?.talking && rec.pass === "talking"
           ? opts.talking
           : rec.pass === "worker"
@@ -111,7 +145,7 @@ async function startVendorThinkDouble(opts?: {
               ? { pass: "talking", act: "follow_up" }
               : { pass: "talking", act: "launch_worker", workerType: "coder" };
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(intent));
+      res.end(chatCompletionsEnvelope(intent));
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -131,6 +165,7 @@ async function useVendorHttp(opts?: {
   apiKey?: string;
   rejectAuth?: boolean;
   talking?: CognitiveIntent;
+  unusable?: boolean;
 }): Promise<{ url: string; requests: VendorHttpCapture[]; close: () => Promise<void> }> {
   const double = await startVendorThinkDouble(opts);
   process.env[VENDOR_BASE_URL_ENV] = double.url;
@@ -1595,6 +1630,11 @@ describe("D10 §6 field verbs", () => {
 describe("D10 HK-055–HK-059 real think / Architect bind", () => {
   it("keeps the RE fixture pin at 5091328", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    expect(VENDOR_THINK_PATH).toBe("/v1/chat/completions");
+    const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
+    expect(vendorSrc).toMatch(/\/v1\/chat\/completions/);
+    expect(vendorSrc).not.toMatch(/\/v1\/think/);
+    expect(vendorSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
   });
 
   it("product boot defaults to DeepAgentsAdapter; DryStem is fixture-only", () => {
@@ -1671,10 +1711,14 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
     expect(double.requests).toHaveLength(1);
     expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.url).toBe("/v1/chat/completions");
     expect(double.requests[0]?.url).toBe(VENDOR_THINK_PATH);
     expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
     expect(double.requests[0]?.body).toMatchObject({
       model: "ci-double",
+      messages: expect.any(Array),
+    });
+    expect(thinkHandlesFromChatBody(double.requests[0]?.body)).toMatchObject({
       pass: "talking",
       kind: "field_start",
     });
@@ -1716,10 +1760,11 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(vendorSrc).not.toMatch(/recordedVendorClient|replayRecordedVendor/);
     expect(vendorSrc).toMatch(/await fetch\(/);
     expect(vendorSrc).toMatch(/authorization: `Bearer \$\{apiKey\}`/);
+    expect(vendorSrc).toMatch(/\/v1\/chat\/completions/);
+    expect(vendorSrc).not.toMatch(/\/v1\/think/);
+    expect(vendorSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
     expect(double.requests.length).toBeGreaterThanOrEqual(3);
-    expect(double.requests.some((r) => r.body && typeof r.body === "object" && (r.body as { pass?: string }).pass === "worker")).toBe(
-      true,
-    );
+    expect(double.requests.some((r) => thinkHandlesFromChatBody(r.body).pass === "worker")).toBe(true);
   });
 
   it("unbound wake is ADAPTER_UNBOUND with no think, worker, or dry-stem stamp", async () => {
@@ -1840,8 +1885,10 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(double.requests.length).toBeGreaterThan(0);
     expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.url).toBe("/v1/chat/completions");
     expect(double.requests[0]?.url).toBe(VENDOR_THINK_PATH);
     expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
+    expect(double.requests[0]?.body).toMatchObject({ model: "ci-double", messages: expect.any(Array) });
     expect(JSON.stringify(double.requests[0]?.body)).not.toContain(VENDOR_FIXTURE_KEY);
     expect(core.habitat.getRun("t1")?.runId).toMatch(/^run_/);
     expect(core.habitat.trailerExists("t1")).toBe(true);
@@ -2004,6 +2051,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(double.requests.length).toBeGreaterThan(0);
     expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.url).toBe("/v1/chat/completions");
     expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(true);
     expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(true);
@@ -2356,10 +2404,64 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     });
     expect(double.requests).toHaveLength(1);
     expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.url).toBe("/v1/chat/completions");
     expect(double.requests[0]?.url).toBe(VENDOR_THINK_PATH);
     expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
     expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThan(0);
+    expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
+    expect(stack.core.habitat.activeWorker(stack.tenantId)).toBeUndefined();
+  });
+
+  it("bind + credentials with no vendor base URL is ADAPTER_VENDOR_URL_MISSING", async () => {
+    const stack = await habitatThinkStack();
+    bindAndCredential({
+      tenantId: stack.tenantId,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    expect(process.env[VENDOR_BASE_URL_ENV]).toBeUndefined();
+    await expect(
+      stack.core.habitat.wake({
+        kind: "field_start",
+        tenantId: stack.tenantId,
+        pack: stack.pack,
+        goal: "one goal",
+        recordId: stack.record.id,
+      }),
+    ).rejects.toMatchObject({
+      code: "ADAPTER_VENDOR_URL_MISSING",
+      closed: true,
+    });
+    expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
+    expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
+    expect(stack.core.habitat.activeWorker(stack.tenantId)).toBeUndefined();
+  });
+
+  it("unusable chat-completions body is ADAPTER_VENDOR_REJECTED", async () => {
+    const double = await useVendorHttp({ unusable: true });
+    const stack = await habitatThinkStack();
+    bindAndCredential({
+      tenantId: stack.tenantId,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    await expect(
+      stack.core.habitat.wake({
+        kind: "field_start",
+        tenantId: stack.tenantId,
+        pack: stack.pack,
+        goal: "one goal",
+        recordId: stack.record.id,
+      }),
+    ).rejects.toMatchObject({
+      code: "ADAPTER_VENDOR_REJECTED",
+      closed: true,
+    });
+    expect(double.requests).toHaveLength(1);
+    expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.url).toBe("/v1/chat/completions");
+    expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
     expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
     expect(stack.core.habitat.activeWorker(stack.tenantId)).toBeUndefined();
   });

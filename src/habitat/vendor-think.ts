@@ -6,35 +6,54 @@ import type { AdapterCredentials, AdapterInput, CognitiveIntent } from "./types.
  * Credentials authorize the HTTP call; they are not copied into the body
  * or the returned intent and are not model context.
  *
- * Product path is live HTTP to the hosted model. Tests inject a base URL
- * that points at a local HTTP double. There is no canned in-process return.
+ * Product path is live HTTP to the hosted model using the OpenAI-compatible
+ * chat-completions request/response. Tests inject a base URL that points at
+ * a local HTTP double. There is no canned in-process return. The host is
+ * never hardcoded; ops/tests inject AV_VENDOR_BASE_URL or vendorBaseUrl.
  */
 export interface VendorThinkClient {
   readonly name: string;
   complete(input: AdapterInput, credentials: AdapterCredentials): Promise<CognitiveIntent>;
 }
 
-/** Handles only. Never the Architect-written secret. */
-export interface VendorThinkRequest {
-  model: string;
+/** Handles only. Never the Architect-written secret. Carried in messages. */
+export interface VendorThinkHandles {
   pass: AdapterInput["pass"];
   kind: AdapterInput["event"]["kind"];
   runId: string;
   recordId?: string;
 }
 
-export const VENDOR_THINK_PATH = "/v1/think";
+/** OpenAI-compatible chat-completions body. Secret is never in this object. */
+export interface VendorThinkRequest {
+  model: string;
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+}
+
+export const VENDOR_THINK_PATH = "/v1/chat/completions";
 export const VENDOR_BASE_URL_ENV = "AV_VENDOR_BASE_URL";
 
-export function vendorThinkBody(input: AdapterInput): VendorThinkRequest {
+const INTENT_SYSTEM =
+  "Return only a JSON object with keys pass, act, and optional workerType, actionClass, channel, purpose, subject.";
+
+export function vendorThinkHandles(input: AdapterInput): VendorThinkHandles {
   return {
-    model: input.bind?.modelId?.trim() ?? "",
     pass: input.pass,
     kind: input.event.kind,
     runId: input.run.runId,
     ...(input.run.recordId ?? input.event.recordId
       ? { recordId: input.run.recordId ?? input.event.recordId }
       : {}),
+  };
+}
+
+export function vendorThinkBody(input: AdapterInput): VendorThinkRequest {
+  return {
+    model: input.bind?.modelId?.trim() ?? "",
+    messages: [
+      { role: "system", content: INTENT_SYSTEM },
+      { role: "user", content: JSON.stringify(vendorThinkHandles(input)) },
+    ],
   };
 }
 
@@ -116,6 +135,42 @@ function thinkUrl(baseUrl: string): string {
 }
 
 function parseVendorIntent(raw: unknown): CognitiveIntent {
+  const content = extractChatContent(raw);
+  const parsed = parseContent(content);
+  return asCognitiveIntent(parsed);
+}
+
+function extractChatContent(raw: unknown): unknown {
+  if (!isRecord(raw)) {
+    throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
+  }
+  const choices = raw.choices;
+  if (!Array.isArray(choices) || choices.length === 0 || !isRecord(choices[0])) {
+    throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
+  }
+  const first = choices[0];
+  if (isRecord(first.message)) {
+    return first.message.content;
+  }
+  if (typeof first.text === "string") {
+    return first.text;
+  }
+  throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
+}
+
+function parseContent(content: unknown): unknown {
+  if (isRecord(content)) return content;
+  if (typeof content !== "string" || !content.trim()) {
+    throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
+  }
+  try {
+    return JSON.parse(content);
+  } catch {
+    throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
+  }
+}
+
+function asCognitiveIntent(raw: unknown): CognitiveIntent {
   if (!isRecord(raw)) {
     throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
   }
