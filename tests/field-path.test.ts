@@ -136,6 +136,7 @@ describe("required field path against pinned alphavector-re", () => {
         journeyId: journey.id,
         agent,
         actionClass: "read",
+        subject: rec.id,
         note: `Advance ${kind}`,
       });
       expect(advanced.journey.status).toBe("open");
@@ -182,6 +183,7 @@ describe("required field path against pinned alphavector-re", () => {
         journeyId: journey.id,
         agent,
         actionClass: "licensed_judgment",
+        subject: rec.id,
       }),
     ).toThrow(PolicyDeniedError);
 
@@ -191,6 +193,7 @@ describe("required field path against pinned alphavector-re", () => {
       journeyId: journey.id,
       agent,
       actionClass: "read",
+      subject: rec.id,
     });
     expect(progressed.effect?.executed).toBe(true);
 
@@ -487,11 +490,11 @@ describe("required field path against pinned alphavector-re", () => {
       actionClass: "communicate",
       channel: "email",
       purpose: "follow-up",
-      subject: "buyer",
+      subject: buyerRec.id,
     };
-    expect(() => field.progress({ ...effect, subject: buyerRec.id })).toThrow(/REQUIRES missing/);
+    expect(() => field.progress(effect)).toThrow(/REQUIRES missing/);
     facts.put("t1", "purpose.follow-up", buyerRec.id);
-    expect(() => field.progress({ ...effect, subject: buyerRec.id })).toThrow(
+    expect(() => field.progress(effect)).toThrow(
       AuthorizationRequiredError,
     );
   });
@@ -645,6 +648,7 @@ describe("required field path against pinned alphavector-re", () => {
         journeyId: open.id,
         agent,
         actionClass: "read",
+        subject: rec.id,
       }),
     ).toThrow(/AVOIDS present/);
   });
@@ -677,6 +681,7 @@ describe("required field path against pinned alphavector-re", () => {
       journeyId: journey.id,
       agent,
       actionClass: "read",
+      subject: rec.id,
     });
     expect(unmet.effect?.executed).toBe(true);
     expect(unmet.recordedPrefers).toEqual([PREFERRED]);
@@ -768,6 +773,7 @@ describe("required field path against pinned alphavector-re", () => {
       journeyId: journey.id,
       agent,
       actionClass: "read",
+      subject: rec.id,
     });
     expect(advanced.effect?.executed).toBe(true);
 
@@ -971,6 +977,45 @@ describe("required field path against pinned alphavector-re", () => {
     expect(() => field.progress({ ...communicate, subject: recA.id })).toThrow(/AVOIDS present/);
     expect(() => field.progress({ ...communicate, subject: recA.id })).toThrow(/fail closed/);
     expect(() => field.progress({ ...communicate, subject: recB.id })).toThrow(
+      AuthorizationRequiredError,
+    );
+  });
+
+  it("denies action progress with no subject and unknown subject", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-action-subject-required-"));
+    const { pack, field, agents, facts, records } = await reFieldStack(undefined, {
+      computerBaseDir: dir,
+    });
+    const rec = putSubject(records, pack);
+    facts.put("t1", "journey.buyer", rec.id);
+    facts.put("t1", "purpose.follow-up", rec.id);
+    const journey = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+      recordId: rec.id,
+    });
+    const followUp = agents.find((a) => a.name === "Follow-up")!;
+    const communicate = {
+      actor: "field" as const,
+      pack,
+      journeyId: journey.id,
+      agent: followUp,
+      actionClass: "communicate",
+      channel: "email",
+      purpose: "follow-up",
+    };
+
+    expect(() => field.progress(communicate)).toThrow(AvError);
+    expect(() => field.progress(communicate)).toThrow(/Record id is required/);
+    expect(() => field.progress({ ...communicate, subject: "" })).toThrow(/Record id is required/);
+    expect(() => field.progress({ ...communicate, subject: "buyer" })).toThrow(AvError);
+    expect(() => field.progress({ ...communicate, subject: "buyer" })).toThrow(/Unknown record/);
+    expect(() => field.progress({ ...communicate, subject: "rec_unknown" })).toThrow(
+      /Unknown record/,
+    );
+    expect(() => field.progress({ ...communicate, subject: rec.id })).toThrow(
       AuthorizationRequiredError,
     );
   });

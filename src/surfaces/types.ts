@@ -60,6 +60,12 @@ export interface FieldProgressInput {
   actionClass?: string;
   channel?: string;
   purpose?: string;
+  /**
+   * Subject record this action is about. Required when actionClass is set
+   * so REQUIRES/AVOIDS/PREFERS eval uses that record's present set only.
+   * Missing fails closed (`RECORD_ID_REQUIRED`). Unknown fails closed
+   * (`RECORD_NOT_FOUND`). Progress without actionClass does not require it.
+   */
   subject?: string;
   approvedCardId?: string;
   ask?: AskRequest;

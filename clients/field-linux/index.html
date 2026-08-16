@@ -367,11 +367,15 @@
         }
         if (t.dataset.progress) {
           try {
+            if (!selectedRecord()) {
+              setStatus("Select a record before requesting follow-up", true);
+              return;
+            }
             await api("POST", "/field/journeys/" + t.dataset.progress + "/progress", {
               actionClass: "communicate",
               channel: "email",
               purpose: "follow-up",
-              subject: selectedRecord() || t.dataset.kind,
+              subject: selectedRecord(),
             });
             setStatus("Progressed without a card");
           } catch (err) {
