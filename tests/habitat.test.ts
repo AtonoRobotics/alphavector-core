@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
@@ -369,6 +369,41 @@ function runArchitectCli(
       status: typeof e.status === "number" ? e.status : 1,
     };
   }
+}
+
+/** Same helper as runArchitectCli, but async so the test process can serve a vendor double. */
+function runArchitectCliAsync(
+  args: string[],
+  opts: { computerBaseDir: string; architectToken?: string },
+): Promise<{ stdout: string; stderr: string; status: number }> {
+  const viteNode = path.join(process.cwd(), "node_modules/vite-node/dist/cli.mjs");
+  const cli = path.join(process.cwd(), "src/cli.ts");
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [viteNode, cli, ...args], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        AV_COMPUTER_DIR: opts.computerBaseDir,
+        ...(opts.architectToken ? { AV_ARCHITECT_TOKEN: opts.architectToken } : {}),
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve({ stdout, stderr, status: 1 });
+    }, 30_000);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, status: typeof code === "number" ? code : 1 });
+    });
+  });
 }
 
 /** Product boot: no adapter option. DeepAgentsAdapter is the field-serve default. */
@@ -3402,7 +3437,7 @@ describe("D10 CS-018 mail wakes", () => {
       vendorBaseUrl: double.url,
     });
 
-    const out = runArchitectCli(
+    const out = await runArchitectCliAsync(
       [
         "architect",
         "deliver-mail",
