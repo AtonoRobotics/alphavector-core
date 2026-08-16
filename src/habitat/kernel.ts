@@ -93,31 +93,11 @@ export class HabitatKernel {
    * Creates or resumes the run, injects labeled memory, and launches the thin
    * coder (executor + branch, trailer isolation). Talking stays thin.
    * A second start with the same goal is follow-up (same worker / same run).
-   * A second start with a different goal does not throw ONE_GOAL so existing
-   * envelope journeys stay additive.
+   * A second start with a different goal throws ONE_GOAL — one tenant, one
+   * pack, one orchestrator, one goal. Same fail-closed rule as `wake()`.
    */
   observeFieldStart(event: Omit<WakeEvent, "kind"> & { pack: LoadedPack; goal: string }): WakeResult {
     this.packs.set(event.tenantId, event.pack);
-    const existing = this.runs.get(event.tenantId);
-    if (existing && !isTerminal(existing.status) && existing.goal !== event.goal) {
-      this.bus.emit({ ...event, kind: "field_start" });
-      this.wakeLog.append({
-        kind: "field_start",
-        tenantId: event.tenantId,
-        runId: existing.runId,
-        at: nowIso(),
-        detail: { observed: true, goal: event.goal },
-      });
-      const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
-      return {
-        run: existing,
-        wokeOrchestrator: true,
-        wokeOps: false,
-        launchedWorker: false,
-        talkingDidHeavyWork: false,
-        memory,
-      };
-    }
     return this.wake({ ...event, kind: "field_start" });
   }
 

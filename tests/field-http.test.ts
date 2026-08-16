@@ -698,6 +698,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(journey.journeyKind).toBe("buyer");
     expect(journey.recordId).toBe(buyerRec.id);
 
+    await field.kill("one goal");
+
     const sellerRec = await field.createApprovedRecord(
       (await field.home()).recordKinds[0]?.id ?? "record",
       "Seller subject",
