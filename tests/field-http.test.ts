@@ -10,13 +10,13 @@ import { RecordBook } from "../src/records/book.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
 import { reapHeldCoders } from "../src/habitat/index.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
-import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { AlphaVectorCore } from "../src/kernel.js";
 import type { PackBinding } from "../src/packs/types.js";
 import {
   ALPHAVECTOR_RE_PIN_SHA,
   REPO_ROOT,
+  bootTestFieldCore,
   createOpenStart,
   expectPresentIdsDeniedWithoutRecord,
   signedRePackMutated,
@@ -144,7 +144,7 @@ afterEach(async () => {
 
 async function liveField(tenantId = "t1", computerBaseDir?: string) {
   const dir = computerBaseDir ?? (await mkdtemp(path.join(os.tmpdir(), "av-field-http-")));
-  const { core, pack } = await bootFieldCore(tenantId, {
+  const { core, pack } = await bootTestFieldCore(tenantId, {
     computerBaseDir: dir,
     adapter: new DryStemAdapter(),
   });
@@ -393,11 +393,13 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/skills",
       "/field/memory",
       "/field/memory-store",
+      "/field/trust-anchors",
+      "/field/anchors",
     ]) {
       const res = await fetch(`${url}${path}`, { headers });
       expect(res.status).toBe(403);
       const body = (await res.json()) as { message: string };
-      expect(body.message).toMatch(/cannot configure models, prompts, Temporal, or tools/);
+      expect(body.message).toMatch(/cannot configure models, prompts, Temporal, tools, or trust anchors/);
     }
     for (const path of ["/architect", "/field/architect", "/admin", "/field/packs"]) {
       const res = await fetch(`${url}${path}`, { method: "POST", headers });

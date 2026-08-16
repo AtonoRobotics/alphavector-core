@@ -1,10 +1,12 @@
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
 import type { Journey } from "../src/data/types.js";
 import { AvError } from "../src/errors.js";
 import type { FactBook } from "../src/facts/book.js";
+import { bootFieldCore, type BootFieldCoreOptions } from "../src/http/field-boot.js";
 import type { FieldClient } from "../src/http/field-client.js";
 import type { FieldApproveResult } from "../src/http/types.js";
 import { signPack, generateEd25519, type TrustAnchors } from "../src/packs/signing.js";
@@ -83,6 +85,59 @@ export async function signedRePack(): Promise<{
   return {
     binding: signPack(unsigned, keys.architectPrivate, keys.counselPrivate),
     anchors: keys.anchors,
+  };
+}
+
+/**
+ * Test boot: fixture keypair is generated here, not inside bootFieldCore.
+ * Product boot resolves anchors from file or env and has no generated fallback.
+ */
+export async function bootTestFieldCore(tenantId = "t1", opts: BootFieldCoreOptions = {}) {
+  if (opts.anchors && opts.binding) {
+    return bootFieldCore(tenantId, opts);
+  }
+  const { anchors, binding } = await signedRePack();
+  return bootFieldCore(tenantId, { ...opts, anchors, binding });
+}
+
+const PRODUCT_ANCHOR_ENV = [
+  "AV_TRUST_ANCHORS_FILE",
+  "AV_ARCHITECT_PUBLIC_KEY",
+  "AV_ARCHITECT_PUBLIC_KEY_FILE",
+  "AV_COUNSEL_EVAL_PUBLIC_KEY",
+  "AV_COUNSEL_EVAL_PUBLIC_KEY_FILE",
+  "AV_PACK_PATH",
+] as const;
+
+/** Install product file/env anchors for startFieldServe. Keys are generated outside bootFieldCore. */
+export async function withProductTrustEnv(): Promise<{
+  anchors: TrustAnchors;
+  binding: PackBinding;
+  packPath: string;
+  restore: () => void;
+}> {
+  const { anchors, binding } = await signedRePack();
+  const dir = await mkdtemp(path.join(os.tmpdir(), "av-product-anchors-"));
+  const packPath = path.join(dir, "signed-pack.json");
+  await writeFile(packPath, `${JSON.stringify(binding, null, 2)}\n`, "utf8");
+  const prev: Partial<Record<(typeof PRODUCT_ANCHOR_ENV)[number], string | undefined>> = {};
+  for (const key of PRODUCT_ANCHOR_ENV) {
+    prev[key] = process.env[key];
+    delete process.env[key];
+  }
+  process.env.AV_ARCHITECT_PUBLIC_KEY = anchors.architectPublicKeyPem;
+  process.env.AV_COUNSEL_EVAL_PUBLIC_KEY = anchors.counselEvalPublicKeyPem;
+  process.env.AV_PACK_PATH = packPath;
+  return {
+    anchors,
+    binding,
+    packPath,
+    restore() {
+      for (const key of PRODUCT_ANCHOR_ENV) {
+        if (prev[key] === undefined) delete process.env[key];
+        else process.env[key] = prev[key];
+      }
+    },
   };
 }
 

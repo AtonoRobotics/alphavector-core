@@ -8,12 +8,12 @@ import { architectSit } from "../src/auth/architect-habitat.js";
 import { SurfaceViolationError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
 import { reapHeldCoders } from "../src/habitat/index.js";
-import { bootFieldCore } from "../src/http/field-boot.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { AlphaVectorCore } from "../src/kernel.js";
 import {
   ALPHAVECTOR_RE_PIN_SHA,
   REPO_ROOT,
+  bootTestFieldCore,
   signedGenericPack,
 } from "./helpers.js";
 
@@ -85,7 +85,7 @@ async function habitatCore(tenantId = "t1") {
 
 async function liveHttp(tenantId = "t1") {
   const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-hk082-http-"));
-  const { core, pack } = await bootFieldCore(tenantId, {
+  const { core, pack } = await bootTestFieldCore(tenantId, {
     computerBaseDir,
     adapter: new DryStemAdapter(),
   });

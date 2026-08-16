@@ -38,7 +38,6 @@ import {
   WorkerBook,
 } from "../src/habitat/index.js";
 import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
-import { bootFieldCore } from "../src/http/field-boot.js";
 import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import type { AdapterInput, CognitiveAdapter, CognitiveIntent, SkillFile } from "../src/habitat/types.js";
@@ -48,12 +47,14 @@ import type { PackBinding } from "../src/packs/types.js";
 import { RecordBook } from "../src/records/book.js";
 import {
   ALPHAVECTOR_RE_PIN_SHA,
+  bootTestFieldCore,
   createOpenStart,
   expectPresentIdsDeniedWithoutRecord,
   makeAnchors,
   signedGenericPack,
   signedGenericPackMutated,
   signedRePackMutated,
+  withProductTrustEnv,
 } from "./helpers.js";
 import {
   bindWorldConnector,
@@ -67,6 +68,7 @@ import {
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const VENDOR_FIXTURE_KEY = "av-vcr-vendor-fixture-key";
 const servers: FieldHttpServer[] = [];
+const restoreProductEnv: Array<() => void> = [];
 const vendorDoubles: Array<{ close: () => Promise<void> }> = [];
 
 type VendorHttpCapture = {
@@ -268,6 +270,9 @@ afterEach(async () => {
   resetDeepAgentsInvocations();
   reapHeldCoders();
   delete process.env[VENDOR_BASE_URL_ENV];
+  while (restoreProductEnv.length) {
+    restoreProductEnv.pop()?.();
+  }
   await closeWorldHttp();
   while (vendorDoubles.length) {
     await vendorDoubles.pop()?.close();
@@ -350,7 +355,7 @@ async function liveField(
   issued?: { field: string; architect?: string },
   adapter: CognitiveAdapter = new DryStemAdapter(),
 ) {
-  const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir, adapter });
+  const { core, pack } = await bootTestFieldCore(tenantId, { computerBaseDir, adapter });
   let fieldToken = issued?.field;
   let architectToken = issued?.architect;
   if (!fieldToken) {
@@ -466,7 +471,7 @@ async function liveProductField(
   computerBaseDir: string,
   issued?: { field: string; architect?: string },
 ) {
-  const { core, pack } = await bootFieldCore(tenantId, { computerBaseDir });
+  const { core, pack } = await bootTestFieldCore(tenantId, { computerBaseDir });
   let fieldToken = issued?.field;
   let architectToken = issued?.architect;
   if (!fieldToken) {
@@ -2425,6 +2430,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       computerBaseDir: dir,
       architectToken: architect.token,
     });
+    restoreProductEnv.push((await withProductTrustEnv()).restore);
     const started = await startFieldServe({ tenantId: "t1", computerBaseDir: dir, port: 0 });
     servers.push(started.server);
     const field = new FieldClient(started.url, issued.token);
@@ -2471,6 +2477,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       computerBaseDir: dir,
       architectToken: architect.token,
     });
+    restoreProductEnv.push((await withProductTrustEnv()).restore);
     const started = await startFieldServe({ tenantId: "t1", computerBaseDir: dir, port: 0 });
     servers.push(started.server);
     const field = new FieldClient(started.url, issued.token);
@@ -3369,7 +3376,7 @@ describe("D10 CS-013 routine ticker", () => {
 
   it("bootFieldCore ticker wakes a due routine without the test calling fireDue", async () => {
     const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-ticker-due-"));
-    const { core, tenantId } = await bootFieldCore("t1", {
+    const { core, tenantId } = await bootTestFieldCore("t1", {
       computerBaseDir,
       adapter: new DryStemAdapter(),
       tickMs: 20,
@@ -3441,7 +3448,7 @@ describe("D10 CS-013 routine ticker", () => {
 
   it("ticker corrupt routines.json fails closed without inventing", async () => {
     const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-ticker-corrupt-"));
-    const { core, tenantId } = await bootFieldCore("t1", {
+    const { core, tenantId } = await bootTestFieldCore("t1", {
       computerBaseDir,
       adapter: new DryStemAdapter(),
       tickMs: 20,
@@ -3462,7 +3469,7 @@ describe("D10 CS-013 routine ticker", () => {
 
   it("ticker unbound due routine stays ADAPTER_UNBOUND and keeps ticking", async () => {
     const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-ticker-unbound-"));
-    const { core, tenantId } = await bootFieldCore("t1", {
+    const { core, tenantId } = await bootTestFieldCore("t1", {
       computerBaseDir,
       tickMs: 20,
     });

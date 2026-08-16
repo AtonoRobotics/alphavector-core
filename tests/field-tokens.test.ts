@@ -10,18 +10,21 @@ import { AvError, SurfaceViolationError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
 import { reapHeldCoders } from "../src/habitat/index.js";
 import { FieldClient } from "../src/http/field-client.js";
-import { bootFieldCore } from "../src/http/field-boot.js";
 import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
-import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, createOpenStart } from "./helpers.js";
+import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT, bootTestFieldCore, createOpenStart, withProductTrustEnv } from "./helpers.js";
 import { bindWorldConnector, closeWorldHttp, useWorldHttp, WORLD_FIXTURE_SECRET } from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
+const restoreProductEnv: Array<() => void> = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
   reapHeldCoders();
+  while (restoreProductEnv.length) {
+    restoreProductEnv.pop()?.();
+  }
   await closeWorldHttp();
   while (servers.length) {
     await servers.pop()?.close();
@@ -29,6 +32,7 @@ afterEach(async () => {
 });
 
 async function listenServe(tenantId: string, computerBaseDir: string) {
+  restoreProductEnv.push((await withProductTrustEnv()).restore);
   const started = await startFieldServe({ tenantId, computerBaseDir, port: 0 });
   servers.push(started.server);
   return started;
@@ -36,7 +40,7 @@ async function listenServe(tenantId: string, computerBaseDir: string) {
 
 /** Envelope fixture: DryStem is explicit. Product field-serve does not default to DryStem. */
 async function listenEnvelope(tenantId: string, computerBaseDir: string) {
-  const { core, pack } = await bootFieldCore(tenantId, {
+  const { core, pack } = await bootTestFieldCore(tenantId, {
     computerBaseDir,
     adapter: new DryStemAdapter(),
   });
@@ -100,7 +104,7 @@ describe("tenant-issued field tokens on computer disk", () => {
     expect(book.lookup("field-dev-token", "t1")).toBeUndefined();
     expect(existsSync(computerRoot(dir, "t1").fieldTokensFile)).toBe(false);
 
-    const { core, pack } = await bootFieldCore("missing", { computerBaseDir: dir });
+    const { core, pack } = await bootTestFieldCore("missing", { computerBaseDir: dir });
     const server = new FieldHttpServer({ core, pack, tenantId: "missing" });
     servers.push(server);
     const { url } = await server.listen(0, "127.0.0.1");
@@ -131,7 +135,7 @@ describe("tenant-issued field tokens on computer disk", () => {
     const guessedBook = new FieldTokenBook(guessed);
     expect(() => guessedBook.lookup("field-dev-token", "corrupt")).toThrow(/corrupt/i);
 
-    const { core, pack } = await bootFieldCore("corrupt", { computerBaseDir: guessed });
+    const { core, pack } = await bootTestFieldCore("corrupt", { computerBaseDir: guessed });
     const server = new FieldHttpServer({ core, pack, tenantId: "corrupt" });
     servers.push(server);
     const { url } = await server.listen(0, "127.0.0.1");
