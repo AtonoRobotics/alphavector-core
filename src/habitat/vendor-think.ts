@@ -53,7 +53,7 @@ export function replayRecordedVendor(
     throw new Error("recorded vendor requires credentials");
   }
   if (input.pass === "talking") {
-    if (input.event.kind === "field_ask") {
+    if (input.event.kind === "field_ask" || input.event.kind === "mail") {
       return { ...RECORDED_VENDOR_COMPLETIONS.talkingAsk };
     }
     return { ...RECORDED_VENDOR_COMPLETIONS.talkingStart };

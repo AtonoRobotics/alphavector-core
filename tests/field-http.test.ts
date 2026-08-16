@@ -316,6 +316,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/credentials",
       "/field/api-key",
       "/field/routines",
+      "/field/mail",
     ]) {
       const res = await fetch(`${url}${path}`, { headers });
       expect(res.status).toBe(403);

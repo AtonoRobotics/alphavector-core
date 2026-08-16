@@ -43,6 +43,12 @@ export interface ComputerPaths {
    * Pack declaration is not live until stored here.
    */
   routinesFile: string;
+  /**
+   * Habitat inter-agent mail (CS-018). Same class as routines / adapter-bind:
+   * beside the disk, never inside the bind-mounted /home, never a field file.
+   * In-process AgentMail is not this store.
+   */
+  mailFile: string;
 }
 
 export interface TenantComputer {

@@ -125,7 +125,7 @@ export function replayWakeLog(entries: unknown, context?: WakeLogReplayContext):
     if (!stemDecisionsEqual(recomputed, stored)) {
       return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
     }
-    if ((kind === "field_ask" || kind === "routine") && !runId) {
+    if ((kind === "field_ask" || kind === "routine" || kind === "mail") && !runId) {
       return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
     }
     if (runId && storedRunIds && !storedRunIds.includes(runId)) {

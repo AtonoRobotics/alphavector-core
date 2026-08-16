@@ -13,6 +13,14 @@ import { readTenantAdapterCredentials } from "./adapter-credentials.js";
 import { DeepAgentsAdapter } from "./deep-agents.js";
 import { HabitatMemoryStore } from "./memory-store.js";
 import {
+  appendMail,
+  findStoredMail,
+  mailFile,
+  readTenantMail,
+  saveMailStore,
+  type HabitatMailItem,
+} from "./mail-store.js";
+import {
   findStoredRoutine,
   isRoutineDue,
   readTenantRoutines,
@@ -189,6 +197,9 @@ export class HabitatKernel {
     if (event.kind === "routine") {
       return this.routineWake(event, pack, decision, until, opts?.holdWorker === true);
     }
+    if (event.kind === "mail") {
+      return this.mailWake(event, decision);
+    }
     if (event.kind !== "field_start") {
       const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
       this.wakeLog.append({
@@ -364,6 +375,154 @@ export class HabitatKernel {
       throw new AvError("ROUTINE_STORE_MISSING", "Routine is not stored on the tenant computer; refusing to invent");
     }
     return found;
+  }
+
+  /**
+   * Deliver inter-agent mail (CS-018). Writes tenants/{id}/mail.json, then
+   * wake({ kind: "mail" }). Requires an existing addressee. Habitat path
+   * requires an existing sender agent. Architect path is gated separately.
+   * Mail SHALL NOT confer authority. Attach only — no second goal, no coder.
+   */
+  deliverMail(input: {
+    tenantId: string;
+    addresseeId: string;
+    fromAgentId: string;
+    body: string;
+    deliveredBy: "architect" | "habitat";
+  }): WakeResult {
+    const addresseeId = input.addresseeId.trim();
+    const fromAgentId = input.fromAgentId.trim();
+    if (!addresseeId) {
+      throw new AvError("AGENT_NOT_FOUND", "Mail requires an existing addressee");
+    }
+    if (!fromAgentId) {
+      throw new AvError("AGENT_NOT_FOUND", "Mail requires an existing sender; refusing to forge");
+    }
+    if (fromAgentId === addresseeId) {
+      throw new AvError("MAIL_INVALID", "Agent cannot mail itself as an authority channel");
+    }
+    this.requireAddressee(input.tenantId, addresseeId);
+    if (input.deliveredBy === "architect") {
+      if (fromAgentId !== "architect") {
+        throw new AvError("MAIL_INVALID", "Architect mail cannot impersonate another agent");
+      }
+    } else {
+      this.requireExistingAgent(input.tenantId, fromAgentId);
+    }
+    readTenantMail(this.opts.computerBaseDir, input.tenantId);
+    const run = this.runs.get(input.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Mail requires an open run; no implicit start");
+    }
+    const item = this.writeMailItem({
+      tenantId: input.tenantId,
+      fromAgentId,
+      toAgentId: addresseeId,
+      body: input.body,
+    });
+    return this.wake({
+      kind: "mail",
+      tenantId: input.tenantId,
+      pack: this.packs.get(input.tenantId),
+      addresseeId,
+      fromAgentId,
+      mailId: item.mailId,
+      runId: run.runId,
+    });
+  }
+
+  /**
+   * Mail: a wake on the open run for the addressee. Does not mint a run or a goal.
+   * Talking stays thin — no pickAgent, no coder launch. No implicit start.
+   * Mail SHALL NOT confer authority.
+   */
+  private mailWake(event: WakeEvent, decision: ReturnType<typeof stem>): WakeResult {
+    const stored = this.requireStoredMail(event);
+    const addresseeId = event.addresseeId?.trim() || stored.toAgentId;
+    this.requireAddressee(event.tenantId, addresseeId);
+    if (addresseeId !== stored.toAgentId) {
+      throw new AvError("MAIL_INVALID", "Mail addressee does not match the stored item");
+    }
+    const run = this.runs.get(event.tenantId);
+    if (!run || isTerminal(run.status)) {
+      throw new AvError("NO_OPEN_RUN", "Mail requires an open run; no implicit start");
+    }
+    const memory = this.injectMemory(event.tenantId, addresseeId);
+    this.assertLabeled(memory);
+    const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
+    const talking = this.adapter.think({
+      pass: "talking",
+      event,
+      run,
+      memory,
+      skills: [],
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    this.validateTalking(talking);
+    this.wakeLog.append({
+      kind: "mail",
+      tenantId: event.tenantId,
+      runId: run.runId,
+      at: nowIso(),
+      decision,
+      detail: { mailId: stored.mailId, addresseeId, attached: true, confersAuthority: false },
+    });
+    return {
+      run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory,
+    };
+  }
+
+  private writeMailItem(input: {
+    tenantId: string;
+    fromAgentId: string;
+    toAgentId: string;
+    body: string;
+  }): HabitatMailItem {
+    if (!this.opts.computerBaseDir) {
+      throw new AvError("MAIL_STORE_MISSING", "Mail store is missing; refusing to invent mail");
+    }
+    const store = readTenantMail(this.opts.computerBaseDir, input.tenantId);
+    const item: HabitatMailItem = {
+      mailId: newId("mail"),
+      tenantId: input.tenantId,
+      fromAgentId: input.fromAgentId,
+      toAgentId: input.toAgentId,
+      body: input.body,
+      createdAt: nowIso(),
+      confersAuthority: false,
+    };
+    saveMailStore(mailFile(this.opts.computerBaseDir, input.tenantId), appendMail(store, item));
+    return item;
+  }
+
+  private requireStoredMail(event: WakeEvent): HabitatMailItem {
+    const mailId = event.mailId?.trim();
+    if (!mailId) {
+      throw new AvError("MAIL_STORE_MISSING", "Mail wake requires a stored mail item; refusing to invent");
+    }
+    const store = readTenantMail(this.opts.computerBaseDir, event.tenantId);
+    const found = findStoredMail(store, event.tenantId, mailId);
+    if (!found) {
+      throw new AvError("MAIL_STORE_MISSING", "Mail is not stored on the tenant computer; refusing to invent");
+    }
+    return found;
+  }
+
+  private requireAddressee(tenantId: string, addresseeId: string): void {
+    this.requireExistingAgent(tenantId, addresseeId);
+  }
+
+  private requireExistingAgent(tenantId: string, agentId: string): void {
+    const found = this.opts.agents.list(tenantId).find((a) => a.agentId === agentId);
+    if (!found) {
+      throw new AvError("AGENT_NOT_FOUND", "Mail requires an existing agent; refusing to invent or impersonate");
+    }
   }
 
   /**
