@@ -264,7 +264,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       body: JSON.stringify({ journeyKind: "buyer", objective: "Revoked must not start" }),
     });
     expect(res.status).toBe(401);
-    await expect(field.start("buyer", "Revoked must not start")).rejects.toMatchObject({
+    await expect(field.start("buyer", "Revoked must not start", "rec_none")).rejects.toMatchObject({
       status: 401,
       code: "UNAUTHORIZED",
     });
@@ -272,15 +272,17 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
   it("rejects Architect credentials on field start", async () => {
     const { architect, field } = await liveField("authz");
-    await expect(architect.start("buyer", "Architect must not use this path")).rejects.toBeInstanceOf(
-      FieldHttpError,
-    );
-    await expect(architect.start("buyer", "Architect must not use this path")).rejects.toMatchObject({
+    await expect(
+      architect.start("buyer", "Architect must not use this path", "rec_none"),
+    ).rejects.toBeInstanceOf(FieldHttpError);
+    await expect(
+      architect.start("buyer", "Architect must not use this path", "rec_none"),
+    ).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
       message: expect.stringMatching(/field user/),
     });
-    await expect(architect.open("buyer")).rejects.toMatchObject({
+    await expect(architect.open("buyer", "rec_none")).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
       message: expect.stringMatching(/field user/),
@@ -332,6 +334,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       /requestFactCard\("journey\." \+ t\.dataset\.open, "\/field\/facts", selectedRecord\(\)\)/,
     );
     expect(html).toMatch(/recordId:\s*selectedRecord\(\)/);
+    expect(html).toMatch(/if\s*\(\s*!selectedRecord\(\)\s*\)/);
+    expect(html).toMatch(/Select a record before starting/);
+    expect(html).toMatch(/Select a record before opening/);
     expect(html).toMatch(/id="purpose-facts"/);
     expect(html).toMatch(/home\.purposeFacts/);
     expect(html).toMatch(/data-purpose=/);
@@ -379,12 +384,16 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(clientSrc).toMatch(/home\.recordKinds/);
     expect(clientSrc).toMatch(/openApproved\(kind\.id, subject\.id\)/);
     expect(clientSrc).toMatch(/start\(kind\.id, `Work this \$\{kind\.label\} journey`, subject\.id\)/);
+    expect(clientSrc).toMatch(/start\(journeyKind: string, objective: string, recordId: string\)/);
+    expect(clientSrc).toMatch(/open\(kindId: string, recordId: string\)/);
     const fieldSrc = await readFile(path.join(REPO_ROOT, "src/surfaces/field.ts"), "utf8");
     expect(fieldSrc).not.toMatch(/consent\.dnc/);
     expect(fieldSrc).toMatch(/avoidFactsFromBinding/);
     expect(fieldSrc).toMatch(/recordKindsFromBinding/);
     expect(fieldSrc).toMatch(/verb\.AVOIDS/);
     expect(fieldSrc).toMatch(/kind\.AVOIDS/);
+    expect(fieldSrc).toMatch(/RECORD_ID_REQUIRED/);
+    expect(fieldSrc).toMatch(/isJourneyFactId/);
     expect(fieldSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
 
     const home = await field.home();
@@ -552,42 +561,48 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     });
     const paths = computerRoot(dir, tenantId);
 
-    await expect(field.start("buyer", "Work this buyer journey")).rejects.toMatchObject({
+    const rec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
+    await expect(field.start("buyer", "Work this buyer journey", rec.id)).rejects.toMatchObject({
       status: 403,
       code: "PREDICATE_CLOSED",
       message: expect.stringMatching(/REQUIRES missing/),
     });
 
-    const cardId = await issueFactCard(field, REQUIRED);
+    const cardId = await field.requestFactCard(REQUIRED, "record", rec.id);
     expect(existsSync(paths.factsFile)).toBe(false);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
     expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
-    await expect(field.start("buyer", "Work this buyer journey")).rejects.toMatchObject({
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
+    await expect(field.start("buyer", "Work this buyer journey", rec.id)).rejects.toMatchObject({
       status: 403,
       code: "PREDICATE_CLOSED",
     });
 
     const approved = await field.approve(cardId);
     expect(approved.card.status).toBe("approved");
-    expect(approved.fact).toEqual({ id: REQUIRED, present: true });
+    expect(approved.fact).toEqual({ id: REQUIRED, present: true, recordId: rec.id });
     expect(paths.factsFile).toBe(path.join(dir, "tenants", tenantId, "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8"))).toEqual({
-      facts: [{ id: REQUIRED }],
+      facts: [{ id: REQUIRED, recordId: rec.id }],
     });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([REQUIRED]);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([REQUIRED]);
 
-    const journey = await field.start("buyer", "Work this buyer journey");
+    const journey = await field.start("buyer", "Work this buyer journey", rec.id);
     expect(journey.journeyKind).toBe("buyer");
     expect(journey.status).toBe("open");
 
-    const retractId = await issueFactCard(field, REQUIRED, "retract");
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([REQUIRED]);
+    const retractId = await field.requestFactCard(REQUIRED, "retract", rec.id);
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([REQUIRED]);
     const retracted = await field.approve(retractId);
-    expect(retracted.fact).toEqual({ id: REQUIRED, present: false });
-    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
-    await expect(field.start("buyer", "Work this buyer journey")).rejects.toMatchObject({
+    expect(retracted.fact).toEqual({ id: REQUIRED, present: false, recordId: rec.id });
+    expect(new FactBook(dir).presentIds(tenantId, rec.id)).toEqual([]);
+    await expect(field.start("buyer", "Work this buyer journey", rec.id)).rejects.toMatchObject({
       status: 403,
       code: "PREDICATE_CLOSED",
       message: expect.stringMatching(/fail closed/),
@@ -615,7 +630,11 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     const { field, tenantId } = await liveField("authored", dir);
     const paths = computerRoot(dir, tenantId);
 
-    await expect(field.start("buyer", "Work this buyer journey")).rejects.toMatchObject({
+    const emptyRec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Empty subject",
+    );
+    await expect(field.start("buyer", "Work this buyer journey", emptyRec.id)).rejects.toMatchObject({
       status: 403,
       code: "PREDICATE_CLOSED",
       message: expect.stringMatching(/REQUIRES missing/),
@@ -750,7 +769,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       code: "AUTHORIZATION_REQUIRED",
     });
 
-    await expect(architect.open(kind.id)).rejects.toMatchObject({
+    await expect(architect.open(kind.id, rec.id)).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
@@ -840,7 +859,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       status: 403,
       code: "SURFACE_VIOLATION",
     });
-    await expect(architect.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
+    await expect(
+      architect.start(kind.id, `Work this ${kind.label} journey`, rec.id),
+    ).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
@@ -996,7 +1017,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       status: 403,
       code: "SURFACE_VIOLATION",
     });
-    await expect(architect.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
+    await expect(
+      architect.start(kind.id, `Work this ${kind.label} journey`, rec.id),
+    ).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
@@ -1099,7 +1122,9 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       status: 403,
       code: "SURFACE_VIOLATION",
     });
-    await expect(architect.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
+    await expect(
+      architect.start(kind.id, `Work this ${kind.label} journey`, recA.id),
+    ).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });
@@ -1157,6 +1182,57 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       status: 403,
       code: "SURFACE_VIOLATION",
     });
+  });
+
+  it("denies start and Open with no recordId or unknown recordId", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-http-record-required-"));
+    const { field, url, tokens, tenantId, pack } = await liveField("record-required", dir);
+    const kind = pack.binding.journeyKinds[0];
+    const rec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
+    await field.openApproved(kind.id, rec.id);
+
+    const startMissing = await fetch(`${url}/field/journeys`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.field}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ journeyKind: kind.id, objective: `Work this ${kind.label} journey` }),
+    });
+    expect(startMissing.status).toBe(400);
+    expect(await startMissing.json()).toMatchObject({ error: "RECORD_ID_REQUIRED" });
+
+    await expect(
+      field.start(kind.id, `Work this ${kind.label} journey`, "rec_unknown"),
+    ).rejects.toMatchObject({
+      status: 404,
+      code: "RECORD_NOT_FOUND",
+    });
+
+    const openMissing = await fetch(`${url}/field/facts`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokens.field}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ id: field.journeyFactId(kind.id) }),
+    });
+    expect(openMissing.status).toBe(400);
+    expect(await openMissing.json()).toMatchObject({ error: "RECORD_ID_REQUIRED" });
+    expect(existsSync(computerRoot(dir, tenantId).factsFile)).toBe(true);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual([]);
+
+    await expect(field.open(kind.id, "rec_unknown")).rejects.toMatchObject({
+      status: 404,
+      code: "RECORD_NOT_FOUND",
+    });
+
+    const startedA = await field.start(kind.id, `Work this ${kind.label} journey`, rec.id);
+    expect(startedA.status).toBe("open");
+    expect(startedA.recordId).toBe(rec.id);
   });
 
   it("keeps RE types out of core schema and migrations", async () => {

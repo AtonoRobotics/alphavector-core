@@ -207,6 +207,10 @@
 
     document.getElementById("start").onclick = async () => {
       try {
+        if (!selectedRecord()) {
+          setStatus("Select a record before starting", true);
+          return;
+        }
         const journey = await api("POST", "/field/journeys", {
           journeyKind: document.getElementById("kind").value,
           objective: document.getElementById("objective").value,
@@ -301,6 +305,10 @@
       try {
         if (t.dataset.open) {
           try {
+            if (!selectedRecord()) {
+              setStatus("Select a record before opening", true);
+              return;
+            }
             await requestFactCard("journey." + t.dataset.open, "/field/facts", selectedRecord());
           } catch (err) {
             setStatus(err.message, true);

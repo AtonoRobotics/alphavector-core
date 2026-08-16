@@ -58,13 +58,22 @@ async function reFieldStack(
   return { pack: loaded.loaded, field, cards, store, grants, agents, ask, facts, records };
 }
 
+function putSubject(
+  records: RecordBook,
+  pack: { tenantId: string; binding: { recordPartyKnowledge: { recordKinds: string[] } } },
+  label = "Subject",
+) {
+  const type = pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record";
+  return records.put(pack.tenantId, { type, label });
+}
+
 describe("required field path against pinned alphavector-re", () => {
   it("keeps the RE fixture pin at 5091328", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
   it("lets a field user start and progress each pack journey kind; architect cannot", async () => {
-    const { pack, field, agents, store, facts } = await reFieldStack();
+    const { pack, field, agents, store, facts, records } = await reFieldStack();
     const kinds = pack.binding.journeyKinds.map((k) => k.id);
     expect(kinds).toEqual(["buyer", "seller", "listing", "transaction", "past-client"]);
 
@@ -74,6 +83,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Architect must not use this path",
+        recordId: "rec_none",
       }),
     ).toThrow(SurfaceViolationError);
     expect(() =>
@@ -100,16 +110,19 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "inquiry",
         objective: "Generic kind is not on this pack",
+        recordId: "rec_none",
       }),
     ).toThrow(/not bound on the loaded pack/);
 
+    const rec = putSubject(records, pack);
     for (const kind of kinds) {
-      facts.put("t1", JOURNEY_REQUIRED[kind]!);
+      facts.put("t1", JOURNEY_REQUIRED[kind]!, rec.id);
       const journey = field.start({
         actor: "field",
         pack,
         journeyKind: kind,
         objective: `Work this ${kind} journey`,
+        recordId: rec.id,
       });
       expect(journey.journeyKind).toBe(kind);
       expect(journey.status).toBe("open");
@@ -137,17 +150,19 @@ describe("required field path against pinned alphavector-re", () => {
   });
 
   it("keeps a denied Ask ceiling denied on retry and is not a side door", async () => {
-    const { pack, field, store, agents, facts } = await reFieldStack();
+    const { pack, field, store, agents, facts, records } = await reFieldStack();
     expect(pack.binding.askCeilings).toEqual(
       expect.arrayContaining(["licensed_judgment", "prohibited", "governance", "material_state"]),
     );
 
-    facts.put("t1", "journey.seller");
+    const rec = putSubject(records, pack);
+    facts.put("t1", "journey.seller", rec.id);
     const journey = field.start({
       actor: "field",
       pack,
       journeyKind: "seller",
       objective: "Work this seller journey",
+      recordId: rec.id,
     });
     const req = {
       tenantId: "t1" as const,
@@ -189,14 +204,16 @@ describe("required field path against pinned alphavector-re", () => {
   });
 
   it("makes a card deny terminal on the field path", async () => {
-    const { pack, field, cards, agents, facts } = await reFieldStack();
-    facts.put("t1", "journey.buyer");
+    const { pack, field, cards, agents, facts, records } = await reFieldStack();
+    const rec = putSubject(records, pack);
+    facts.put("t1", "journey.buyer", rec.id);
     facts.put("t1", "purpose.follow-up");
     const journey = field.start({
       actor: "field",
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
+      recordId: rec.id,
     });
     const followUp = agents.find((a) => a.name === "Follow-up")!;
     const effect = {
@@ -243,14 +260,16 @@ describe("required field path against pinned alphavector-re", () => {
   });
 
   it("approves an owner_instance card then executes communicate on the field path", async () => {
-    const { pack, field, cards, agents, facts } = await reFieldStack();
-    facts.put("t1", "journey.buyer");
+    const { pack, field, cards, agents, facts, records } = await reFieldStack();
+    const rec = putSubject(records, pack);
+    facts.put("t1", "journey.buyer", rec.id);
     facts.put("t1", "purpose.follow-up");
     const journey = field.start({
       actor: "field",
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
+      recordId: rec.id,
     });
     const followUp = agents.find((a) => a.name === "Follow-up")!;
     const effect = {
@@ -319,6 +338,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "pick a model for this buyer",
+        recordId: "rec_none",
       }),
     ).toThrow(/must not expose/);
   });
@@ -338,7 +358,8 @@ describe("required field path against pinned alphavector-re", () => {
 
   it("authored journeys declare REQUIRES PREFERS AVOIDS; empty disk fail-closes the five-journey path", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-authored-empty-"));
-    const { pack, field } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const { pack, field, records } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const rec = putSubject(records, pack);
     expect(pack.binding.journeyKinds.map((k) => k.id)).toEqual([
       "buyer",
       "seller",
@@ -354,6 +375,7 @@ describe("required field path against pinned alphavector-re", () => {
           pack,
           journeyKind: kind.id,
           objective: `Work this ${kind.id} journey`,
+          recordId: rec.id,
         }),
       ).toThrow(/REQUIRES missing/);
       expect(() =>
@@ -362,6 +384,7 @@ describe("required field path against pinned alphavector-re", () => {
           pack,
           journeyKind: kind.id,
           objective: `Work this ${kind.id} journey`,
+          recordId: rec.id,
         }),
       ).toThrow(/fail closed/);
     }
@@ -369,13 +392,15 @@ describe("required field path against pinned alphavector-re", () => {
 
   it("authored buyer start fails closed without on-disk journey.buyer; a request claim does not satisfy", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-authored-claim-"));
-    const { pack, field } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const { pack, field, records } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const rec = putSubject(records, pack);
     expect(() =>
       field.start({
         actor: "field",
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/REQUIRES missing/);
     expect(() =>
@@ -384,6 +409,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
         conditions: ["journey.buyer"],
       }),
     ).toThrow(/REQUIRES missing/);
@@ -393,6 +419,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
         conditions: ["journey.buyer"],
       }),
     ).toThrow(/fail closed/);
@@ -401,14 +428,16 @@ describe("required field path against pinned alphavector-re", () => {
 
   it("approved record of journey.buyer then starts buyer; seller and communicate need their authored facts", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-authored-record-"));
-    const { pack, field, cards, agents, facts } = await reFieldStack(undefined, {
+    const { pack, field, cards, agents, facts, records } = await reFieldStack(undefined, {
       computerBaseDir: dir,
     });
     const paths = computerRoot(dir, "t1");
+    const buyerRec = putSubject(records, pack, "Buyer subject");
+    const sellerRec = putSubject(records, pack, "Seller subject");
 
     let buyerCard = "";
     try {
-      field.record({ actor: "field", pack, id: "journey.buyer" });
+      field.record({ actor: "field", pack, id: "journey.buyer", recordId: buyerRec.id });
       throw new Error("should have required a card");
     } catch (err) {
       expect(err).toBeInstanceOf(AuthorizationRequiredError);
@@ -419,26 +448,33 @@ describe("required field path against pinned alphavector-re", () => {
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
 
     cards.resolve({ cardId: buyerCard, decision: "approved", actor: "field" });
-    expect(field.commitApprovedFact(buyerCard)).toEqual({ id: "journey.buyer", present: true });
+    expect(field.commitApprovedFact(buyerCard)).toEqual({
+      id: "journey.buyer",
+      present: true,
+      recordId: buyerRec.id,
+    });
     expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expect(new FactBook(dir).presentIds("t1", buyerRec.id)).toEqual(["journey.buyer"]);
 
     const journey = field.start({
       actor: "field",
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
+      recordId: buyerRec.id,
     });
     expect(journey.status).toBe("open");
 
-    facts.put("t1", "journey.seller");
+    facts.put("t1", "journey.seller", sellerRec.id);
     const seller = field.start({
       actor: "field",
       pack,
       journeyKind: "seller",
       objective: "Work this seller journey",
+      recordId: sellerRec.id,
     });
     expect(seller.journeyKind).toBe("seller");
 
@@ -460,15 +496,17 @@ describe("required field path against pinned alphavector-re", () => {
 
   it("authored AVOIDS fail closed when consent.dnc is on disk", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-authored-avoid-"));
-    const { pack, field, facts } = await reFieldStack(undefined, { computerBaseDir: dir });
-    facts.put("t1", "journey.buyer");
-    facts.put("t1", "consent.dnc");
+    const { pack, field, facts, records } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const rec = putSubject(records, pack);
+    facts.put("t1", "journey.buyer", rec.id);
+    facts.put("t1", "consent.dnc", rec.id);
     expect(() =>
       field.start({
         actor: "field",
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/AVOIDS present/);
     expect(() =>
@@ -477,13 +515,14 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/fail closed/);
   });
 
   it("denies a request-only REQUIRES claim and allows only an on-disk fact", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-req-"));
-    const { pack, field, agents, facts } = await reFieldStack(
+    const { pack, field, agents, facts, records } = await reFieldStack(
       await signedRePackMutated((unsigned) => {
         const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
         if (buyer) buyer.REQUIRES = [REQUIRED];
@@ -492,12 +531,14 @@ describe("required field path against pinned alphavector-re", () => {
       }),
       { computerBaseDir: dir },
     );
+    const rec = putSubject(records, pack);
     expect(() =>
       field.start({
         actor: "field",
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/REQUIRES missing/);
     expect(() =>
@@ -506,6 +547,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
         conditions: [REQUIRED],
       }),
     ).toThrow(/REQUIRES missing/);
@@ -515,6 +557,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
         conditions: [REQUIRED],
       }),
     ).toThrow(/fail closed/);
@@ -523,17 +566,19 @@ describe("required field path against pinned alphavector-re", () => {
     expect(existsSync(paths.factsFile)).toBe(false);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
 
-    facts.put("t1", REQUIRED);
+    facts.put("t1", REQUIRED, rec.id);
     expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual([REQUIRED]);
+    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([REQUIRED]);
 
     const journey = field.start({
       actor: "field",
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
+      recordId: rec.id,
     });
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
     const advanced = field.progress({
@@ -542,13 +587,14 @@ describe("required field path against pinned alphavector-re", () => {
       journeyId: journey.id,
       agent,
       actionClass: "read",
+      subject: rec.id,
     });
     expect(advanced.effect?.executed).toBe(true);
   });
 
   it("fail-closes start and progress when an on-disk AVOIDS fact is present", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-avoid-"));
-    const { pack, field, agents, facts } = await reFieldStack(
+    const { pack, field, agents, facts, records } = await reFieldStack(
       await signedRePackMutated((unsigned) => {
         const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
         if (buyer) buyer.AVOIDS = [AVOIDED];
@@ -557,23 +603,26 @@ describe("required field path against pinned alphavector-re", () => {
       }),
       { computerBaseDir: dir },
     );
-    facts.put("t1", "journey.buyer");
+    const rec = putSubject(records, pack);
+    facts.put("t1", "journey.buyer", rec.id);
     const open = field.start({
       actor: "field",
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
+      recordId: rec.id,
       conditions: [AVOIDED],
     });
     expect(open.status).toBe("open");
 
-    facts.put("t1", AVOIDED);
+    facts.put("t1", AVOIDED, rec.id);
     expect(() =>
       field.start({
         actor: "field",
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/AVOIDS present/);
     expect(() =>
@@ -582,6 +631,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/fail closed/);
 
@@ -599,7 +649,7 @@ describe("required field path against pinned alphavector-re", () => {
 
   it("records PREFERS on the field path and does not fail closed when unmet", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-pref-"));
-    const { pack, field, agents, store, facts } = await reFieldStack(
+    const { pack, field, agents, store, facts, records } = await reFieldStack(
       await signedRePackMutated((unsigned) => {
         const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
         if (buyer) buyer.PREFERS = [PREFERRED];
@@ -608,12 +658,14 @@ describe("required field path against pinned alphavector-re", () => {
       }),
       { computerBaseDir: dir },
     );
-    facts.put("t1", "journey.buyer");
+    const rec = putSubject(records, pack);
+    facts.put("t1", "journey.buyer", rec.id);
     const journey = field.start({
       actor: "field",
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
+      recordId: rec.id,
     });
     expect(journey.status).toBe("open");
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
@@ -645,7 +697,7 @@ describe("required field path against pinned alphavector-re", () => {
 
   it("records and retracts a fact only after an owner_instance card is approved", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-write-"));
-    const { pack, field, cards, agents, facts } = await reFieldStack(
+    const { pack, field, cards, agents, facts, records } = await reFieldStack(
       await signedRePackMutated((unsigned) => {
         const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
         if (buyer) buyer.REQUIRES = [REQUIRED];
@@ -653,7 +705,8 @@ describe("required field path against pinned alphavector-re", () => {
       { computerBaseDir: dir },
     );
     const paths = computerRoot(dir, "t1");
-    const write = { actor: "field" as const, pack, id: REQUIRED };
+    const rec = putSubject(records, pack);
+    const write = { actor: "field" as const, pack, id: REQUIRED, recordId: rec.id };
 
     expect(() =>
       field.record({ actor: "architect", pack, id: REQUIRED }),
@@ -665,6 +718,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/REQUIRES missing/);
 
@@ -690,17 +744,19 @@ describe("required field path against pinned alphavector-re", () => {
 
     cards.resolve({ cardId, decision: "approved", actor: "field" });
     const recorded = field.commitApprovedFact(cardId);
-    expect(recorded).toEqual({ id: REQUIRED, present: true });
+    expect(recorded).toEqual({ id: REQUIRED, present: true, recordId: rec.id });
     expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual([REQUIRED]);
+    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([REQUIRED]);
 
     const journey = field.start({
       actor: "field",
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
+      recordId: rec.id,
     });
     const agent = agents.find((a) => a.specialties.includes("buyer"))!;
     const advanced = field.progress({
@@ -720,18 +776,23 @@ describe("required field path against pinned alphavector-re", () => {
       expect(err).toBeInstanceOf(AuthorizationRequiredError);
       retractId = (err as AuthorizationRequiredError).cardId;
     }
-    expect(new FactBook(dir).presentIds("t1")).toEqual([REQUIRED]);
+    expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([REQUIRED]);
     expect(existsSync(paths.factsFile)).toBe(true);
 
     cards.resolve({ cardId: retractId, decision: "approved", actor: "field" });
-    expect(field.commitApprovedFact(retractId)).toEqual({ id: REQUIRED, present: false });
-    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expect(field.commitApprovedFact(retractId)).toEqual({
+      id: REQUIRED,
+      present: false,
+      recordId: rec.id,
+    });
+    expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([]);
     expect(() =>
       field.start({
         actor: "field",
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/REQUIRES missing/);
     expect(() =>
@@ -740,6 +801,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(/fail closed/);
   });
@@ -778,13 +840,15 @@ describe("required field path against pinned alphavector-re", () => {
       const buyer = unsigned.journeyKinds.find((k) => k.id === "buyer");
       if (buyer) buyer.REQUIRES = [REQUIRED];
     });
-    const { pack, field } = await reFieldStack(signed, { computerBaseDir: dir });
+    const { pack, field, records } = await reFieldStack(signed, { computerBaseDir: dir });
+    const rec = putSubject(records, pack);
     expect(() =>
       field.start({
         actor: "field",
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
       }),
     ).toThrow(AvError);
     expect(() =>
@@ -793,6 +857,7 @@ describe("required field path against pinned alphavector-re", () => {
         pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: rec.id,
         conditions: [REQUIRED],
       }),
     ).toThrow(/corrupt/i);
@@ -806,12 +871,14 @@ describe("required field path against pinned alphavector-re", () => {
       "utf8",
     );
     const guessedStack = await reFieldStack(signed, { computerBaseDir: guessed });
+    const guessedRec = putSubject(guessedStack.records, guessedStack.pack);
     expect(() =>
       guessedStack.field.start({
         actor: "field",
         pack: guessedStack.pack,
         journeyKind: "buyer",
         objective: "Work this buyer journey",
+        recordId: guessedRec.id,
         conditions: [REQUIRED],
       }),
     ).toThrow(/corrupt/i);
@@ -867,11 +934,13 @@ describe("required field path against pinned alphavector-re", () => {
     const recB = records.get("t1", recordedB!.id)!;
     expect(recB.label).toBe("B");
 
-    facts.put("t1", "journey.buyer");
+    const recJourney = records.put("t1", { type, label: "Journey" });
+    facts.put("t1", "journey.buyer", recJourney.id);
     facts.put("t1", "purpose.follow-up", recA.id);
     facts.put("t1", "consent.dnc", recA.id);
     facts.put("t1", "purpose.follow-up", recB.id);
-    expect(facts.presentIds("t1")).toEqual(["journey.buyer"]);
+    expect(facts.presentIds("t1")).toEqual([]);
+    expect(facts.presentIds("t1", recJourney.id)).toEqual(["journey.buyer"]);
     expect(facts.presentIds("t1", recA.id)).toEqual(
       expect.arrayContaining(["purpose.follow-up", "consent.dnc"]),
     );
@@ -883,6 +952,7 @@ describe("required field path against pinned alphavector-re", () => {
       pack,
       journeyKind: "buyer",
       objective: "Work this buyer journey",
+      recordId: recJourney.id,
     });
     const followUp = agents.find((a) => a.name === "Follow-up")!;
     const communicate = {
@@ -971,6 +1041,91 @@ describe("required field path against pinned alphavector-re", () => {
         recordId: recB,
       }),
     ).toThrow(/fail closed/);
+  });
+
+  it("denies start with no recordId and unknown recordId", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-start-record-required-"));
+    const { pack, field, facts, records } = await reFieldStack(undefined, {
+      computerBaseDir: dir,
+    });
+    const rec = putSubject(records, pack);
+    facts.put("t1", "journey.buyer", rec.id);
+
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        recordId: "" as string,
+      }),
+    ).toThrow(AvError);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        recordId: "" as string,
+      }),
+    ).toThrow(/Record id is required/);
+
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        recordId: "rec_unknown",
+      }),
+    ).toThrow(AvError);
+    expect(() =>
+      field.start({
+        actor: "field",
+        pack,
+        journeyKind: "buyer",
+        objective: "Work this buyer journey",
+        recordId: "rec_unknown",
+      }),
+    ).toThrow(/Unknown record/);
+
+    const started = field.start({
+      actor: "field",
+      pack,
+      journeyKind: "buyer",
+      objective: "Work this buyer journey",
+      recordId: rec.id,
+    });
+    expect(started.status).toBe("open");
+    expect(started.recordId).toBe(rec.id);
+  });
+
+  it("denies Open of journey.* with no recordId and unknown recordId", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-open-record-required-"));
+    const { pack, field, records } = await reFieldStack(undefined, { computerBaseDir: dir });
+    const rec = putSubject(records, pack);
+    const paths = computerRoot(dir, "t1");
+
+    expect(() => field.record({ actor: "field", pack, id: "journey.buyer" })).toThrow(AvError);
+    expect(() => field.record({ actor: "field", pack, id: "journey.buyer" })).toThrow(
+      /Record id is required/,
+    );
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+
+    expect(() =>
+      field.record({ actor: "field", pack, id: "journey.buyer", recordId: "rec_unknown" }),
+    ).toThrow(/Unknown record/);
+    expect(existsSync(paths.factsFile)).toBe(false);
+
+    try {
+      field.record({ actor: "field", pack, id: "journey.buyer", recordId: rec.id });
+      throw new Error("should have required a card");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthorizationRequiredError);
+    }
+    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([]);
   });
 
   it("fail-closes on a corrupt record store and does not invent a record", async () => {

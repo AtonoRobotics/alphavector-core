@@ -153,10 +153,10 @@ describe("tenant-issued field tokens on computer disk", () => {
     const second = await listenServe("restart", dir);
     const again = new FieldClient(second.url, issued.token);
     await expect(
-      new FieldClient(second.url, "field-dev-token").start("buyer", "demo must not work"),
+      new FieldClient(second.url, "field-dev-token").start("buyer", "demo must not work", "rec_none"),
     ).rejects.toMatchObject({ status: 401 });
     await expect(
-      new FieldClient(second.url, "field-restart").start("buyer", "pattern must not work"),
+      new FieldClient(second.url, "field-restart").start("buyer", "pattern must not work", "rec_none"),
     ).rejects.toMatchObject({ status: 401 });
 
     const home = await again.home();
@@ -223,7 +223,7 @@ describe("tenant-issued field tokens on computer disk", () => {
     });
     const second = await listenServe("issued", dir);
     await expect(
-      new FieldClient(second.url, issued.token).start("buyer", "Revoked must not start"),
+      new FieldClient(second.url, issued.token).start("buyer", "Revoked must not start", "rec_none"),
     ).rejects.toMatchObject({ status: 401, code: "UNAUTHORIZED" });
   });
 

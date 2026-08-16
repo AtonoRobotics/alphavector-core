@@ -39,10 +39,11 @@ export interface FieldStartInput {
   journeyKind: string;
   objective: string;
   /**
-   * Subject record this journey is about. Journey REQUIRES/AVOIDS eval
-   * uses that record's present set. Absent = tenant-global facts.
+   * Subject record this journey is about. Required. Missing fails closed.
+   * Journey REQUIRES/AVOIDS eval uses that record's present set only —
+   * never the tenant-global set as a fallback.
    */
-  recordId?: string;
+  recordId: string;
   /**
    * Request claims only. Allow/deny uses persisted tenant facts on disk.
    * Passing a condition here does not write the fact store.
