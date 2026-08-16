@@ -188,6 +188,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       ]),
     );
     expect(home.avoidFacts).toHaveLength(6);
+    expect(home.records).toEqual([]);
+    expect(home.recordKinds.map((k) => k.id)).toEqual([
+      ...pack.binding.recordPartyKnowledge.recordKinds,
+      ...pack.binding.recordPartyKnowledge.partyKinds,
+    ]);
+    expect(home.recordKinds.every((k) => k.id && k.label)).toBe(true);
   });
 
   it("approves an owner card then executes", async () => {
@@ -331,6 +337,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(html).toMatch(/data-avoid-retract=/);
     expect(html).toMatch(/t\.dataset\.avoid/);
     expect(html).toMatch(/t\.dataset\.avoidRetract/);
+    expect(html).toMatch(/id="records"/);
+    expect(html).toMatch(/id="create-record"/);
+    expect(html).toMatch(/\/field\/records/);
+    expect(html).toMatch(/home\.recordKinds/);
+    expect(html).toMatch(/home\.records/);
+    expect(html).toMatch(/data-select-record=/);
     expect(html).not.toMatch(/purpose\.follow-up/);
     expect(html).not.toMatch(/purpose\.showing|purpose\.listing|purpose\.transaction/);
     expect(html).not.toMatch(/consent\.dnc/);
@@ -355,14 +367,18 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(clientSrc).not.toMatch(/purpose\.follow-up/);
     expect(clientSrc).not.toMatch(/consent\.dnc/);
     expect(clientSrc).toMatch(/home\.purposeFacts/);
-    expect(clientSrc).toMatch(/recordApprovedFact\(purpose\.id\)/);
+    expect(clientSrc).toMatch(/recordApprovedFact\(purpose\.id/);
     expect(clientSrc).toMatch(/requestFactCard/);
     expect(clientSrc).toMatch(/recordApprovedFact/);
+    expect(clientSrc).toMatch(/createApprovedRecord/);
+    expect(clientSrc).toMatch(/home\.recordKinds/);
     const fieldSrc = await readFile(path.join(REPO_ROOT, "src/surfaces/field.ts"), "utf8");
     expect(fieldSrc).not.toMatch(/consent\.dnc/);
     expect(fieldSrc).toMatch(/avoidFactsFromBinding/);
+    expect(fieldSrc).toMatch(/recordKindsFromBinding/);
     expect(fieldSrc).toMatch(/verb\.AVOIDS/);
     expect(fieldSrc).toMatch(/kind\.AVOIDS/);
+    expect(fieldSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
 
     const home = await field.home();
     expect(home.journeyKinds.map((k) => k.id)).toEqual(pack.binding.journeyKinds.map((k) => k.id));
@@ -397,6 +413,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(home.avoidFacts.find((f) => f.id === "consent.dnc")?.label).toBe(
       pack.binding.fieldLanguageMap["consent.dnc"] ?? "consent.dnc",
     );
+    expect(home.records).toEqual([]);
+    expect(home.recordKinds.map((k) => k.id)).toEqual([
+      ...pack.binding.recordPartyKnowledge.recordKinds,
+      ...pack.binding.recordPartyKnowledge.partyKinds,
+    ]);
+    expect(home.recordKinds.every((k) => k.id && k.label)).toBe(true);
     const communicateRequires = pack.binding.actionClassVerbs.find((v) => v.id === "communicate")
       ?.REQUIRES;
     expect(communicateRequires?.some((id) => id.startsWith("purpose."))).toBe(true);
@@ -406,18 +428,25 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(done.journey.journeyKind).toBe("buyer");
     expect(done.effect.executed).toBe(true);
     expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+      expect.arrayContaining(["journey.buyer"]),
     );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain("purpose.follow-up");
+    const subject = (await field.home()).records[0];
+    expect(subject?.id).toMatch(/^rec_/);
+    expect(new FactBook(dir).presentIds(tenantId, subject!.id)).toEqual(["purpose.follow-up"]);
     for (const id of collectAvoidFactIds(pack.binding)) {
       expect(new FactBook(dir).presentIds(tenantId)).not.toContain(id);
+      expect(new FactBook(dir).presentIds(tenantId, subject!.id)).not.toContain(id);
     }
 
     // Same POSTs the page script issues: record/retract then existing card approve.
     const paths = computerRoot(dir, tenantId);
+    expect(existsSync(paths.recordsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
     const recordCardId = await field.requestFactCard(REQUIRED);
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+      expect.arrayContaining(["journey.buyer"]),
     );
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
     const recorded = await field.approve(recordCardId);
@@ -425,7 +454,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual(
       expect.arrayContaining([
         { id: "journey.buyer" },
-        { id: "purpose.follow-up" },
+        { id: "purpose.follow-up", recordId: subject!.id },
         { id: REQUIRED },
       ]),
     );
@@ -433,12 +462,12 @@ describe("field HTTP surface against pinned alphavector-re", () => {
 
     const retractCardId = await field.requestFactCard(REQUIRED, "retract");
     expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining([REQUIRED, "journey.buyer", "purpose.follow-up"]),
+      expect.arrayContaining([REQUIRED, "journey.buyer"]),
     );
     const retracted = await field.approve(retractCardId);
     expect(retracted.fact).toEqual({ id: REQUIRED, present: false });
     expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+      expect.arrayContaining(["journey.buyer"]),
     );
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
 
@@ -446,7 +475,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     expect(scripted.recorded).toEqual({ id: "demo.fact", present: true });
     expect(scripted.retracted).toEqual({ id: "demo.fact", present: false });
     expect(new FactBook(dir).presentIds(tenantId)).toEqual(
-      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+      expect.arrayContaining(["journey.buyer"]),
     );
     expect(new FactBook(dir).presentIds(tenantId)).not.toContain("demo.fact");
   });
@@ -926,6 +955,104 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       code: "SURFACE_VIOLATION",
     });
     await expect(architect.retract(avoided.id)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    await expect(architect.start(kind.id, `Work this ${kind.label} journey`)).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+  });
+
+  it("creates records through the card path and scopes DNC to the subject", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-records-http-subject-"));
+    const { field, architect, tenantId, pack, url } = await liveField("records-subject", dir);
+    const paths = computerRoot(dir, tenantId);
+    const home = await field.home();
+    const kind = pack.binding.journeyKinds[0];
+    const type = home.recordKinds[0];
+    expect(type?.id).toBeTruthy();
+    expect(type?.id).not.toMatch(/listing_id|person_id|household_id|buyer_id/i);
+    const avoided = communicateAvoidFromHome(home, pack);
+    const purpose = field.communicateRequiresPurpose(home);
+
+    await expect(architect.create(type.id, "A")).rejects.toMatchObject({
+      status: 403,
+      code: "SURFACE_VIOLATION",
+    });
+    const unauthed = await fetch(`${url}/field/records`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ type: type.id, label: "A" }),
+    });
+    expect(unauthed.status).toBe(401);
+
+    const unapproved = await field.requestRecordCard(type.id, "A");
+    expect(unapproved).toMatch(/^card_/);
+    expect(existsSync(paths.recordsFile)).toBe(false);
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+    expect((await field.home()).records).toEqual([]);
+
+    const createdA = await field.approve(unapproved);
+    expect(createdA.record).toMatchObject({ type: type.id, label: "A" });
+    expect(createdA.record?.id).toMatch(/^rec_/);
+    expect(paths.recordsFile).toBe(path.join(dir, "tenants", tenantId, "records.json"));
+    expect(existsSync(paths.recordsFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "records.json"))).toBe(false);
+    expect(JSON.parse(readFileSync(paths.recordsFile, "utf8")).records).toEqual([
+      { id: createdA.record!.id, type: type.id, label: "A" },
+    ]);
+
+    const recA = createdA.record!;
+    const recB = await field.createApprovedRecord(type.id, "B");
+    expect(recB.id).not.toBe(recA.id);
+    expect((await field.home()).records.map((r) => r.id).sort()).toEqual(
+      [recA.id, recB.id].sort(),
+    );
+
+    await field.openApproved(kind.id);
+    await field.recordApprovedFact(purpose.id, recA.id);
+    await field.recordApprovedFact(avoided.id, recA.id);
+    await field.recordApprovedFact(purpose.id, recB.id);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(["journey.buyer"]);
+    expect(new FactBook(dir).presentIds(tenantId, recA.id)).toEqual(
+      expect.arrayContaining([purpose.id, avoided.id]),
+    );
+    expect(new FactBook(dir).presentIds(tenantId, recB.id)).toEqual([purpose.id]);
+    expect(new FactBook(dir).presentIds(tenantId, recB.id)).not.toContain(avoided.id);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(purpose.id);
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(avoided.id);
+
+    const journey = await field.start(kind.id, `Work this ${kind.label} journey`);
+    await expect(
+      field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: recA.id,
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "PREDICATE_CLOSED",
+      message: expect.stringMatching(/AVOIDS present/),
+    });
+
+    try {
+      await field.progress(journey.id, {
+        actionClass: "communicate",
+        channel: "email",
+        purpose: purpose.id.slice("purpose.".length),
+        subject: recB.id,
+      });
+      throw new Error("expected authorization card before execute");
+    } catch (err) {
+      expect(err).toMatchObject({ status: 409, code: "AUTHORIZATION_REQUIRED" });
+      if (!(err instanceof FieldHttpError) || !err.cardId) throw err;
+      const executed = await field.approve(err.cardId);
+      expect(executed.effect?.executed).toBe(true);
+    }
+
+    await expect(architect.record(purpose.id, recA.id)).rejects.toMatchObject({
       status: 403,
       code: "SURFACE_VIOLATION",
     });

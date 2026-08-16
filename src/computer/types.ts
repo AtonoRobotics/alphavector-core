@@ -13,6 +13,8 @@ export interface ComputerPaths {
   fieldTokensFile: string;
   /** Generic tenant facts for pack predicates. Beside cards and tokens, never inside disk/. */
   factsFile: string;
+  /** Generic subject records facts attach to. Beside facts, cards, and tokens, never inside disk/. */
+  recordsFile: string;
 }
 
 export interface TenantComputer {

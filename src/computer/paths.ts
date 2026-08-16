@@ -19,6 +19,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     fieldTokensFile: path.join(root, "field-tokens.json"),
     // Predicate facts. Same reason as secrets, cards, and tokens.
     factsFile: path.join(root, "facts.json"),
+    // Generic subject records. Same reason as facts, cards, and tokens.
+    recordsFile: path.join(root, "records.json"),
   };
 }
 

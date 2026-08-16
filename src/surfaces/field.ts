@@ -9,6 +9,7 @@ import type { GrantBook } from "../grants/store.js";
 import { JourneyRuntime } from "../journeys/runtime.js";
 import { evaluateDeclaredPredicates } from "../packs/predicates.js";
 import type { LoadedPack, PackBinding, PredicateDeclaration, PrincipalKind } from "../packs/types.js";
+import { RecordBook } from "../records/book.js";
 import { AskSurface } from "./ask.js";
 import type {
   FieldAskInput,
@@ -17,11 +18,13 @@ import type {
   FieldHome,
   FieldProgressInput,
   FieldProgressResult,
+  FieldRecordInput,
   FieldStartInput,
 } from "./types.js";
 
 /** Field fact write/retract. Not a pack action class and not an RE type. */
 const FACT_CHANNEL = "facts";
+const RECORD_CHANNEL = "records";
 const FACT_AGENT = "field";
 const PURPOSE_PREFIX = "purpose.";
 
@@ -83,6 +86,27 @@ export function avoidFactsFromBinding(binding: PackBinding): Array<{ id: string;
   return ids.map((id) => ({ id, label: map[id] ?? id }));
 }
 
+/**
+ * Unique record/party kind strings from the loaded pack list.
+ * Does not invent kinds. Label from fieldLanguageMap, else the id.
+ */
+export function recordKindsFromBinding(binding: PackBinding): Array<{ id: string; label: string }> {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  const take = (values: readonly string[] | undefined) => {
+    for (const id of values ?? []) {
+      if (typeof id === "string" && id.length > 0 && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  };
+  take(binding.recordPartyKnowledge?.recordKinds);
+  take(binding.recordPartyKnowledge?.partyKinds);
+  const map = binding.fieldLanguageMap;
+  return ids.map((id) => ({ id, label: map[id] ?? id }));
+}
+
 const FORBIDDEN_FIELD = [
   "model",
   "prompt",
@@ -102,6 +126,7 @@ export class FieldSurface {
     private readonly effects?: EffectExecutor,
     private readonly askSurface: AskSurface = new AskSurface(store),
     private readonly facts: FactBook = new FactBook(),
+    private readonly records: RecordBook = new RecordBook(),
   ) {}
 
   home(tenantId: string, pack?: LoadedPack): FieldHome {
@@ -120,6 +145,8 @@ export class FieldSurface {
         : [],
       purposeFacts: pack ? purposeFactsFromBinding(pack.binding) : [],
       avoidFacts: pack ? avoidFactsFromBinding(pack.binding) : [],
+      records: this.records.list(tenantId),
+      recordKinds: pack ? recordKindsFromBinding(pack.binding) : [],
     };
   }
 
@@ -162,6 +189,7 @@ export class FieldSurface {
       input.pack.tenantId,
       [this.journeyBinding(input.pack, input.journeyKind)],
       input.conditions,
+      this.facts.presentIds(input.pack.tenantId),
     );
     return this.journeys.open(input.pack.tenantId, input.journeyKind, input.objective);
   }
@@ -181,12 +209,21 @@ export class FieldSurface {
     this.assertPackJourneyKind(input.pack, journey.journeyKind);
     const recordedPrefers = this.assertDeclaredPredicates(
       input.pack.tenantId,
-      [
-        this.journeyBinding(input.pack, journey.journeyKind),
-        ...(input.actionClass ? [this.actionBinding(input.pack, input.actionClass)] : []),
-      ],
+      [this.journeyBinding(input.pack, journey.journeyKind)],
       input.conditions,
+      this.facts.presentIds(input.pack.tenantId),
     );
+    if (input.actionClass) {
+      const actionPrefers = this.assertDeclaredPredicates(
+        input.pack.tenantId,
+        [this.actionBinding(input.pack, input.actionClass)],
+        input.conditions,
+        this.actionPresentIds(input.pack.tenantId, input.subject),
+      );
+      for (const prefer of actionPrefers) {
+        if (!recordedPrefers.includes(prefer)) recordedPrefers.push(prefer);
+      }
+    }
 
     if (input.ask) {
       this.ask({ actor: input.actor, pack: input.pack, ...input.ask });
@@ -250,23 +287,63 @@ export class FieldSurface {
   }
 
   /**
+   * Request to create a generic subject record. Issues an owner_instance card.
+   * Does not write records.json until the card is approved.
+   */
+  create(input: FieldRecordInput): void {
+    this.assertActorIsField(input.actor);
+    this.records.list(input.pack.tenantId);
+    if (!input.type) {
+      throw new AvError("RECORD_TYPE_REQUIRED", "Record type is required");
+    }
+    if (!input.label) {
+      throw new AvError("RECORD_LABEL_REQUIRED", "Record label is required");
+    }
+    this.assertFieldSafe(input.type);
+    this.assertFieldSafe(input.label);
+    if (this.cards.wasDenied(input.pack.tenantId, FACT_AGENT, "create", input.label, RECORD_CHANNEL)) {
+      throw new AvError(
+        "DENY_IS_TERMINAL",
+        "Deny is terminal; the same action cannot be silently resubmitted",
+      );
+    }
+    const card = this.cards.issue({
+      tenantId: input.pack.tenantId,
+      kind: "owner_instance",
+      actionClass: "create",
+      agentId: FACT_AGENT,
+      purpose: input.type,
+      subject: input.label,
+      channel: RECORD_CHANNEL,
+      pack: input.pack,
+    });
+    throw new AuthorizationRequiredError(card.cardId, "Authorization card required before record create");
+  }
+
+  /**
    * Persist or retract only after the owner_instance card is approved.
-   * Pending and denied cards do not write. Non-fact cards return undefined
+   * Pending and denied cards do not write. Non-fact/record cards return undefined
    * so communicate approve-then-execute can continue.
    */
   commitApprovedFact(cardId: string): FieldFactResult | undefined {
     const card = this.cards.get(cardId);
-    if (!card || card.channel !== FACT_CHANNEL) return undefined;
+    if (!card || (card.channel !== FACT_CHANNEL && card.channel !== RECORD_CHANNEL)) return undefined;
     if (card.status !== "approved") {
       throw new AvError("CARD_NOT_APPROVED", "Fact write requires an approved card");
     }
+    if (card.channel === RECORD_CHANNEL && card.actionClass === "create") {
+      const record = this.records.put(card.tenantId, { type: card.purpose, label: card.subject });
+      return { id: record.id, present: true };
+    }
+    if (card.channel !== FACT_CHANNEL) return undefined;
+    const recordId = this.records.has(card.tenantId, card.purpose) ? card.purpose : undefined;
     if (card.actionClass === "record") {
-      this.facts.put(card.tenantId, card.subject);
-      return { id: card.subject, present: true };
+      this.facts.put(card.tenantId, card.subject, recordId);
+      return recordId ? { id: card.subject, present: true, recordId } : { id: card.subject, present: true };
     }
     if (card.actionClass === "retract") {
-      this.facts.retract(card.tenantId, card.subject);
-      return { id: card.subject, present: false };
+      this.facts.retract(card.tenantId, card.subject, recordId);
+      return recordId ? { id: card.subject, present: false, recordId } : { id: card.subject, present: false };
     }
     return undefined;
   }
@@ -302,6 +379,12 @@ export class FieldSurface {
       throw new AvError("FACT_ID_REQUIRED", "Fact id is required");
     }
     this.assertFieldSafe(input.id);
+    if (input.recordId) {
+      this.assertFieldSafe(input.recordId);
+      if (!this.records.has(input.pack.tenantId, input.recordId)) {
+        throw new AvError("RECORD_NOT_FOUND", `Unknown record ${input.recordId}`);
+      }
+    }
     if (this.cards.wasDenied(input.pack.tenantId, FACT_AGENT, op, input.id, FACT_CHANNEL)) {
       throw new AvError(
         "DENY_IS_TERMINAL",
@@ -313,7 +396,7 @@ export class FieldSurface {
       kind: "owner_instance",
       actionClass: op,
       agentId: FACT_AGENT,
-      purpose: op,
+      purpose: input.recordId ?? op,
       subject: input.id,
       channel: FACT_CHANNEL,
       pack: input.pack,
@@ -345,18 +428,20 @@ export class FieldSurface {
   }
 
   /**
-   * Present-set is on-disk tenant facts. Request conditions are claims only:
-   * they do not write the store and they do not satisfy REQUIRES or AVOIDS.
+   * Present-set is on-disk facts for the given scope. Request conditions are
+   * claims only: they do not write the store and they do not satisfy REQUIRES
+   * or AVOIDS. Journey eval uses tenant-global facts. Action eval uses the
+   * subject's facts when subject is a record id.
    */
   private assertDeclaredPredicates(
     tenantId: string,
     bindings: PredicateDeclaration[],
     claimed: readonly string[] | undefined,
+    present: readonly string[],
   ): string[] {
     for (const condition of claimed ?? []) {
       this.assertFieldSafe(condition);
     }
-    const present = this.facts.presentIds(tenantId);
     const recordedPrefers: string[] = [];
     for (const binding of bindings) {
       const decision = evaluateDeclaredPredicates(binding, present);
@@ -368,5 +453,12 @@ export class FieldSurface {
       }
     }
     return recordedPrefers;
+  }
+
+  private actionPresentIds(tenantId: string, subject?: string): string[] {
+    if (subject && this.records.has(tenantId, subject)) {
+      return this.facts.presentIds(tenantId, subject);
+    }
+    return this.facts.presentIds(tenantId);
   }
 }

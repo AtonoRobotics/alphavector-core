@@ -1,6 +1,11 @@
 import type { FieldCardView } from "../auth/types.js";
 import type { Journey } from "../data/types.js";
-import type { FieldFactResult, FieldHome, FieldProgressResult } from "../surfaces/types.js";
+import type {
+  FieldFactResult,
+  FieldHome,
+  FieldProgressResult,
+  FieldRecordResult,
+} from "../surfaces/types.js";
 
 export interface FieldProgressBody {
   note?: string;
@@ -28,6 +33,14 @@ export interface FieldStartBody {
 /** Generic fact id. Pack-local string; not an RE type. */
 export interface FieldFactBody {
   id: string;
+  /** Subject record id. Absent = tenant-global. */
+  recordId?: string;
+}
+
+/** Generic record create. type is a pack string or a field-supplied label. */
+export interface FieldRecordBody {
+  type: string;
+  label: string;
 }
 
 export interface FieldApproveResult {
@@ -35,6 +48,7 @@ export interface FieldApproveResult {
   journey?: Journey;
   effect?: FieldProgressResult["effect"];
   fact?: FieldFactResult;
+  record?: FieldRecordResult;
 }
 
 export interface FieldHttpErrorBody {

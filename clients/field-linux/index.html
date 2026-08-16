@@ -28,7 +28,7 @@
 <body>
   <main>
     <h1>AV Dev Field</h1>
-    <p class="lead">Required field path. Open a pack journey, record a pack purpose, record or retract a pack avoid, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
+    <p class="lead">Required field path. Create a record, open a pack journey, record a pack purpose or avoid on the selected record, start it, record or retract a fact, then approve or deny a card. Architect is not on this surface.</p>
     <div id="status"></div>
 
     <section>
@@ -51,6 +51,18 @@
     <section>
       <h2>Started journeys</h2>
       <ul id="journeys"></ul>
+    </section>
+
+    <section>
+      <h2>Records</h2>
+      <ul id="records"></ul>
+      <label for="record-type">Type</label>
+      <select id="record-type"></select>
+      <label for="record-type-custom">Or type a label</label>
+      <input id="record-type-custom" autocomplete="off" spellcheck="false" placeholder="Generic type" />
+      <label for="record-label">Label</label>
+      <input id="record-label" autocomplete="off" spellcheck="false" placeholder="Record label" />
+      <button id="create-record" type="button">Create record</button>
     </section>
 
     <section>
@@ -92,6 +104,7 @@
   </main>
   <script>
     const statusEl = document.getElementById("status");
+    let selectedRecordId = "";
 
     function token() {
       return document.getElementById("token").value.trim();
@@ -137,6 +150,25 @@
       renderList("journey-kinds", home.journeyKinds, (k) =>
         `<li><strong>${k.label}</strong><div class="meta">${k.id}</div>
          <button type="button" data-open="${k.id}">Open</button></li>`
+      );
+      const typeSelect = document.getElementById("record-type");
+      if (!typeSelect.options.length) {
+        for (const k of home.recordKinds) {
+          const opt = document.createElement("option");
+          opt.value = k.id;
+          opt.textContent = k.label;
+          typeSelect.appendChild(opt);
+        }
+      }
+      if (home.records.length && !selectedRecordId) {
+        selectedRecordId = home.records[0].id;
+      }
+      if (selectedRecordId && !home.records.some((r) => r.id === selectedRecordId)) {
+        selectedRecordId = home.records[0] ? home.records[0].id : "";
+      }
+      renderList("records", home.records, (r) =>
+        `<li><strong>${r.label}</strong><div class="meta">${r.type} · ${r.id}</div>
+         <button type="button" data-select-record="${r.id}">${r.id === selectedRecordId ? "Selected" : "Select"}</button></li>`
       );
       renderList("purpose-facts", home.purposeFacts, (p) =>
         `<li><strong>${p.label}</strong><div class="meta">${p.id}</div>
@@ -186,9 +218,13 @@
       }
     };
 
-    async function requestFactCard(id, path) {
+    function selectedRecord() {
+      return selectedRecordId || undefined;
+    }
+
+    async function requestFactCard(id, path, recordId) {
       try {
-        await api("POST", path, { id: id });
+        await api("POST", path, recordId ? { id: id, recordId: recordId } : { id: id });
         setStatus("Fact request completed without a card");
       } catch (err) {
         if (err.cardId) setStatus("Card required: " + err.cardId);
@@ -198,8 +234,26 @@
     }
 
     async function requestFact(path) {
-      await requestFactCard(document.getElementById("fact-id").value.trim(), path);
+      await requestFactCard(document.getElementById("fact-id").value.trim(), path, selectedRecord());
     }
+
+    document.getElementById("create-record").onclick = async () => {
+      try {
+        const custom = document.getElementById("record-type-custom").value.trim();
+        const type = custom || document.getElementById("record-type").value;
+        const label = document.getElementById("record-label").value.trim();
+        try {
+          await api("POST", "/field/records", { type: type, label: label });
+          setStatus("Record create completed without a card");
+        } catch (err) {
+          if (err.cardId) setStatus("Card required: " + err.cardId);
+          else throw err;
+        }
+        await refresh();
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    };
 
     document.getElementById("record").onclick = async () => {
       try {
@@ -252,9 +306,15 @@
           }
           return;
         }
+        if (t.dataset.selectRecord) {
+          selectedRecordId = t.dataset.selectRecord;
+          setStatus("Selected record " + selectedRecordId);
+          await refresh();
+          return;
+        }
         if (t.dataset.purpose) {
           try {
-            await requestFactCard(t.dataset.purpose, "/field/facts");
+            await requestFactCard(t.dataset.purpose, "/field/facts", selectedRecord());
           } catch (err) {
             setStatus(err.message, true);
           }
@@ -262,7 +322,7 @@
         }
         if (t.dataset.avoidRetract) {
           try {
-            await requestFactCard(t.dataset.avoidRetract, "/field/facts/retract");
+            await requestFactCard(t.dataset.avoidRetract, "/field/facts/retract", selectedRecord());
           } catch (err) {
             setStatus(err.message, true);
           }
@@ -270,7 +330,7 @@
         }
         if (t.dataset.avoid) {
           try {
-            await requestFactCard(t.dataset.avoid, "/field/facts");
+            await requestFactCard(t.dataset.avoid, "/field/facts", selectedRecord());
           } catch (err) {
             setStatus(err.message, true);
           }
@@ -282,7 +342,7 @@
               actionClass: "communicate",
               channel: "email",
               purpose: "follow-up",
-              subject: t.dataset.kind,
+              subject: selectedRecord() || t.dataset.kind,
             });
             setStatus("Progressed without a card");
           } catch (err) {
@@ -293,6 +353,7 @@
         }
         if (t.dataset.approve) {
           const out = await api("POST", "/field/cards/" + t.dataset.approve + "/approve");
+          if (out.record && out.record.id) selectedRecordId = out.record.id;
           setStatus(out.effect && out.effect.executed ? "Approved and executed" : "Approved");
           await refresh();
         }
