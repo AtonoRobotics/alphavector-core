@@ -15,6 +15,7 @@ export * from "./connector-bind.js";
 export * from "./connector-credentials.js";
 export * from "./connector-world.js";
 export * from "./vendor-think.js";
+export * from "./sdk-think.js";
 export * from "./deep-agents.js";
 export * from "./stem.js";
 export * from "./kernel.js";
