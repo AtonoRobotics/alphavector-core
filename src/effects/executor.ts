@@ -19,6 +19,11 @@ export interface EffectInput {
   approvedCardId?: string;
   claimedAuthorityFromMail?: boolean;
   assumedRoutineAutonomy?: boolean;
+  /**
+   * Habitat sets false, invokes the live connector, then commitExternal.
+   * Default true keeps FieldSurface.progress ledger-only (leftover).
+   */
+  recordExecution?: boolean;
 }
 
 export interface EffectResult {
@@ -127,11 +132,23 @@ export class EffectExecutor {
       }
     }
 
-    this.store.updateAction(action.id, "executed");
+    if (input.recordExecution === false) {
+      return { actionId: action.id, executed: false, policyDecision: policy.reason };
+    }
+    return this.commitExternal(action.id, input, policy.reason);
+  }
+
+  /**
+   * Persist executed only after the habitat reached the world.
+   * Admission without a world call must not use this.
+   */
+  commitExternal(actionId: string, input: EffectInput, policyDecision: string): EffectResult {
+    const grantState = this.grants.state(input.pack.tenantId, input.agent.agentId, input.actionClass);
+    this.store.updateAction(actionId, "executed");
     this.store.addEvidence({
       tenantId: input.pack.tenantId,
       kind: "external_effect",
-      payload: { actionId: action.id, policy: policy.reason, grantState },
+      payload: { actionId, policy: policyDecision, grantState },
       producedBy: input.agent.agentId,
     });
     this.store.addInteraction(
@@ -140,6 +157,6 @@ export class EffectExecutor {
       [input.agent.agentId],
       `${input.actionClass} executed`,
     );
-    return { actionId: action.id, executed: true, policyDecision: policy.reason };
+    return { actionId, executed: true, policyDecision };
   }
 }

@@ -96,7 +96,7 @@ async function main(): Promise<void> {
         "bind-routine writes tenants/{id}/routines.json. Field cannot author routines. Temporal is not the bus.",
       );
       console.log(
-        "bind-connector writes tenants/{id}/connector-bind.json. Field cannot bind, see, or edit. Temporal is not the bus.",
+        "bind-connector writes tenants/{id}/connector-bind.json including optional --base-url. Field cannot bind, see, or edit. Temporal is not the bus.",
       );
       console.log(
         "set-connector-credentials writes tenants/{id}/connector-credentials.json. Not on the bind. Field cannot set credentials.",
@@ -181,12 +181,19 @@ async function main(): Promise<void> {
         tenantId,
         connectorId,
         requiresCredentials: flags.includes("--requires-credentials"),
+        baseUrl: flag(flags, "--base-url"),
         computerBaseDir: dir,
         architectToken,
       });
       console.log(
         JSON.stringify(
-          { ok: true, tenantId: bound.tenantId, connectorId: bound.connectorId, boundBy: bound.boundBy },
+          {
+            ok: true,
+            tenantId: bound.tenantId,
+            connectorId: bound.connectorId,
+            boundBy: bound.boundBy,
+            ...(bound.baseUrl ? { baseUrl: bound.baseUrl } : {}),
+          },
           null,
           2,
         ),

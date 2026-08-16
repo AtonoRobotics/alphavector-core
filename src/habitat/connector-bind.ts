@@ -16,6 +16,8 @@ export interface ConnectorBindRecord {
   boundBy: "architect";
   boundAt: string;
   requiresCredentials: boolean;
+  /** World URL. Same class as adapter vendorBaseUrl. Not a credential. Not field-writable. */
+  baseUrl?: string;
 }
 
 export interface TenantConnectorBindStore {
@@ -117,12 +119,21 @@ function parseBind(raw: unknown): ConnectorBindRecord {
   ) {
     throw new AvError("CONNECTOR_STORE_CORRUPT", "Connector store is corrupt; refusing to invent a bind");
   }
+  let baseUrl: string | undefined;
+  if ("baseUrl" in raw) {
+    if (typeof raw.baseUrl !== "string") {
+      throw new AvError("CONNECTOR_STORE_CORRUPT", "Connector store is corrupt; refusing to invent a bind");
+    }
+    const trimmed = raw.baseUrl.trim();
+    if (trimmed) baseUrl = trimmed;
+  }
   return {
     connectorId: raw.connectorId.trim(),
     tenantId: raw.tenantId,
     boundBy: "architect",
     boundAt: raw.boundAt,
     requiresCredentials: raw.requiresCredentials === true,
+    ...(baseUrl ? { baseUrl } : {}),
   };
 }
 

@@ -50,6 +50,14 @@ import {
   signedGenericPackMutated,
   signedRePackMutated,
 } from "./helpers.js";
+import {
+  bindWorldConnector,
+  bindWorldForPack,
+  closeWorldHttp,
+  startWorldDouble,
+  useWorldHttp,
+  WORLD_FIXTURE_SECRET,
+} from "./world-double.js";
 
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const VENDOR_FIXTURE_KEY = "av-vcr-vendor-fixture-key";
@@ -250,6 +258,7 @@ afterEach(async () => {
   resetDeepAgentsInvocations();
   reapHeldCoders();
   delete process.env[VENDOR_BASE_URL_ENV];
+  await closeWorldHttp();
   while (vendorDoubles.length) {
     await vendorDoubles.pop()?.close();
   }
@@ -277,6 +286,20 @@ async function habitatStack(tenantId = "t1") {
     agents,
     record,
   };
+}
+
+async function habitatStackWithWorld(tenantId = "t1") {
+  const stack = await habitatStack(tenantId);
+  const world = await useWorldHttp();
+  const architect = stack.core.fieldTokens.issue({ tenantId, principal: "architect" });
+  bindWorldForPack({
+    tenantId,
+    computerBaseDir: stack.computerBaseDir,
+    architectToken: architect.token,
+    pack: stack.pack,
+    baseUrl: world.url,
+  });
+  return { ...stack, world, architectToken: architect.token };
 }
 
 async function habitatThinkStack(
@@ -341,6 +364,27 @@ async function liveField(
     url,
     server,
   };
+}
+
+async function liveFieldWithWorld(
+  tenantId: string,
+  computerBaseDir: string,
+  issued?: { field: string; architect?: string },
+  adapter: CognitiveAdapter = new DryStemAdapter(),
+) {
+  const stack = await liveField(tenantId, computerBaseDir, issued, adapter);
+  const world = await useWorldHttp();
+  const architectToken =
+    stack.architectToken ??
+    stack.core.fieldTokens.issue({ tenantId, principal: "architect" }).token;
+  bindWorldForPack({
+    tenantId,
+    computerBaseDir,
+    architectToken,
+    pack: stack.pack,
+    baseUrl: world.url,
+  });
+  return { ...stack, world, architectToken };
 }
 
 function runArchitectCli(
@@ -537,7 +581,7 @@ describe("D10 §6 habitat kernel", () => {
   });
 
   it("worker_done wakes ops and one card is required for one external effect", async () => {
-    const { core, pack, tenantId, record } = await habitatStack();
+    const { core, pack, tenantId, record } = await habitatStackWithWorld();
     const started = await core.habitat.wake({
       kind: "field_start",
       tenantId,
@@ -593,7 +637,7 @@ describe("D10 §6 habitat kernel", () => {
   });
 
   it("approve resumes the same run id on disk", async () => {
-    const { core, pack, tenantId, record } = await habitatStack();
+    const { core, pack, tenantId, record } = await habitatStackWithWorld();
     const started = await core.habitat.wake({
       kind: "field_start",
       tenantId,
@@ -1056,7 +1100,7 @@ describe("D10 §6 habitat disk memory", () => {
 describe("D10 §6 field verbs", () => {
   it("field card approve resumes the habitat run; deny is terminal", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-card-"));
-    const { core, pack, field } = await liveField("t1", dir);
+    const { core, pack, field } = await liveFieldWithWorld("t1", dir);
     const rec = core.records.put("t1", {
       type: pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record",
       label: "Subject",
@@ -1190,7 +1234,7 @@ describe("D10 §6 field verbs", () => {
 
   it("POST field start distinct goal B is allowed after the first run is terminal", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-next-goal-"));
-    const { core, field } = await liveField("t1", dir);
+    const { core, field } = await liveFieldWithWorld("t1", dir);
     await createOpenStart(field, "buyer", "Work this buyer journey");
     const runA = core.habitat.getRun("t1")!.runId;
     const workerA = core.habitat.getRun("t1")!.workerId;
@@ -1236,7 +1280,7 @@ describe("D10 §6 field verbs", () => {
 
   it("approve via field card resumes the same run id from HTTP start", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-approve-"));
-    const { core, field } = await liveField("t1", dir);
+    const { core, field } = await liveFieldWithWorld("t1", dir);
     await createOpenStart(field, "buyer", "Work this buyer journey");
     const runId = core.habitat.getRun("t1")!.runId;
     const cardId = core.habitat.getRun("t1")!.pendingCardId!;
@@ -1395,7 +1439,7 @@ describe("D10 §6 field verbs", () => {
 
   it("field approve after HTTP start and restart completes the same run and clears the book", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-approve-restart-"));
-    const first = await liveField("t1", dir);
+    const first = await liveFieldWithWorld("t1", dir);
     await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const runId = first.core.habitat.getRun("t1")!.runId;
     const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
@@ -1524,7 +1568,7 @@ describe("D10 §6 field verbs", () => {
 
   it("field approve after same-id relaunch completes the same run and clears the book", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-relaunch-approve-"));
-    const first = await liveField("t1", dir);
+    const first = await liveFieldWithWorld("t1", dir);
     const started = await createOpenStart(first.field, "buyer", "Work this buyer journey");
     const runId = first.core.habitat.getRun("t1")!.runId;
     const cardId = first.core.habitat.getRun("t1")!.pendingCardId!;
@@ -4471,3 +4515,360 @@ describe("D10 connector wakes", () => {
     expect(orch.agentId).toBeDefined();
   });
 });
+
+describe("HK-073 approved external effect calls the world", () => {
+  it("keeps the RE fixture pin at 5091328 and does not hardcode a public vendor host", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const worldSrc = readFileSync(path.join(process.cwd(), "src/habitat/connector-world.ts"), "utf8");
+    const bindSrc = readFileSync(path.join(process.cwd(), "src/habitat/connector-bind.ts"), "utf8");
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(worldSrc).toMatch(/invokeConnectorWorld/);
+    expect(worldSrc).toMatch(/LiveConnectorHandle/);
+    expect(worldSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+    expect(bindSrc).toMatch(/baseUrl\?: string/);
+    expect(bindSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+    expect(kernelSrc).toMatch(/invokeConnectorWorld/);
+    expect(kernelSrc).toMatch(/recordExecution: false/);
+    expect(cliSrc).toMatch(/--base-url/);
+    expect(cliSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com/);
+    const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/HomeView.swift"), "utf8");
+    expect(ios).not.toMatch(/connector/i);
+  });
+
+  it("approved card POSTs the live handle to the Architect URL and only then writes executed", async () => {
+    const { core, pack, tenantId, record, world } = await habitatStackWithWorld();
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    expect(world.requests).toHaveLength(0);
+    expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    const approved = await core.habitat.wake({
+      kind: "card_decide",
+      tenantId,
+      pack,
+      cardId: started.cardId,
+      decision: "approved",
+    });
+    expect(approved.effect?.executed).toBe(true);
+    expect(world.requests).toHaveLength(1);
+    expect(world.requests[0]?.method).toBe("POST");
+    expect(world.requests[0]?.authorization).toBe(`Bearer ${WORLD_FIXTURE_SECRET}`);
+    const body = world.requests[0]?.body as { handleId?: string; connectorId?: string; actionClass?: string };
+    expect(body.handleId).toBe("handle:webhook");
+    expect(body.connectorId).toBe("webhook");
+    expect(body.actionClass).toBe("communicate");
+    expect(JSON.stringify(body)).not.toContain(WORLD_FIXTURE_SECRET);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(true);
+  });
+
+  it("unbound approved effect is CONNECTOR_UNBOUND and does not write executed", async () => {
+    const { core, pack, tenantId, record } = await habitatStack();
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    await expect(
+      core.habitat.wake({
+        kind: "card_decide",
+        tenantId,
+        pack,
+        cardId: started.cardId,
+        decision: "approved",
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_UNBOUND", closed: true });
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("missing required credentials fail closed and do not call the world", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const world = await useWorldHttp();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    architectBindConnector({
+      tenantId,
+      connectorId: "webhook",
+      computerBaseDir,
+      architectToken: architect.token,
+      baseUrl: world.url,
+      requiresCredentials: true,
+    });
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    await expect(
+      core.habitat.wake({
+        kind: "card_decide",
+        tenantId,
+        pack,
+        cardId: started.cardId,
+        decision: "approved",
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_CREDENTIALS_MISSING", closed: true });
+    expect(world.requests).toHaveLength(0);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("unreachable world is CONNECTOR_UNREACHABLE and does not write executed", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "webhook",
+      baseUrl: "http://127.0.0.1:1",
+    });
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    await expect(
+      core.habitat.wake({
+        kind: "card_decide",
+        tenantId,
+        pack,
+        cardId: started.cardId,
+        decision: "approved",
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_UNREACHABLE", closed: true });
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("world 500 is CONNECTOR_REJECTED and does not write executed", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const world = await startWorldDouble({ status: 500 });
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "webhook",
+      baseUrl: world.url,
+    });
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    await expect(
+      core.habitat.wake({
+        kind: "card_decide",
+        tenantId,
+        pack,
+        cardId: started.cardId,
+        decision: "approved",
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_REJECTED", closed: true });
+    expect(world.requests).toHaveLength(1);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("rejected credentials are CONNECTOR_CREDENTIALS_REJECTED and do not write executed", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const world = await startWorldDouble({ rejectAuth: true });
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    bindWorldConnector({
+      tenantId,
+      computerBaseDir,
+      architectToken: architect.token,
+      connectorId: "webhook",
+      baseUrl: world.url,
+    });
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    await expect(
+      core.habitat.wake({
+        kind: "card_decide",
+        tenantId,
+        pack,
+        cardId: started.cardId,
+        decision: "approved",
+      }),
+    ).rejects.toMatchObject({ code: "CONNECTOR_CREDENTIALS_REJECTED", closed: true });
+    expect(world.requests).toHaveLength(1);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("denied card is terminal and does not call the world", async () => {
+    const { core, pack, tenantId, record, world } = await habitatStackWithWorld();
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId,
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "denied", actor: "field" });
+    const denied = await core.habitat.wake({
+      kind: "card_decide",
+      tenantId,
+      pack,
+      cardId: started.cardId,
+      decision: "denied",
+    });
+    expect(denied.run?.status).toBe("denied");
+    expect(denied.effect).toBeUndefined();
+    expect(world.requests).toHaveLength(0);
+    expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
+  });
+
+  it("field cannot bind the connector, set credentials, or fire it as Architect", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-world-field-"));
+    const { field, fieldToken, url, architectToken } = await liveField("t1", dir);
+    expect(() =>
+      architectBindConnector({
+        tenantId: "t1",
+        connectorId: "webhook",
+        computerBaseDir: dir,
+        architectToken: fieldToken,
+        baseUrl: "http://127.0.0.1:9",
+      }),
+    ).toThrow(/cannot bind|field token|connector/i);
+    const fieldCli = runArchitectCli(
+      [
+        "architect",
+        "bind-connector",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "webhook",
+        "--base-url",
+        "http://127.0.0.1:9",
+        "--architect-token",
+        fieldToken,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(fieldCli.status).not.toBe(0);
+    expect(`${fieldCli.stdout}\n${fieldCli.stderr}`).toMatch(/cannot bind|field token|connector/i);
+    const blocked = await fetch(`${url}/field/connectors`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ connectorId: "webhook", baseUrl: "http://127.0.0.1:9" }),
+    });
+    expect(blocked.status).toBe(403);
+    const fire = await fetch(`${url}/field/connector-world`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ connectorId: "webhook" }),
+    });
+    expect(fire.status).toBe(403);
+    expect(existsSync(computerRoot(dir, "t1").connectorBindFile)).toBe(false);
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/baseUrl|bind-connector|connector-world/i);
+    expect(architectToken).toBeDefined();
+  });
+
+  it("Architect CLI --base-url writes the live URL on connector-bind.json; field still cannot", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-world-cli-"));
+    const { core, pack, architectToken, fieldToken } = await liveField("t1", dir);
+    const record = core.records.put("t1", {
+      type: pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record",
+      label: "Subject",
+    });
+    const world = await useWorldHttp();
+    const out = runArchitectCli(
+      [
+        "architect",
+        "bind-connector",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "mls",
+        "--base-url",
+        world.url,
+        "--requires-credentials",
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(out.status).toBe(0);
+    expect(out.stdout).toMatch(/"connectorId": "mls"/);
+    expect(out.stdout).toContain(world.url);
+    const creds = runArchitectCli(
+      [
+        "architect",
+        "set-connector-credentials",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "mls",
+        "--secret",
+        WORLD_FIXTURE_SECRET,
+        "--architect-token",
+        architectToken!,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(creds.status).toBe(0);
+    expect(creds.stdout).not.toContain(WORLD_FIXTURE_SECRET);
+    const started = await core.habitat.wake({
+      kind: "field_start",
+      tenantId: "t1",
+      pack,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
+    const approved = await core.habitat.wake({
+      kind: "card_decide",
+      tenantId: "t1",
+      pack,
+      cardId: started.cardId,
+      decision: "approved",
+    });
+    expect(approved.effect?.executed).toBe(true);
+    expect(world.requests).toHaveLength(1);
+    const fieldCli = runArchitectCli(
+      [
+        "architect",
+        "bind-connector",
+        "--tenant",
+        "t1",
+        "--connector-id",
+        "email",
+        "--base-url",
+        world.url,
+        "--architect-token",
+        fieldToken,
+      ],
+      { computerBaseDir: dir },
+    );
+    expect(fieldCli.status).not.toBe(0);
+  });
+});
+
