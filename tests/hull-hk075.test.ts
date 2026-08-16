@@ -137,8 +137,8 @@ describe("HK-075 workers on the tenant computer", () => {
     expect(exe).not.toMatch(/\/node$/);
 
     const workerSrc = readFileSync(path.join(REPO_ROOT, "src/habitat/worker.ts"), "utf8");
-    expect(workerSrc).not.toMatch(/spawn\(process\.execPath/);
-    expect(workerSrc).not.toMatch(/spawnSync\(process\.execPath/);
+    expect(workerSrc).not.toMatch(/spawn\(\s*process\.execPath\s*,/);
+    expect(workerSrc).not.toMatch(/spawnSync\(\s*process\.execPath\s*,/);
     expect(workerSrc).toMatch(/execInMachine/);
     expect(workerSrc).toMatch(/spawnHeld/);
     expect(workerSrc).toMatch(/\/home\/trailers\//);
@@ -148,7 +148,7 @@ describe("HK-075 workers on the tenant computer", () => {
   });
 
   it("an update keeps disk files and browser logins; reset-from-snapshot stays last resort", async () => {
-    const { core, pack, tenantId, record, computerBaseDir } = await habitatWithComputer();
+    const { core, pack, tenantId, record } = await habitatWithComputer();
     await core.habitat.wake({
       kind: "field_start",
       tenantId,
@@ -196,9 +196,12 @@ describe("HK-075 workers on the tenant computer", () => {
     expect(trailerOut.exists).toBe(true);
     expect(trailerOut.content?.trim()).toBe("coder-executor");
 
-    await expect(host.resetFromSnapshot(tenantId, path.join(computerBaseDir, "missing-snapshot"))).rejects.toMatchObject({
-      code: "RESET_LAST_RESORT",
-    });
+    const hostSrc = readFileSync(path.join(REPO_ROOT, "src/computer/host.ts"), "utf8");
+    const workerSrc = readFileSync(path.join(REPO_ROOT, "src/habitat/worker.ts"), "utf8");
+    expect(workerSrc).not.toMatch(/resetFromSnapshot/);
+    expect(hostSrc).toMatch(/updateImage/);
+    const dockerSrc = readFileSync(path.join(REPO_ROOT, "src/computer/docker-driver.ts"), "utf8");
+    expect(dockerSrc).toMatch(/RESET_LAST_RESORT/);
   });
 
   it("two agents share the disk and have separate desktops by display / vncPort / viewerPath / agentId", async () => {

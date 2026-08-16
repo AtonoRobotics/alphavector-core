@@ -152,7 +152,7 @@ export interface ComputerDriver {
   shell(req: ShellRequest): Promise<ShellResult>;
   /**
    * Run argv inside the tenant machine. Does not open a desktop.
-   * Worker execution uses this, not a host `spawn(process.execPath)`.
+   * Worker execution uses this, not a host Node child of the kernel.
    */
   execInMachine(req: ShellRequest): Promise<ShellResult>;
   /**

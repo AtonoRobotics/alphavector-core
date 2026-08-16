@@ -1,4 +1,4 @@
-import { execFileSync, type ChildProcess } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentRecord } from "../agents/types.js";
@@ -21,7 +21,7 @@ ${hold ? "while true; do sleep 2147483647; done\n" : ""}`;
  * Thin coder worker: executor + branch on the tenant computer.
  * Habitat owns the coder type. Trailer isolation is torn down on worker_done / kill.
  * The process runs inside the tenant machine (computer.execInMachine / spawnHeld).
- * Not in the kernel process. Not a host `spawn(process.execPath)`.
+ * Not in the kernel process. Not a host Node child of the kernel.
  */
 export interface TenantWorkerStore {
   workers: WorkerRecord[];
@@ -121,17 +121,9 @@ export class WorkerBook {
     if (!worker) return;
     if (worker.pid) {
       forgetHeldCoder(worker.pid);
-      try {
-        process.kill(worker.pid, "SIGTERM");
-      } catch {
-        try {
-          process.kill(-worker.pid, "SIGTERM");
-        } catch {
-          // already gone
-        }
-      }
+      terminatePid(worker.pid);
     }
-    rmSync(worker.trailerPath, { recursive: true, force: true });
+    removeTrailer(worker.trailerPath);
     this.workers.delete(tenantId);
     this.persist(tenantId);
   }
@@ -328,7 +320,6 @@ function parseAgent(raw: unknown, tenantId: string): AgentRecord {
   };
 }
 
-const heldCoders = new Set<ChildProcess>();
 const heldPids = new Set<number>();
 
 function rememberHeldPid(pid: number): void {
@@ -337,41 +328,57 @@ function rememberHeldPid(pid: number): void {
 
 function forgetHeldCoder(pid: number): void {
   heldPids.delete(pid);
-  for (const child of heldCoders) {
-    if (child.pid === pid) heldCoders.delete(child);
+}
+
+/** Signal the host-visible handle (unshare / docker exec). Do not kill the process group. */
+function terminatePid(pid: number): void {
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    // already gone
+  }
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline && isPidAlive(pid)) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  if (isPidAlive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // already gone
+    }
+    const hard = Date.now() + 1000;
+    while (Date.now() < hard && isPidAlive(pid)) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+}
+
+function removeTrailer(trailerPath: string): void {
+  const deadline = Date.now() + 2000;
+  let last: unknown;
+  while (Date.now() < deadline) {
+    try {
+      rmSync(trailerPath, { recursive: true, force: true });
+      if (!existsSync(trailerPath)) return;
+    } catch (err) {
+      last = err;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  try {
+    rmSync(trailerPath, { recursive: true, force: true });
+  } catch (err) {
+    throw last ?? err;
   }
 }
 
 /** SIGTERM leftover held coder children. Tests use this so HTTP-start hold does not leak. */
 export function reapHeldCoders(): void {
   for (const pid of [...heldPids]) {
-    if (isPidAlive(pid)) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        try {
-          process.kill(-pid, "SIGTERM");
-        } catch {
-          // already gone
-        }
-      }
-    }
+    terminatePid(pid);
   }
   heldPids.clear();
-  for (const child of [...heldCoders]) {
-    if (child.pid && isPidAlive(child.pid)) {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        try {
-          process.kill(child.pid, "SIGTERM");
-        } catch {
-          // already gone
-        }
-      }
-    }
-  }
-  heldCoders.clear();
 }
 
 /** Live only if the pid is running and not a zombie. Directory presence is irrelevant. */
