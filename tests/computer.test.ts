@@ -306,9 +306,7 @@ describe("tenant disk containment", () => {
     });
     await expect(resolveInsideDisk(disk, "leave")).rejects.toBeInstanceOf(ComputerError);
 
-    expect(() => {
-      void resolveInsideDisk(disk, "../outside.txt");
-    }).toThrow(/Refusing path/);
+    await expect(resolveInsideDisk(disk, "../outside.txt")).rejects.toThrow(/Refusing path/);
   });
 
   it("docker driver readFile uses the same containment check", async () => {
