@@ -10,6 +10,15 @@ import { readTenantAdapterBind } from "./adapter-bind.js";
 import { readTenantAdapterCredentials } from "./adapter-credentials.js";
 import { DeepAgentsAdapter } from "./deep-agents.js";
 import { HabitatMemoryStore } from "./memory-store.js";
+import {
+  findStoredRoutine,
+  isRoutineDue,
+  readTenantRoutines,
+  routinesFile,
+  saveRoutineStore,
+  upsertRoutine,
+  type RoutineRecord,
+} from "./routine-store.js";
 import { RunStore } from "./run-store.js";
 import { writeSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
@@ -124,6 +133,9 @@ export class HabitatKernel {
     if (event.kind === "field_ask") {
       return this.fieldAsk(event, decision);
     }
+    if (event.kind === "routine") {
+      return this.routineWake(event, pack, decision, until, opts?.holdWorker === true);
+    }
     if (event.kind !== "field_start") {
       const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
       this.wakeLog.append({
@@ -146,12 +158,128 @@ export class HabitatKernel {
     return this.fieldStart(event, pack, decision, until, opts?.holdWorker === true);
   }
 
+  /**
+   * Fire stored routines that are due. Reads tenants/{id}/routines.json only.
+   * Pack declaration is not live. Missing file is empty (no invent).
+   * Corrupt store fails closed. Each due routine calls wake({ kind: "routine" }).
+   * Not a workflow-engine bus and not field-configured.
+   */
+  fireDue(tenantId: string, opts?: { now?: string; holdWorker?: boolean; pack?: LoadedPack }): WakeResult[] {
+    const store = readTenantRoutines(this.opts.computerBaseDir, tenantId);
+    const now = opts?.now ?? nowIso();
+    const pack = opts?.pack ?? this.packs.get(tenantId);
+    const due = store.routines.filter((row) => row.tenantId === tenantId && isRoutineDue(row, now));
+    const results: WakeResult[] = [];
+    let next = store;
+    for (const routine of due) {
+      const result = this.wake(
+        {
+          kind: "routine",
+          tenantId,
+          pack,
+          goal: routine.goal,
+          routineId: routine.routineId,
+          journeyId: routine.journeyId,
+          recordId: routine.recordId,
+        },
+        { holdWorker: opts?.holdWorker !== false },
+      );
+      next = upsertRoutine(next, { ...routine, lastFiredAt: now });
+      if (this.opts.computerBaseDir) {
+        saveRoutineStore(routinesFile(this.opts.computerBaseDir, tenantId), next);
+      }
+      results.push(result);
+    }
+    return results;
+  }
+
   replay(tenantId: string): ReturnType<typeof replayWakeLog> {
     if (this.opts.computerBaseDir) {
       return replayWakeLogFromDisk(this.opts.computerBaseDir, tenantId);
     }
     const run = this.runs.get(tenantId);
     return replayWakeLog(this.wakeLog.list(tenantId), { runs: run ? [run] : [] });
+  }
+
+  /**
+   * Due routine: load the stored routine (do not invent), inject labeled memory,
+   * attach to the open run or start one goal if none is open. ONE_GOAL if the
+   * routine's goal is distinct from the open run.
+   */
+  private routineWake(
+    event: WakeEvent,
+    pack: LoadedPack | undefined,
+    decision: ReturnType<typeof stem>,
+    until: "talking" | "card" | "done",
+    holdWorker: boolean,
+  ): WakeResult {
+    const stored = this.requireStoredRoutine(event);
+    const goal = event.goal ?? stored.goal;
+    const existing = this.runs.get(event.tenantId);
+    if (existing && !isTerminal(existing.status)) {
+      if (goal !== existing.goal) {
+        throw new AvError("ONE_GOAL", "Orchestrator SHALL dispatch one goal at a time");
+      }
+      return this.attachRoutine(event, stored, existing, decision);
+    }
+    return this.fieldStart(
+      { ...event, kind: "routine", goal, journeyId: event.journeyId ?? stored.journeyId, recordId: event.recordId ?? stored.recordId },
+      pack,
+      decision,
+      until,
+      holdWorker,
+    );
+  }
+
+  private attachRoutine(
+    event: WakeEvent,
+    stored: RoutineRecord,
+    run: RunRecord,
+    decision: ReturnType<typeof stem>,
+  ): WakeResult {
+    const creature = this.requireOrchestrator(event.tenantId);
+    const memory = this.injectMemory(event.tenantId, creature.agentId);
+    this.assertLabeled(memory);
+    const resolved = this.requireThinkBind(event.tenantId, event.pack ?? this.packs.get(event.tenantId));
+    const talking = this.adapter.think({
+      pass: "talking",
+      event,
+      run,
+      memory,
+      skills: [],
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    this.validateTalking(talking);
+    this.wakeLog.append({
+      kind: "routine",
+      tenantId: event.tenantId,
+      runId: run.runId,
+      at: nowIso(),
+      decision,
+      detail: { routineId: stored.routineId, attached: true },
+    });
+    return {
+      run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      memory,
+    };
+  }
+
+  private requireStoredRoutine(event: WakeEvent): RoutineRecord {
+    const routineId = event.routineId?.trim();
+    if (!routineId) {
+      throw new AvError("ROUTINE_STORE_MISSING", "Routine wake requires a stored routine; refusing to invent");
+    }
+    const store = readTenantRoutines(this.opts.computerBaseDir, event.tenantId);
+    const found = findStoredRoutine(store, event.tenantId, routineId);
+    if (!found) {
+      throw new AvError("ROUTINE_STORE_MISSING", "Routine is not stored on the tenant computer; refusing to invent");
+    }
+    return found;
   }
 
   /**
@@ -225,12 +353,12 @@ export class HabitatKernel {
         this.workers.get(event.tenantId)?.agent.agentId ?? this.orchestratorId(event.tenantId),
       );
       this.wakeLog.append({
-        kind: "field_start",
+        kind: event.kind,
         tenantId: event.tenantId,
         runId: existing.runId,
         at: nowIso(),
         decision,
-        detail: { followUp: true },
+        detail: { followUp: true, ...(event.routineId ? { routineId: event.routineId } : {}) },
       });
       return {
         run: existing,
@@ -259,12 +387,12 @@ export class HabitatKernel {
             updatedAt: nowIso(),
           });
     this.wakeLog.append({
-      kind: "field_start",
+      kind: event.kind,
       tenantId: event.tenantId,
       runId: run.runId,
       at: nowIso(),
       decision,
-      detail: { goal: event.goal },
+      detail: { goal: event.goal, ...(event.routineId ? { routineId: event.routineId } : {}) },
     });
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
@@ -646,6 +774,6 @@ function isTerminal(status: RunRecord["status"]): boolean {
 }
 
 function defaultUntil(kind: WakeEvent["kind"]): "talking" | "card" | "done" {
-  if (kind === "field_start") return "card";
+  if (kind === "field_start" || kind === "routine") return "card";
   return "done";
 }

@@ -127,6 +127,18 @@ export interface PackAdapterDeclaration {
   defaultModelId?: string;
 }
 
+/**
+ * Optional pack routine declaration (CS-013). Not required to load.
+ * Not live as a due wake until stored on tenants/{id}/routines.json
+ * (same pattern as defaultModelId vs Architect bind).
+ */
+export interface PackRoutineDeclaration {
+  id: string;
+  goal: string;
+  /** Optional. Stored only after Architect or pack materialize. Not a Temporal cron. */
+  dueAt?: string;
+}
+
 export interface PackSignatures {
   architect: string;
   counselEval: string;
@@ -145,6 +157,8 @@ export interface PackBinding {
   fieldLanguageMap: FieldLanguageMap;
   /** Optional. Pack may declare an allow-list or default model id. Not required to load. */
   adapter?: PackAdapterDeclaration;
+  /** Optional. Pack may declare routines. Not live until stored on the tenant computer. */
+  routines?: PackRoutineDeclaration[];
   signatures?: PackSignatures;
 }
 

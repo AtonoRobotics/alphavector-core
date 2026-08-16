@@ -2,7 +2,7 @@ import type { AgentRecord } from "../agents/types.js";
 import type { LoadedPack } from "../packs/types.js";
 import type { StemDecision } from "./stem.js";
 
-/** Wake kinds for this slice. Deadline / connector / routine / mail are types only. */
+/** Wake kinds. Deadline / connector / mail are types only. Routine is a live wake (CS-013). */
 export type WakeKind =
   | "field_start"
   | "field_ask"
@@ -47,6 +47,8 @@ export interface WakeEvent {
   decision?: "approved" | "denied";
   reason?: string;
   workerId?: string;
+  /** Stored routine id. Required for kind "routine"; pack declaration is not enough. */
+  routineId?: string;
 }
 
 export interface PendingEffect {

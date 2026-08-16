@@ -32,6 +32,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     adapterBindFile: path.join(root, "adapter-bind.json"),
     // Provider credentials. Same class as field-tokens: not on bind, not on disk/, not a pack.
     adapterCredentialsFile: path.join(root, "adapter-credentials.json"),
+    // Architect- or pack-written routines. Same class as adapter-bind: not field UI, not on disk/.
+    routinesFile: path.join(root, "routines.json"),
   };
 }
 

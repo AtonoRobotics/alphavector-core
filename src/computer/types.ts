@@ -37,6 +37,12 @@ export interface ComputerPaths {
    * Beside the disk, never inside the bind-mounted /home, never on adapter-bind.json.
    */
   adapterCredentialsFile: string;
+  /**
+   * Architect- or pack-written routines (CS-013). Same class as adapter-bind:
+   * beside the disk, never inside the bind-mounted /home, never a field file.
+   * Pack declaration is not live until stored here.
+   */
+  routinesFile: string;
 }
 
 export interface TenantComputer {

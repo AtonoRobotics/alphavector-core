@@ -10,6 +10,7 @@ import { AvError } from "../src/errors.js";
 import { architectBindAdapter } from "../src/auth/architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "../src/auth/architect-adapter-credentials.js";
 import { architectIssueFieldToken } from "../src/auth/architect-field-token.js";
+import { architectMaterializePackRoutines, architectWriteRoutine } from "../src/auth/architect-routines.js";
 import {
   adapterThink,
   createDeepAgent,
@@ -2217,5 +2218,278 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const product = new DeepAgentsAdapter();
     expect(product.requiresCredentials).toBe(true);
     expect(new DeepAgentsAdapter(adapterThink).requiresCredentials).toBe(false);
+  });
+});
+
+describe("D10 CS-013 routine wakes", () => {
+  it("keeps the RE fixture pin at 5091328", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const pkg = readFileSync(path.join(process.cwd(), "package.json"), "utf8");
+    expect(pkg).not.toMatch(/temporalio|@temporalio|"temporal"/i);
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    expect(kernelSrc).toMatch(/kind: "routine"/);
+    expect(kernelSrc).toMatch(/fireDue\(/);
+    expect(kernelSrc).toMatch(/detail: \{ typedOnly: true \}/);
+    expect(kernelSrc).not.toMatch(/from ["']@temporalio|require\(["']@temporalio/);
+    expect(kernelSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(kernelSrc).toMatch(/throw new AvError\("ONE_GOAL"/);
+  });
+
+  it("Architect-bound due routine on tenant disk fires a routine wake, labeled memory, and a run", async () => {
+    const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    const orchId = core.agents.list(tenantId).find((a) => a.isOrchestrator)!.agentId;
+    core.habitat.memory.writeProfile({ tenantId, agentId: orchId, note: "routine-profile" });
+    core.habitat.memory.writeLog({ tenantId, agentId: orchId, text: "routine-log" });
+    core.habitat.memory.writeRecall({ tenantId, scope: "agent", subjectId: orchId, text: "routine-recall" });
+    const dueAt = new Date(0).toISOString();
+    architectWriteRoutine({
+      tenantId,
+      routineId: "morning-brief",
+      goal: "one goal",
+      dueAt,
+      recordId: record.id,
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    const paths = computerRoot(computerBaseDir, tenantId);
+    expect(paths.routinesFile).toBe(path.join(computerBaseDir, "tenants", tenantId, "routines.json"));
+    expect(existsSync(paths.routinesFile)).toBe(true);
+    expect(existsSync(path.join(paths.disk, "routines.json"))).toBe(false);
+
+    const fired = core.habitat.fireDue(tenantId, { pack });
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.run?.runId).toMatch(/^run_/);
+    expect(fired[0]?.run?.goal).toBe("one goal");
+    expect(fired[0]?.wokeOrchestrator).toBe(true);
+    expect(fired[0]?.memory.profile.label).toBe("profile");
+    expect(fired[0]?.memory.logs.label).toBe("logs");
+    expect(fired[0]?.memory.recall.label).toBe("recall");
+    const orchMem = core.habitat.memory.labeled(tenantId, orchId);
+    expect(orchMem.profile.label).toBe("profile");
+    expect(orchMem.logs.label).toBe("logs");
+    expect(orchMem.recall.label).toBe("recall");
+    expect(orchMem.profile.body?.notes).toContain("routine-profile");
+    expect(orchMem.logs.entries.some((e) => e.text === "routine-log")).toBe(true);
+    expect(orchMem.recall.items.some((e) => e.text === "routine-recall")).toBe(true);
+    expect(fired[0]?.run?.talkingDidHeavyWork).toBe(false);
+    expect(core.habitat.getRun(tenantId)?.runId).toBe(fired[0]?.run?.runId);
+    const wakes = core.habitat.listWakes(tenantId);
+    expect(wakes.some((w) => w.kind === "routine" && w.runId === fired[0]?.run?.runId)).toBe(true);
+    expect(wakes.find((w) => w.kind === "routine")?.decision).toEqual({
+      wakeOrchestrator: true,
+      wakeOps: false,
+    });
+    expect(wakes.find((w) => w.kind === "routine")?.detail).toMatchObject({
+      routineId: "morning-brief",
+    });
+    const again = core.habitat.fireDue(tenantId, { pack });
+    expect(again).toHaveLength(0);
+  });
+
+  it("due routine while a run is open attaches to the same runId", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-routine-attach-"));
+    const { core, field, architectToken, pack } = await liveField("t1", dir);
+    const orchId = core.agents.list("t1").find((a) => a.isOrchestrator)!.agentId;
+    core.habitat.memory.writeProfile({ tenantId: "t1", agentId: orchId, note: "attach-profile" });
+    const started = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.runId).toMatch(/^run_/);
+    const worker = core.habitat.activeWorker("t1");
+    architectWriteRoutine({
+      tenantId: "t1",
+      routineId: "follow-brief",
+      goal: started.journey.objective,
+      dueAt: new Date(0).toISOString(),
+      recordId: started.record.id,
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+    });
+    const fired = core.habitat.fireDue("t1", { pack });
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.run?.runId).toBe(run!.runId);
+    expect(fired[0]?.launchedWorker).toBe(false);
+    expect(fired[0]?.memory.profile.label).toBe("profile");
+    expect(fired[0]?.memory.profile.body?.notes).toContain("attach-profile");
+    expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
+    expect(core.habitat.getRun("t1")?.goal).toBe(started.journey.objective);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "routine" && w.runId === run!.runId)).toBe(true);
+    expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker?.workerId);
+    expect(core.habitat.activeWorker("t1")?.pid).toBe(worker?.pid);
+    expect(core.habitat.getRun("t1")?.talkingDidHeavyWork).toBe(false);
+  });
+
+  it("due routine with a distinct goal while a run is open is ONE_GOAL", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-routine-one-goal-"));
+    const { core, field, architectToken, pack } = await liveField("t1", dir);
+    const first = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const runA = core.habitat.getRun("t1");
+    architectWriteRoutine({
+      tenantId: "t1",
+      routineId: "other-goal",
+      goal: "a different goal",
+      dueAt: new Date(0).toISOString(),
+      recordId: first.record.id,
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+    });
+    try {
+      core.habitat.fireDue("t1", { pack });
+      throw new Error("expected ONE_GOAL");
+    } catch (err) {
+      expect(err).toMatchObject({ code: "ONE_GOAL", closed: true });
+    }
+    expect(core.habitat.getRun("t1")?.runId).toBe(runA!.runId);
+    expect(core.habitat.getRun("t1")?.goal).toBe(first.journey.objective);
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "routine")).toBe(false);
+    const onDisk = JSON.parse(readFileSync(computerRoot(dir, "t1").runsFile, "utf8")) as {
+      runs: Array<{ runId: string; goal: string }>;
+    };
+    expect(onDisk.runs).toHaveLength(1);
+    expect(onDisk.runs[0]?.runId).toBe(runA!.runId);
+  });
+
+  it("missing routines.json is empty without inventing", async () => {
+    const { core, pack, tenantId, computerBaseDir } = await habitatStack();
+    expect(existsSync(computerRoot(computerBaseDir, tenantId).routinesFile)).toBe(false);
+    const fired = core.habitat.fireDue(tenantId, { pack });
+    expect(fired).toEqual([]);
+    expect(core.habitat.getRun(tenantId)).toBeUndefined();
+    expect(core.habitat.listWakes(tenantId)).toEqual([]);
+    expect(existsSync(computerRoot(computerBaseDir, tenantId).runsFile)).toBe(false);
+    expect(() =>
+      core.habitat.wake({
+        kind: "routine",
+        tenantId,
+        pack,
+        goal: "invented",
+        routineId: "not-stored",
+      }),
+    ).toThrow(/ROUTINE_STORE_MISSING|refusing to invent/);
+  });
+
+  it("corrupt routines.json fails closed (ROUTINE_STORE_CORRUPT)", async () => {
+    const { core, pack, tenantId, computerBaseDir } = await habitatStack();
+    const file = computerRoot(computerBaseDir, tenantId).routinesFile;
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "{not-json", "utf8");
+    expect(() => core.habitat.fireDue(tenantId, { pack })).toThrow(/ROUTINE_STORE_CORRUPT|corrupt/i);
+    expect(core.habitat.getRun(tenantId)).toBeUndefined();
+    expect(core.habitat.listWakes(tenantId)).toEqual([]);
+    writeFileSync(file, `${JSON.stringify({ routines: [{ routineId: "x" }] })}\n`, "utf8");
+    expect(() => core.habitat.fireDue(tenantId, { pack })).toThrow(/ROUTINE_STORE_CORRUPT|corrupt/i);
+  });
+
+  it("pack declaration is not live until stored on the tenant computer", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-routine-pack-"));
+    const dueAt = new Date(0).toISOString();
+    const { anchors, binding } = await signedGenericPackMutated((unsigned) => {
+      unsigned.routines = [{ id: "pack-brief", goal: "one goal", dueAt }];
+    });
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: new DryStemAdapter(),
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    const architect = core.fieldTokens.issue({ tenantId: "t1", principal: "architect" });
+    expect(existsSync(computerRoot(computerBaseDir, "t1").routinesFile)).toBe(false);
+    expect(core.habitat.fireDue("t1", { pack: loaded.loaded })).toEqual([]);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+
+    architectMaterializePackRoutines({
+      tenantId: "t1",
+      pack: loaded.loaded,
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    expect(existsSync(computerRoot(computerBaseDir, "t1").routinesFile)).toBe(true);
+    const onDisk = JSON.parse(readFileSync(computerRoot(computerBaseDir, "t1").routinesFile, "utf8")) as {
+      routines: Array<{ boundBy: string; routineId: string }>;
+    };
+    expect(onDisk.routines[0]?.boundBy).toBe("pack");
+    expect(onDisk.routines[0]?.routineId).toBe("pack-brief");
+    const fired = core.habitat.fireDue("t1", { pack: loaded.loaded });
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.run?.goal).toBe("one goal");
+    expect(fired[0]?.run?.recordId).toBeUndefined();
+    expect(core.habitat.listWakes("t1").some((w) => w.kind === "routine")).toBe(true);
+    expect(record.id).toMatch(/^rec_/);
+  });
+
+  it("field cannot author routines; home has no authoring; POST /field/routines is 403", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-routine-field-"));
+    const { field, fieldToken, url, core } = await liveField("t1", dir);
+    expect(() =>
+      architectWriteRoutine({
+        tenantId: "t1",
+        routineId: "field-brief",
+        goal: "one goal",
+        dueAt: new Date(0).toISOString(),
+        computerBaseDir: dir,
+        architectToken: fieldToken,
+      }),
+    ).toThrow(/cannot bind|field token|routines/i);
+    expect(existsSync(computerRoot(dir, "t1").routinesFile)).toBe(false);
+
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/routines|routineId|dueAt|bind-routine/i);
+    expect(home.architectControls).toEqual([]);
+
+    const blocked = await fetch(`${url}/field/routines`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ routineId: "field-brief", goal: "one goal" }),
+    });
+    expect(blocked.status).toBe(403);
+    const body = (await blocked.json()) as { error: string };
+    expect(body.error).toBe("SURFACE_VIOLATION");
+    expect(existsSync(computerRoot(dir, "t1").routinesFile)).toBe(false);
+
+    const html = await (await fetch(url)).text();
+    expect(html).not.toMatch(/id="routine"|id="routines"|bind-routine|author routine/i);
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    expect(fieldSrc).not.toMatch(/pickAgent/);
+    expect(fieldSrc).toMatch(/\/field\/ask/);
+    expect(fieldSrc).toMatch(/\/field\/kill/);
+    expect(fieldSrc).toMatch(/routines\?/);
+    expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/routines/);
+    const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/HomeView.swift"), "utf8");
+    expect(ios).not.toMatch(/routine/i);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
+  });
+
+  it("HTTP kill after a due-routine start tears the trailer down and clears the book", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-routine-kill-"));
+    const { core, field, architectToken, pack } = await liveField("t1", dir);
+    const rec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Subject",
+    );
+    architectWriteRoutine({
+      tenantId: "t1",
+      routineId: "start-brief",
+      goal: "Work this buyer journey",
+      dueAt: new Date(0).toISOString(),
+      recordId: rec.id,
+      computerBaseDir: dir,
+      architectToken: architectToken!,
+    });
+    const fired = core.habitat.fireDue("t1", { pack });
+    expect(fired[0]?.run?.runId).toMatch(/^run_/);
+    expect(core.habitat.trailerExists("t1")).toBe(true);
+    const worker = core.habitat.activeWorker("t1");
+    expect(worker?.pid).toBeDefined();
+    expect(isPidAlive(worker?.pid)).toBe(true);
+    await field.kill("stop");
+    expect(core.habitat.trailerExists("t1")).toBe(false);
+    expect(core.habitat.activeWorker("t1")).toBeUndefined();
+    expect(isPidAlive(worker?.pid)).toBe(false);
+    expect(new WorkerBook(dir).get("t1")).toBeUndefined();
+    expect(core.habitat.getRun("t1")?.status).toBe("killed");
   });
 });
