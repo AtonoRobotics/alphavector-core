@@ -321,6 +321,8 @@ describe("D10 §6 habitat kernel", () => {
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(kernelSrc).toMatch(/return this\.wake\(\{ \.\.\.event, kind: "field_start" \}\);/);
     expect(kernelSrc).not.toMatch(/wake\(\{ \.\.\.event, kind: "field_start" \},\s*\{\s*until:\s*["']talking["']/);
+    expect(kernelSrc).not.toMatch(/does not throw ONE_GOAL/);
+    expect(kernelSrc).toMatch(/throw new AvError\("ONE_GOAL"/);
   });
 
   it("follow-up sticks to the same worker; relaunch after kill is not follow-up", async () => {
@@ -560,6 +562,85 @@ describe("D10 §6 field verbs", () => {
     expect(core.habitat.trailerExists("t1")).toBe(true);
     expect(again?.talkingDidHeavyWork).toBe(false);
     expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
+  });
+
+  it("POST field start distinct goal B is rejected with ONE_GOAL and leaves only run A on disk", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-one-goal-"));
+    const { core, field } = await liveField("t1", dir);
+    const first = await createOpenStart(field, "buyer", "Work this buyer journey");
+    const runA = core.habitat.getRun("t1");
+    expect(runA?.runId).toMatch(/^run_/);
+    expect(runA?.goal).toBe(first.journey.objective);
+    expect(runA?.status).toBe("awaiting_card");
+
+    const sellerRec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Seller subject",
+    );
+    await field.openApproved("seller", sellerRec.id);
+    await expect(field.start("seller", "Work this seller journey", sellerRec.id)).rejects.toMatchObject({
+      status: 400,
+      code: "ONE_GOAL",
+      message: expect.stringMatching(/one goal at a time/),
+    });
+
+    const still = core.habitat.getRun("t1");
+    expect(still?.runId).toBe(runA!.runId);
+    expect(still?.goal).toBe(first.journey.objective);
+    expect(still?.status).toBe("awaiting_card");
+    expect(still?.workerId).toBe(runA!.workerId);
+    const onDisk = JSON.parse(readFileSync(computerRoot(dir, "t1").runsFile, "utf8")) as {
+      runs: Array<{ runId: string; goal: string }>;
+    };
+    expect(onDisk.runs).toHaveLength(1);
+    expect(onDisk.runs[0]?.runId).toBe(runA!.runId);
+    expect(onDisk.runs[0]?.goal).toBe(first.journey.objective);
+  });
+
+  it("POST field start distinct goal B is allowed after the first run is terminal", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-http-next-goal-"));
+    const { core, field } = await liveField("t1", dir);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    const runA = core.habitat.getRun("t1")!.runId;
+    const workerA = core.habitat.getRun("t1")!.workerId;
+    await field.kill("next goal");
+    expect(core.habitat.getRun("t1")?.status).toBe("killed");
+
+    const sellerRec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Seller subject",
+    );
+    await field.openApproved("seller", sellerRec.id);
+    const seller = await field.start("seller", "Work this seller journey", sellerRec.id);
+    expect(seller.journeyKind).toBe("seller");
+    const runB = core.habitat.getRun("t1");
+    expect(runB?.runId).toBeDefined();
+    expect(runB?.runId).not.toBe(runA);
+    expect(runB?.goal).toBe(seller.objective);
+    expect(runB?.workerId).toBeDefined();
+    expect(runB?.workerId).not.toBe(workerA);
+    expect(runB?.status).toBe("awaiting_card");
+
+    const approved = await field.approve(runB!.pendingCardId!);
+    expect(approved.card.status).toBe("approved");
+    expect(core.habitat.getRun("t1")?.status).toBe("completed");
+
+    const listingRec = await field.createApprovedRecord(
+      (await field.home()).recordKinds[0]?.id ?? "record",
+      "Listing subject",
+    );
+    await field.openApproved("listing", listingRec.id);
+    const listing = await field.start("listing", "Work this listing journey", listingRec.id);
+    expect(listing.journeyKind).toBe("listing");
+    expect(core.habitat.getRun("t1")?.goal).toBe(listing.objective);
+    expect(core.habitat.getRun("t1")?.runId).not.toBe(runB!.runId);
+
+    await field.deny(core.habitat.getRun("t1")!.pendingCardId!);
+    expect(core.habitat.getRun("t1")?.status).toBe("denied");
+    const again = await field.start("listing", "Work this listing journey", listingRec.id);
+    expect(again.journeyKind).toBe("listing");
+    expect(core.habitat.getRun("t1")?.status).toBe("awaiting_card");
+    expect(core.habitat.getRun("t1")?.goal).toBe(again.objective);
   });
 
   it("approve via field card resumes the same run id from HTTP start", async () => {
