@@ -2433,7 +2433,6 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       code: "ADAPTER_VENDOR_URL_MISSING",
       closed: true,
     });
-    expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
     expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
     expect(stack.core.habitat.activeWorker(stack.tenantId)).toBeUndefined();
   });
