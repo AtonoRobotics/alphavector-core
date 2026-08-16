@@ -249,7 +249,11 @@ describe("field HTTP surface against pinned alphavector-re", () => {
     // Same POSTs the page script issues: record/retract then existing card approve.
     const paths = computerRoot(dir, tenantId);
     const recordCardId = await field.requestFactCard(REQUIRED);
-    expect(existsSync(paths.factsFile)).toBe(false);
+    expect(existsSync(paths.factsFile)).toBe(true);
+    expect(new FactBook(dir).presentIds(tenantId)).toEqual(
+      expect.arrayContaining(["journey.buyer", "purpose.follow-up"]),
+    );
+    expect(new FactBook(dir).presentIds(tenantId)).not.toContain(REQUIRED);
     const recorded = await field.approve(recordCardId);
     expect(recorded.fact).toEqual({ id: REQUIRED, present: true });
     expect(JSON.parse(readFileSync(paths.factsFile, "utf8")).facts).toEqual(
@@ -448,7 +452,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
         subject: "buyer",
       }),
     ).rejects.toMatchObject({
-      status: 403,
+      status: 409,
       code: "AUTHORIZATION_REQUIRED",
     });
 
