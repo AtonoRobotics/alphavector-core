@@ -1,7 +1,14 @@
 import { AvError, SurfaceViolationError } from "../errors.js";
 import { newId, nowIso } from "../ids.js";
 import type { PrincipalKind } from "../packs/types.js";
-import type { GraduationNotice, Grant, GrantBounds, GrantState } from "./types.js";
+import {
+  grantBoundsRefusal,
+  type GraduationNotice,
+  type Grant,
+  type GrantBounds,
+  type GrantState,
+  type GrantUse,
+} from "./types.js";
 
 export class GrantBook {
   private readonly grants = new Map<string, Grant>();
@@ -11,10 +18,13 @@ export class GrantBook {
     return `${tenantId}:${agentId}:${actionClass}`;
   }
 
-  state(tenantId: string, agentId: string, actionClass: string): GrantState {
+  state(tenantId: string, agentId: string, actionClass: string, use?: GrantUse): GrantState {
     const grant = this.grants.get(this.key(tenantId, agentId, actionClass));
     if (!grant) return "requires_authorization";
     if (grant.expiresAt && grant.expiresAt < nowIso()) return "requires_authorization";
+    if (grant.state === "authorized" && use && grantBoundsRefusal(grant.bounds, use)) {
+      return "requires_authorization";
+    }
     return grant.state;
   }
 
@@ -22,28 +32,36 @@ export class GrantBook {
    * Class-level state for the habitat loop. A grant already authorized for
    * this action class SHALL be used, regardless of which pack agent it was
    * written on. The thin coder is not a second owner-auth identity.
+   * When `use` is provided, persisted bounds must cover that use — a class
+   * grant is not a silent yes for every channel, purpose, subject, or rate.
    */
-  classState(tenantId: string, actionClass: string): GrantState {
+  classState(tenantId: string, actionClass: string, use?: GrantUse): GrantState {
     const now = nowIso();
     const matches = [...this.grants.values()].filter(
       (grant) => grant.tenantId === tenantId && grant.actionClass === actionClass,
     );
     if (matches.length === 0) return "requires_authorization";
     const live = matches.filter((grant) => !grant.expiresAt || grant.expiresAt >= now);
-    if (live.some((grant) => grant.state === "authorized")) return "authorized";
+    const authorized = live.filter((grant) => grant.state === "authorized");
+    if (use) {
+      if (authorized.some((grant) => !grantBoundsRefusal(grant.bounds, use))) return "authorized";
+    } else if (authorized.length > 0) {
+      return "authorized";
+    }
     if (matches.some((grant) => grant.state === "revoked")) return "revoked";
     return "requires_authorization";
   }
 
   /** Live authorized grant for this class, if the loop may use it. */
-  authorizedForClass(tenantId: string, actionClass: string): Grant | undefined {
+  authorizedForClass(tenantId: string, actionClass: string, use?: GrantUse): Grant | undefined {
     const now = nowIso();
     return [...this.grants.values()].find(
       (grant) =>
         grant.tenantId === tenantId &&
         grant.actionClass === actionClass &&
         grant.state === "authorized" &&
-        (!grant.expiresAt || grant.expiresAt >= now),
+        (!grant.expiresAt || grant.expiresAt >= now) &&
+        (!use || !grantBoundsRefusal(grant.bounds, use)),
     );
   }
 
