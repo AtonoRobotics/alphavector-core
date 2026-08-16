@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expect } from "vitest";
 import type { Journey } from "../src/data/types.js";
+import { AvError } from "../src/errors.js";
+import type { FactBook } from "../src/facts/book.js";
 import type { FieldClient } from "../src/http/field-client.js";
 import type { FieldApproveResult } from "../src/http/types.js";
 import { signPack, generateEd25519, type TrustAnchors } from "../src/packs/signing.js";
@@ -84,6 +87,15 @@ export async function signedRePackMutated(
 }
 
 export const REPO_ROOT = root;
+
+/** Missing/blank recordId on FactBook must fail closed — no tenant-global bucket. */
+export function expectPresentIdsDeniedWithoutRecord(book: FactBook, tenantId: string): void {
+  expect(() => book.presentIds(tenantId, undefined as unknown as string)).toThrow(AvError);
+  expect(() => book.presentIds(tenantId, undefined as unknown as string)).toThrow(
+    /Record id is required/,
+  );
+  expect(() => book.presentIds(tenantId, "")).toThrow(/Record id is required/);
+}
 
 /** Create a pack record, Open the kind on it, then start about it. */
 export async function createOpenStart(

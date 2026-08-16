@@ -21,6 +21,7 @@ import { FieldSurface } from "../src/surfaces/field.js";
 import {
   ALPHAVECTOR_RE_PIN_SHA,
   REPO_ROOT,
+  expectPresentIdsDeniedWithoutRecord,
   signedRePack,
   signedRePackMutated,
 } from "./helpers.js";
@@ -70,6 +71,56 @@ function putSubject(
 describe("required field path against pinned alphavector-re", () => {
   it("keeps the RE fixture pin at 5091328", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+  });
+
+  it("requires a recordId on FactBook presentIds, put, and retract", async () => {
+    const bookSrc = await readFile(path.join(REPO_ROOT, "src/facts/book.ts"), "utf8");
+    expect(bookSrc).not.toMatch(/const GLOBAL/);
+    expect(bookSrc).not.toMatch(/recordId \?\? GLOBAL/);
+    expect(bookSrc).toMatch(/RECORD_ID_REQUIRED/);
+    expect(bookSrc).toMatch(/presentIds\(tenantId: string, recordId: string\)/);
+    expect(bookSrc).toMatch(/put\(tenantId: string, id: string, recordId: string\)/);
+    expect(bookSrc).toMatch(/retract\(tenantId: string, id: string, recordId: string\)/);
+
+    const facts = new FactBook();
+    const missing = undefined as unknown as string;
+    expect(() => facts.presentIds("t1", missing)).toThrow(AvError);
+    expect(() => facts.presentIds("t1", missing)).toThrow(/Record id is required/);
+    expect(() => facts.presentIds("t1", "")).toThrow(/Record id is required/);
+    expect(() => facts.put("t1", "journey.buyer", missing)).toThrow(AvError);
+    expect(() => facts.put("t1", "journey.buyer", missing)).toThrow(/Record id is required/);
+    expect(() => facts.put("t1", "journey.buyer", "")).toThrow(/Record id is required/);
+    expect(() => facts.retract("t1", "journey.buyer", missing)).toThrow(AvError);
+    expect(() => facts.retract("t1", "journey.buyer", missing)).toThrow(/Record id is required/);
+    expect(() => facts.retract("t1", "journey.buyer", "")).toThrow(/Record id is required/);
+
+    facts.put("t1", "journey.buyer", "rec_a");
+    facts.put("t1", "consent.dnc", "rec_a");
+    facts.put("t1", "purpose.follow-up", "rec_b");
+    expectPresentIdsDeniedWithoutRecord(facts, "t1");
+    expect(facts.presentIds("t1", "rec_a")).toEqual(
+      expect.arrayContaining(["journey.buyer", "consent.dnc"]),
+    );
+    expect(facts.presentIds("t1", "rec_a")).not.toContain("purpose.follow-up");
+    expect(facts.presentIds("t1", "rec_b")).toEqual(["purpose.follow-up"]);
+    expect(facts.presentIds("t1", "rec_b")).not.toContain("consent.dnc");
+    expect(facts.presentIds("t1", "rec_never_seen")).toEqual([]);
+  });
+
+  it("does not load leftover facts without recordId into a tenant-global bucket", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-facts-no-global-"));
+    const paths = computerRoot(dir, "t1");
+    await mkdir(path.dirname(paths.factsFile), { recursive: true });
+    await writeFile(
+      paths.factsFile,
+      JSON.stringify({ facts: [{ id: "journey.buyer" }, { id: "consent.dnc", recordId: "rec_a" }] }),
+      "utf8",
+    );
+    const book = new FactBook(dir);
+    expectPresentIdsDeniedWithoutRecord(book, "t1");
+    expect(book.presentIds("t1", "rec_a")).toEqual(["consent.dnc"]);
+    expect(book.presentIds("t1", "rec_a")).not.toContain("journey.buyer");
+    expect(book.presentIds("t1", "rec_never_seen")).toEqual([]);
   });
 
   it("lets a field user start and progress each pack journey kind; architect cannot", async () => {
@@ -459,7 +510,7 @@ describe("required field path against pinned alphavector-re", () => {
     expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
     expect(new FactBook(dir).presentIds("t1", buyerRec.id)).toEqual(["journey.buyer"]);
 
     const journey = field.start({
@@ -575,7 +626,7 @@ describe("required field path against pinned alphavector-re", () => {
     expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
     expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([REQUIRED]);
 
     const journey = field.start({
@@ -746,7 +797,7 @@ describe("required field path against pinned alphavector-re", () => {
     expect(JSON.stringify(field.home("t1").inbox)).not.toMatch(/architect_admin|T0|T1|T2|T3/i);
     expect(existsSync(paths.factsFile)).toBe(false);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(facts.presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(facts, "t1");
     expect(() => field.commitApprovedFact(cardId)).toThrow(/approved card/);
     expect(existsSync(paths.factsFile)).toBe(false);
 
@@ -756,7 +807,7 @@ describe("required field path against pinned alphavector-re", () => {
     expect(paths.factsFile).toBe(path.join(dir, "tenants", "t1", "facts.json"));
     expect(existsSync(paths.factsFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "facts.json"))).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
     expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([REQUIRED]);
 
     const journey = field.start({
@@ -838,7 +889,7 @@ describe("required field path against pinned alphavector-re", () => {
     expect(() => field.record(write)).toThrow(/terminal/);
     expect(() => field.record(write)).toThrow(/terminal/);
     expect(existsSync(paths.factsFile)).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
   });
 
   it("fail-closes on a corrupt fact store and does not invent a fact", async () => {
@@ -949,7 +1000,7 @@ describe("required field path against pinned alphavector-re", () => {
     facts.put("t1", "purpose.follow-up", recA.id);
     facts.put("t1", "consent.dnc", recA.id);
     facts.put("t1", "purpose.follow-up", recB.id);
-    expect(facts.presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(facts, "t1");
     expect(facts.presentIds("t1", recJourney.id)).toEqual(["journey.buyer"]);
     expect(facts.presentIds("t1", recA.id)).toEqual(
       expect.arrayContaining(["purpose.follow-up", "consent.dnc"]),
@@ -1057,7 +1108,7 @@ describe("required field path against pinned alphavector-re", () => {
       present: true,
       recordId: recA,
     });
-    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
     expect(new FactBook(dir).presentIds("t1", recA)).toEqual(["journey.buyer"]);
     expect(new FactBook(dir).presentIds("t1", recB)).toEqual([]);
 
@@ -1162,7 +1213,7 @@ describe("required field path against pinned alphavector-re", () => {
       field.record({ actor: "field", pack, id: "journey.buyer", recordId: "" }),
     ).toThrow(/Record id is required/);
     expect(existsSync(paths.factsFile)).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
 
     expect(() =>
       field.record({ actor: "field", pack, id: "journey.buyer", recordId: "rec_unknown" }),
@@ -1200,7 +1251,7 @@ describe("required field path against pinned alphavector-re", () => {
         );
       }
       expect(existsSync(paths.factsFile)).toBe(false);
-      expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+      expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
       expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([]);
     }
 
@@ -1211,7 +1262,7 @@ describe("required field path against pinned alphavector-re", () => {
       expect(err).toBeInstanceOf(AuthorizationRequiredError);
     }
     expect(existsSync(paths.factsFile)).toBe(false);
-    expect(new FactBook(dir).presentIds("t1")).toEqual([]);
+    expectPresentIdsDeniedWithoutRecord(new FactBook(dir), "t1");
     expect(new FactBook(dir).presentIds("t1", rec.id)).toEqual([]);
   });
 
