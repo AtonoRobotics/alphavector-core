@@ -6483,6 +6483,24 @@ describe("HK-072 durable memory injected on every wake", () => {
       markers,
     );
 
+    await core.habitat.wake({
+      kind: "architect_message",
+      tenantId: "t1",
+      pack: loaded.loaded,
+      fromAgentId: "architect",
+      goal: "status",
+    });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "architect_message"),
+      markers,
+    );
+
+    await core.habitat.wake({ kind: "worker_failed", tenantId: "t1", pack: loaded.loaded });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "worker_failed"),
+      markers,
+    );
+
     await core.habitat.wake({ kind: "worker_done", tenantId: "t1", pack: loaded.loaded });
     expectThinkReceivedDiskMemory(
       seen.find((s) => s.event.kind === "worker_done" && s.pass === "talking"),
@@ -6498,6 +6516,8 @@ describe("HK-072 durable memory injected on every wake", () => {
       "mail",
       "deadline",
       "connector",
+      "architect_message",
+      "worker_failed",
       "worker_done",
     ] as const) {
       expect(thinkKinds.has(kind), `${kind} must think with inject`).toBe(true);

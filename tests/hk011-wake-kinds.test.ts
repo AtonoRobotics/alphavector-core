@@ -8,7 +8,7 @@ import { architectSit } from "../src/auth/architect-habitat.js";
 import { architectDeliverMessage } from "../src/auth/architect-message.js";
 import { SurfaceViolationError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
-import { DeepAgentsAdapter, reapHeldCoders, WAKE_KINDS } from "../src/habitat/index.js";
+import { DeepAgentsAdapter, isPidAlive, reapHeldCoders, WAKE_KINDS } from "../src/habitat/index.js";
 import { stem } from "../src/habitat/stem.js";
 import type { WakeKind } from "../src/habitat/types.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
@@ -536,24 +536,104 @@ describe("HK-011 closed v1 wake kinds", () => {
     ).rejects.toMatchObject({ code: "ADAPTER_UNBOUND", closed: true });
   });
 
-  it("sit source stays a read and kernel owns both new wakes", () => {
+  it("sit source stays a read and kernel owns both new wakes at every insertion point", () => {
     const sitSrc = readFileSync(path.join(process.cwd(), "src/auth/architect-habitat.ts"), "utf8");
     expect(sitSrc).toMatch(/Not a write-\* verb/);
     expect(sitSrc).toMatch(/return input\.surface\.sit\(input\.tenantId\)/);
     expect(sitSrc).not.toMatch(/habitat\.wake/);
     expect(sitSrc).not.toMatch(/architect_message/);
 
+    const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(cliSrc).toMatch(/architectSit/);
+    expect(cliSrc).toMatch(/habitat reads live org, open runs, workers, grants, eval, isolation/);
+    expect(cliSrc).not.toMatch(/write-habitat/);
+    const habitatCli = cliSrc.slice(cliSrc.indexOf('if (sub === "habitat")'), cliSrc.indexOf('if (sub === "issue-field-token")'));
+    expect(habitatCli).toMatch(/architectSit/);
+    expect(habitatCli).not.toMatch(/\.wake\(/);
+    expect(habitatCli).not.toMatch(/architect_message|worker_failed/);
+
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    expect(fieldSrc).toMatch(/\/architect\/habitat/);
+    expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/architect/);
+    expect(fieldSrc).toMatch(/Field cannot issue architect_message/);
+    const habitatRoute = fieldSrc.slice(
+      fieldSrc.indexOf("private routeArchitectHabitat"),
+      fieldSrc.indexOf("private principalOf"),
+    );
+    expect(habitatRoute).toMatch(/\.sit\(/);
+    expect(habitatRoute).not.toMatch(/\.wake\(/);
+    expect(habitatRoute).not.toMatch(/architect_message|worker_failed/);
+
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(kernelSrc).toMatch(/kind === "architect_message"/);
     expect(kernelSrc).toMatch(/kind === "worker_failed"/);
     expect(kernelSrc).toMatch(/deliverArchitectMessage\(/);
     expect(kernelSrc).toMatch(/reportWorkerFailed\(/);
-    expect(kernelSrc).toMatch(/kind: "architect_message"/);
-    expect(kernelSrc).toMatch(/kind: "worker_failed"/);
+    expect(kernelSrc).toMatch(/reapCrashedWorkers\(/);
+    expect(kernelSrc).toMatch(/kind === "architect_message" \|\| kind === "worker_failed"/);
+    expect(kernelSrc).toMatch(/A read\. Does not emit worker_failed/);
     expect(kernelSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(kernelSrc).toMatch(/isolation\(tenantId: string\): HabitatIsolationRecord/);
 
-    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
-    expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/architect/);
-    expect(fieldSrc).toMatch(/Field cannot issue architect_message/);
+    const stemSrc = readFileSync(path.join(process.cwd(), "src/habitat/stem.ts"), "utf8");
+    expect(stemSrc).toMatch(/case "architect_message":/);
+    expect(stemSrc).toMatch(/case "worker_failed":/);
+
+    const wakeLogSrc = readFileSync(path.join(process.cwd(), "src/habitat/wake-log.ts"), "utf8");
+    expect(wakeLogSrc).toMatch(/"architect_message"/);
+    expect(wakeLogSrc).toMatch(/"worker_failed"/);
+    expect(wakeLogSrc).toMatch(/WAKE_LOG_MISMATCH/);
+  });
+
+  it("a held worker crash emits worker_failed and wakes the orchestrator; isolation stays a read", async () => {
+    const stack = await habitatCore();
+    const started = await stack.core.habitat.wake(
+      {
+        kind: "field_start",
+        tenantId: stack.tenantId,
+        pack: stack.pack,
+        goal: "one goal",
+        recordId: stack.record.id,
+      },
+      { holdWorker: true },
+    );
+    const worker = stack.core.habitat.activeWorker(stack.tenantId);
+    expect(worker?.pid).toBeDefined();
+    expect(isPidAlive(worker?.pid)).toBe(true);
+    const runId = started.run!.runId;
+    const workerId = worker!.workerId;
+    const wakesBeforeKill = stack.core.habitat.listWakes(stack.tenantId).length;
+
+    try {
+      process.kill(worker!.pid!, "SIGKILL");
+    } catch {
+      // already gone
+    }
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline && isPidAlive(worker?.pid)) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+    expect(isPidAlive(worker?.pid)).toBe(false);
+
+    const seat = stack.core.habitat.isolation(stack.tenantId);
+    expect(seat.live).toBe(false);
+    expect(seat.workerId).toBe(workerId);
+    expect(stack.core.habitat.listWakes(stack.tenantId)).toHaveLength(wakesBeforeKill);
+    expect(stack.core.habitat.listWakes(stack.tenantId).some((w) => w.kind === "worker_failed")).toBe(
+      false,
+    );
+
+    await stack.core.habitat.advanceClock(new Date().toISOString());
+    const wakes = stack.core.habitat.listWakes(stack.tenantId);
+    expect(wakes.some((w) => w.kind === "worker_failed" && w.runId === runId)).toBe(true);
+    expect(wakes.some((w) => w.kind === "worker_done")).toBe(false);
+    expect(wakes.some((w) => w.kind === "kill")).toBe(false);
+    expect(wakes.find((w) => w.kind === "worker_failed")?.decision).toEqual({
+      wakeOrchestrator: true,
+      wakeOps: false,
+    });
+    expect(stack.core.habitat.activeWorker(stack.tenantId)).toBeUndefined();
+    expect(stack.core.habitat.getRun(stack.tenantId)?.status).not.toBe("completed");
+    expect(stack.core.habitat.getRun(stack.tenantId)?.status).not.toBe("killed");
   });
 });

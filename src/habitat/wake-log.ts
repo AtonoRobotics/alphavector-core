@@ -69,7 +69,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-const KNOWN_WAKE_KINDS: ReadonlySet<WakeKind> = new Set(WAKE_KINDS);
+/**
+ * Replay admits only typed kinds. Unknown kind is WAKE_LOG_MISMATCH.
+ * HK-011: architect_message and worker_failed belong here. Do not invent a kind.
+ */
+const KNOWN_WAKE_KINDS: ReadonlySet<WakeKind> = new Set([
+  "field_start",
+  "field_ask",
+  "field_continue",
+  "card_decide",
+  "worker_done",
+  "worker_failed",
+  "kill",
+  "deadline",
+  "connector",
+  "routine",
+  "mail",
+  "architect_message",
+]);
+
+for (const kind of WAKE_KINDS) {
+  if (!KNOWN_WAKE_KINDS.has(kind)) {
+    throw new AvError("WAKE_LOG_MISMATCH", "Wake-log kinds must cover the closed WakeKind set");
+  }
+}
 
 export interface WakeLogReplayResult {
   passed: boolean;

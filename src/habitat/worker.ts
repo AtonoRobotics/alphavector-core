@@ -330,6 +330,11 @@ function forgetHeldCoder(pid: number): void {
   heldPids.delete(pid);
 }
 
+/** True only for a pid this process spawnHeld and is still watching. Booked dead pid after restart is not held. */
+export function isHeldCoder(pid: number | undefined): boolean {
+  return typeof pid === "number" && heldPids.has(pid);
+}
+
 /** Signal the host-visible handle (unshare / docker exec). Do not kill the process group. */
 function terminatePid(pid: number): void {
   try {
