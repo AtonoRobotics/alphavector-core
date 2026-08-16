@@ -382,7 +382,7 @@ async function main(): Promise<void> {
     console.log(`${PRODUCT.appDisplay} field surface`);
     console.log(`open ${url}`);
     console.log("Present a field token Architect issued (Authorization, --token, or AV_FIELD_TOKEN). Serve does not issue tokens.");
-    console.log("Architect/admin is not callable on /field. Field cannot configure models, prompts, Temporal, tools, or trust anchors.");
+    console.log("Architect/admin is not callable on /field. Field cannot configure models, prompts, Temporal, tools, trust anchors, or the machine.");
     return;
   }
   if (cmd === "field-client") {

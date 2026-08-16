@@ -14,6 +14,11 @@ export const DEFAULT_ALPINE_URL =
 
 export const DEFAULT_IMAGE_ID = "alpine-3.20.3-av-computer";
 
+/** Alpine tarball / extracted template cache. Ops/env, not a field control. */
+export function defaultImageCacheDir(): string {
+  return process.env.AV_IMAGE_CACHE_DIR ?? path.join(process.cwd(), "images");
+}
+
 export async function ensureAlpineTarball(cacheDir: string, url = DEFAULT_ALPINE_URL): Promise<string> {
   await mkdir(cacheDir, { recursive: true });
   const dest = path.join(cacheDir, "alpine-minirootfs-3.20.3-x86_64.tar.gz");

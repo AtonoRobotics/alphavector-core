@@ -26,7 +26,7 @@ const CORS = {
 } as const;
 
 const CONFIG_PATH =
-  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors/i;
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -40,7 +40,7 @@ export interface FieldHttpServerOptions {
 /**
  * Field HTTP surface. `/field` is field-only. Architect/admin is not callable on `/field`.
  * GET `/architect/habitat` is the credential-gated habitat seat (off the field home).
- * Field users cannot configure models, prompts, Temporal, tools, trust anchors, or memory stores.
+ * Field users cannot configure models, prompts, Temporal, tools, trust anchors, memory stores, or the machine.
  */
 export class FieldHttpServer {
   private server?: http.Server;
@@ -116,7 +116,7 @@ export class FieldHttpServer {
       if (CONFIG_PATH.test(path)) {
         this.json(res, 403, {
           error: "SURFACE_VIOLATION",
-          message: "Field user cannot configure models, prompts, Temporal, tools, or trust anchors",
+          message: "Field user cannot configure models, prompts, Temporal, tools, trust anchors, or the machine",
         });
         return;
       }

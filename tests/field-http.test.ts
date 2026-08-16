@@ -397,11 +397,17 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/memory-store",
       "/field/trust-anchors",
       "/field/anchors",
+      "/field/machine",
+      "/field/hypervisor",
+      "/field/images",
+      "/field/computer",
+      "/field/desktop",
+      "/field/networking",
     ]) {
       const res = await fetch(`${url}${path}`, { headers });
       expect(res.status).toBe(403);
       const body = (await res.json()) as { message: string };
-      expect(body.message).toMatch(/cannot configure models, prompts, Temporal, tools, or trust anchors/);
+      expect(body.message).toMatch(/cannot configure models, prompts, Temporal, tools, trust anchors, or the machine/);
     }
     for (const path of ["/architect", "/field/architect", "/admin", "/field/packs"]) {
       const res = await fetch(`${url}${path}`, { method: "POST", headers });

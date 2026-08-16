@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ComputerHost } from "../computer/host.js";
+import { defaultImageCacheDir } from "../computer/image.js";
 import { PackLoadError } from "../errors.js";
 import { DeepAgentsAdapter } from "../habitat/deep-agents.js";
 import type { CognitiveAdapter } from "../habitat/types.js";
@@ -111,6 +113,16 @@ export async function bootFieldCore(
   }
   core.habitat.setPack(tenantId, pack);
   if (opts.computerBaseDir) {
+    const host = await ComputerHost.create({
+      baseDir: opts.computerBaseDir,
+      imageCacheDir: defaultImageCacheDir(),
+    });
+    core.computer = host;
+    core.habitat.attachComputer(host);
+    const status = await host.driver.status(tenantId);
+    if (status?.status !== "running") {
+      await host.start(tenantId);
+    }
     core.habitat.startDueTicker();
   }
   return { core, pack, tenantId };

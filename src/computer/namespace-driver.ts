@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import {
   chmod,
@@ -29,6 +29,7 @@ import type {
   ComputerImage,
   DesktopSession,
   EgressBinding,
+  HeldProcess,
   Screenshot,
   ShellRequest,
   ShellResult,
@@ -146,60 +147,27 @@ export class NamespaceComputerDriver implements ComputerDriver {
 
   async shell(req: ShellRequest): Promise<ShellResult> {
     await this.requireRunning(req.tenantId);
-    const paths = computerRoot(this.baseDir, req.tenantId);
     await this.ensureDesktop(req.tenantId, req.agentId);
-    const script = this.wrapCommand(req);
-    const netns = await this.ensureEgressNet(req.tenantId);
-    // Isolated computers remap to root in a user namespace. Allowlisted
-    // computers already enter a privileged netns via sudo; remapping there
-    // makes the 0700 tenant dir unreadable (overflow uid).
-    const unshareArgs = netns
-      ? ["--mount", "--uts", "--pid", "--fork", "--kill-child", "/bin/bash", "-c", script]
-      : [
-          "--map-root-user",
-          "--mount",
-          "--uts",
-          "--pid",
-          "--fork",
-          "--kill-child",
-          "--net",
-          "/bin/bash",
-          "-c",
-          script,
-        ];
-    try {
-      const { stdout, stderr } = netns
-        ? await execFileAsync("sudo", ["-n", "ip", "netns", "exec", netns, "unshare", ...unshareArgs], {
-            cwd: paths.disk,
-            timeout: 30_000,
-            maxBuffer: 2_000_000,
-            env: {
-              PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
-              HOME: "/home",
-              AV_TENANT: req.tenantId,
-              AV_AGENT: req.agentId,
-            },
-          })
-        : await execFileAsync("unshare", unshareArgs, {
-            cwd: paths.disk,
-            timeout: 30_000,
-            maxBuffer: 2_000_000,
-            env: {
-              PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
-              HOME: "/home",
-              AV_TENANT: req.tenantId,
-              AV_AGENT: req.agentId,
-            },
-          });
-      return { exitCode: 0, stdout, stderr };
-    } catch (err) {
-      const e = err as { code?: number; stdout?: string; stderr?: string; message?: string };
-      return {
-        exitCode: typeof e.code === "number" ? e.code : 1,
-        stdout: e.stdout ?? "",
-        stderr: e.stderr ?? e.message ?? "shell failed",
-      };
+    return this.execInMachine(req);
+  }
+
+  async execInMachine(req: ShellRequest): Promise<ShellResult> {
+    await this.requireRunning(req.tenantId);
+    return this.runUnshare(req);
+  }
+
+  async spawnHeld(req: ShellRequest): Promise<HeldProcess> {
+    await this.requireRunning(req.tenantId);
+    const invocation = await this.unshareInvocation(req);
+    const child = spawn(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
+      stdio: "ignore",
+      env: invocation.env,
+    });
+    if (!child.pid) {
+      throw new ComputerError("WORKER_SPAWN_FAILED", "Failed to start a process on the tenant computer");
     }
+    return { pid: child.pid };
   }
 
   async readFile(tenantId: string, relPath: string): Promise<StructuredFile> {
@@ -322,6 +290,69 @@ export class NamespaceComputerDriver implements ComputerDriver {
   private async materializeRootfs(template: string, dest: string): Promise<void> {
     await rm(dest, { recursive: true, force: true });
     await cp(template, dest, { recursive: true });
+  }
+
+  private async runUnshare(req: ShellRequest): Promise<ShellResult> {
+    const invocation = await this.unshareInvocation(req);
+    try {
+      const { stdout, stderr } = await execFileAsync(invocation.command, invocation.args, {
+        cwd: invocation.cwd,
+        timeout: 30_000,
+        maxBuffer: 2_000_000,
+        env: invocation.env,
+      });
+      return { exitCode: 0, stdout, stderr };
+    } catch (err) {
+      const e = err as { code?: number; stdout?: string; stderr?: string; message?: string };
+      return {
+        exitCode: typeof e.code === "number" ? e.code : 1,
+        stdout: e.stdout ?? "",
+        stderr: e.stderr ?? e.message ?? "shell failed",
+      };
+    }
+  }
+
+  private async unshareInvocation(req: ShellRequest): Promise<{
+    command: string;
+    args: string[];
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+  }> {
+    const paths = computerRoot(this.baseDir, req.tenantId);
+    const script = this.wrapCommand(req);
+    const netns = await this.ensureEgressNet(req.tenantId);
+    // Isolated computers remap to root in a user namespace. Allowlisted
+    // computers already enter a privileged netns via sudo; remapping there
+    // makes the 0700 tenant dir unreadable (overflow uid).
+    const unshareArgs = netns
+      ? ["--mount", "--uts", "--pid", "--fork", "--kill-child", "/bin/bash", "-c", script]
+      : [
+          "--map-root-user",
+          "--mount",
+          "--uts",
+          "--pid",
+          "--fork",
+          "--kill-child",
+          "--net",
+          "/bin/bash",
+          "-c",
+          script,
+        ];
+    const env = {
+      PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
+      HOME: "/home",
+      AV_TENANT: req.tenantId,
+      AV_AGENT: req.agentId,
+    };
+    if (netns) {
+      return {
+        command: "sudo",
+        args: ["-n", "ip", "netns", "exec", netns, "unshare", ...unshareArgs],
+        cwd: paths.disk,
+        env,
+      };
+    }
+    return { command: "unshare", args: unshareArgs, cwd: paths.disk, env };
   }
 
   private wrapCommand(req: ShellRequest): string {
