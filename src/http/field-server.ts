@@ -149,7 +149,7 @@ export class FieldHttpServer {
         // Claims only — never a write to the tenant fact store.
         conditions: Array.isArray(body.conditions) ? body.conditions.map(String) : undefined,
       });
-      core.habitat.observeFieldStart({
+      await core.habitat.observeFieldStart({
         tenantId,
         pack,
         goal: journey.objective,
@@ -170,7 +170,7 @@ export class FieldHttpServer {
 
     const approve = path.match(/^\/field\/cards\/([^/]+)\/approve$/);
     if (method === "POST" && approve) {
-      this.approve(res, actor, decodeURIComponent(approve[1]!));
+      await this.approve(res, actor, decodeURIComponent(approve[1]!));
       return;
     }
 
@@ -182,7 +182,7 @@ export class FieldHttpServer {
         decision: "denied",
       });
       this.forgetPending(card.cardId);
-      core.habitat.wake({
+      await core.habitat.wake({
         kind: "card_decide",
         tenantId,
         pack,
@@ -248,7 +248,7 @@ export class FieldHttpServer {
         text: String(body.text ?? ""),
         actionClass: String(body.actionClass ?? ""),
       });
-      const woke = core.habitat.wake({ kind: "field_ask", tenantId, pack });
+      const woke = await core.habitat.wake({ kind: "field_ask", tenantId, pack });
       this.json(res, 200, {
         ok: true,
         runId: woke.run?.runId,
@@ -261,7 +261,7 @@ export class FieldHttpServer {
       const body = (await readJson(req)) as { reason?: string };
       const reason = String(body.reason ?? "field kill");
       core.field.kill(tenantId, reason);
-      core.habitat.wake({ kind: "kill", tenantId, reason, pack });
+      await core.habitat.wake({ kind: "kill", tenantId, reason, pack });
       this.json(res, 200, { ok: true });
       return;
     }
@@ -314,7 +314,7 @@ export class FieldHttpServer {
     }
   }
 
-  private approve(res: ServerResponse, actor: PrincipalKind, cardId: string): void {
+  private async approve(res: ServerResponse, actor: PrincipalKind, cardId: string): Promise<void> {
     const { core, pack } = this.opts;
     const card = core.field.resolveCard({ actor, cardId, decision: "approved" });
     const fact = core.field.commitApprovedFact(cardId);
@@ -329,7 +329,7 @@ export class FieldHttpServer {
     }
     const pending = this.pending.get(cardId);
     if (!pending) {
-      const resumed = core.habitat.wake({
+      const resumed = await core.habitat.wake({
         kind: "card_decide",
         tenantId: this.opts.tenantId,
         pack,

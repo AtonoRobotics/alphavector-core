@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -33,7 +35,8 @@ import { FieldClient, FieldHttpError } from "../src/http/field-client.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
 import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
-import type { CognitiveAdapter } from "../src/habitat/types.js";
+import type { CognitiveAdapter, CognitiveIntent } from "../src/habitat/types.js";
+import { VENDOR_BASE_URL_ENV, VENDOR_THINK_PATH } from "../src/habitat/vendor-think.js";
 import { AlphaVectorCore } from "../src/kernel.js";
 import type { PackBinding } from "../src/packs/types.js";
 import { RecordBook } from "../src/records/book.js";
@@ -50,6 +53,89 @@ import {
 const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const VENDOR_FIXTURE_KEY = "av-vcr-vendor-fixture-key";
 const servers: FieldHttpServer[] = [];
+const vendorDoubles: Array<{ close: () => Promise<void> }> = [];
+
+type VendorHttpCapture = {
+  method: string;
+  url: string;
+  authorization?: string;
+  body: unknown;
+};
+
+/** Local HTTP double. Product think must fetch this; it is not a canned in-process return. */
+async function startVendorThinkDouble(opts?: {
+  apiKey?: string;
+  rejectAuth?: boolean;
+  talking?: CognitiveIntent;
+}): Promise<{ url: string; requests: VendorHttpCapture[]; close: () => Promise<void> }> {
+  const requests: VendorHttpCapture[] = [];
+  const expectedKey = opts?.apiKey ?? VENDOR_FIXTURE_KEY;
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (c) => chunks.push(c as Buffer));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      let body: unknown = {};
+      if (raw) {
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          body = raw;
+        }
+      }
+      requests.push({
+        method: req.method ?? "",
+        url: req.url ?? "",
+        authorization: typeof req.headers.authorization === "string" ? req.headers.authorization : undefined,
+        body,
+      });
+      const rec = body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+      if (opts?.rejectAuth || req.headers.authorization !== `Bearer ${expectedKey}`) {
+        res.writeHead(401, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "unauthorized" }));
+        return;
+      }
+      const intent =
+        opts?.talking && rec.pass === "talking"
+          ? opts.talking
+          : rec.pass === "worker"
+            ? {
+                pass: "worker",
+                act: "propose_effect",
+                actionClass: "communicate",
+                channel: "email",
+                purpose: "follow-up",
+                subject: rec.recordId ?? "unspecified",
+              }
+            : rec.kind === "field_ask" || rec.kind === "mail" || rec.kind === "deadline"
+              ? { pass: "talking", act: "follow_up" }
+              : { pass: "talking", act: "launch_worker", workerType: "coder" };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(intent));
+    });
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const addr = server.address() as AddressInfo;
+  const close = () =>
+    new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  vendorDoubles.push({ close });
+  return { url: `http://127.0.0.1:${addr.port}`, requests, close };
+}
+
+async function useVendorHttp(opts?: {
+  apiKey?: string;
+  rejectAuth?: boolean;
+  talking?: CognitiveIntent;
+}): Promise<{ url: string; requests: VendorHttpCapture[]; close: () => Promise<void> }> {
+  const double = await startVendorThinkDouble(opts);
+  process.env[VENDOR_BASE_URL_ENV] = double.url;
+  return double;
+}
 
 function bindAdapter(input: {
   tenantId: string;
@@ -124,6 +210,10 @@ function killPidLeaveBook(pid: number | undefined): void {
 afterEach(async () => {
   resetDeepAgentsInvocations();
   reapHeldCoders();
+  delete process.env[VENDOR_BASE_URL_ENV];
+  while (vendorDoubles.length) {
+    await vendorDoubles.pop()?.close();
+  }
   while (servers.length) {
     await servers.pop()?.close();
   }
@@ -276,7 +366,7 @@ describe("D10 §6 habitat kernel", () => {
 
   it("fixture start wakes stem, talking does not do heavy work, worker is the coder", async () => {
     const { core, pack, tenantId, record } = await habitatStack();
-    const talking = core.habitat.wake(
+    const talking = await core.habitat.wake(
       {
         kind: "field_start",
         tenantId,
@@ -292,7 +382,7 @@ describe("D10 §6 habitat kernel", () => {
     expect(core.habitat.trailerExists(tenantId)).toBe(false);
     expect(talking.run?.status).toBe("talking");
 
-    const working = core.habitat.wake({
+    const working = await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -324,7 +414,7 @@ describe("D10 §6 habitat kernel", () => {
 
     const { core, pack, tenantId, record } = await habitatStack();
     expect(core.habitat.owns).toEqual([...HABITAT_OWNED]);
-    core.habitat.wake({
+    await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -346,7 +436,7 @@ describe("D10 §6 habitat kernel", () => {
 
   it("worker_done wakes ops and one card is required for one external effect", async () => {
     const { core, pack, tenantId, record } = await habitatStack();
-    const started = core.habitat.wake({
+    const started = await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -359,7 +449,7 @@ describe("D10 §6 habitat kernel", () => {
     expect(core.store.actions.filter((a) => a.status === "executed")).toHaveLength(0);
 
     core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
-    const approved = core.habitat.wake({
+    const approved = await core.habitat.wake({
       kind: "card_decide",
       tenantId,
       pack,
@@ -375,7 +465,7 @@ describe("D10 §6 habitat kernel", () => {
 
   it("unapproved and denied effects do not persist; deny is terminal", async () => {
     const { core, pack, tenantId, record } = await habitatStack();
-    const started = core.habitat.wake({
+    const started = await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -384,7 +474,7 @@ describe("D10 §6 habitat kernel", () => {
     });
     expect(core.store.actions.some((a) => a.status === "executed")).toBe(false);
     core.cards.resolve({ cardId: started.cardId!, decision: "denied", actor: "field" });
-    const denied = core.habitat.wake({
+    const denied = await core.habitat.wake({
       kind: "card_decide",
       tenantId,
       pack,
@@ -402,7 +492,7 @@ describe("D10 §6 habitat kernel", () => {
 
   it("approve resumes the same run id on disk", async () => {
     const { core, pack, tenantId, record } = await habitatStack();
-    const started = core.habitat.wake({
+    const started = await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -411,7 +501,7 @@ describe("D10 §6 habitat kernel", () => {
     });
     const runId = started.run!.runId;
     core.cards.resolve({ cardId: started.cardId!, decision: "approved", actor: "field" });
-    const approved = core.habitat.wake({
+    const approved = await core.habitat.wake({
       kind: "card_decide",
       tenantId,
       pack,
@@ -429,7 +519,7 @@ describe("D10 §6 habitat kernel", () => {
       agentId: first.agents[0]!.agentId,
       note: "profile-note",
     });
-    const started = first.core.habitat.wake({
+    const started = await first.core.habitat.wake({
       kind: "field_start",
       tenantId: "restart",
       pack: first.pack,
@@ -465,7 +555,7 @@ describe("D10 §6 habitat kernel", () => {
 
   it("kill tears the worker down (trailer gone)", async () => {
     const { core, pack, tenantId, record } = await habitatStack();
-    core.habitat.wake(
+    await core.habitat.wake(
       {
         kind: "field_start",
         tenantId,
@@ -476,7 +566,7 @@ describe("D10 §6 habitat kernel", () => {
       { holdWorker: true },
     );
     expect(core.habitat.trailerExists(tenantId)).toBe(true);
-    const killed = core.habitat.wake({ kind: "kill", tenantId, reason: "stop" });
+    const killed = await core.habitat.wake({ kind: "kill", tenantId, reason: "stop" });
     expect(killed.run?.status).toBe("killed");
     expect(core.habitat.trailerExists(tenantId)).toBe(false);
     expect(core.habitat.activeWorker(tenantId)).toBeUndefined();
@@ -484,7 +574,7 @@ describe("D10 §6 habitat kernel", () => {
 
   it("wake log can be replayed with no model", async () => {
     const { core, pack, tenantId, record } = await habitatStack();
-    core.habitat.wake(
+    await core.habitat.wake(
       {
         kind: "field_start",
         tenantId,
@@ -722,7 +812,7 @@ describe("D10 §6 habitat kernel", () => {
 
   it("follow-up sticks to the same worker; relaunch after kill is not follow-up", async () => {
     const { core, pack, tenantId, record } = await habitatStack();
-    const first = core.habitat.wake({
+    const first = await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -730,7 +820,7 @@ describe("D10 §6 habitat kernel", () => {
       recordId: record.id,
     });
     const workerId = first.run!.workerId;
-    const follow = core.habitat.wake({
+    const follow = await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -739,8 +829,8 @@ describe("D10 §6 habitat kernel", () => {
     });
     expect(follow.run?.workerId).toBe(workerId);
     expect(follow.launchedWorker).toBe(false);
-    core.habitat.wake({ kind: "kill", tenantId, reason: "relaunch" });
-    const relaunch = core.habitat.wake({
+    await core.habitat.wake({ kind: "kill", tenantId, reason: "relaunch" });
+    const relaunch = await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -754,7 +844,7 @@ describe("D10 §6 habitat kernel", () => {
 
   it("skill files are real files the worker can read", async () => {
     const { core, pack, tenantId, record, computerBaseDir } = await habitatStack();
-    core.habitat.wake({
+    await core.habitat.wake({
       kind: "field_start",
       tenantId,
       pack,
@@ -812,7 +902,7 @@ describe("D10 §6 habitat disk memory", () => {
     const { core, pack, tenantId, record, agents } = await habitatStack();
     const agentId = agents.find((a) => a.isOrchestrator)!.agentId;
     core.habitat.memory.writeProfile({ tenantId, agentId, note: "labeled profile" });
-    const result = core.habitat.wake(
+    const result = await core.habitat.wake(
       { kind: "field_start", tenantId, pack, goal: "one goal", recordId: record.id },
       { until: "talking" },
     );
@@ -869,7 +959,7 @@ describe("D10 §6 field verbs", () => {
       type: pack.binding.recordPartyKnowledge.recordKinds[0] ?? "record",
       label: "Subject",
     });
-    const started = core.habitat.wake({
+    const started = await core.habitat.wake({
       kind: "field_start",
       tenantId: "t1",
       pack,
@@ -882,7 +972,7 @@ describe("D10 §6 field verbs", () => {
     expect(core.habitat.getRun("t1")?.runId).toBe(started.run?.runId);
 
     const again = await habitatStack("deny-http");
-    const second = again.core.habitat.wake({
+    const second = await again.core.habitat.wake({
       kind: "field_start",
       tenantId: "deny-http",
       pack: again.pack,
@@ -890,7 +980,7 @@ describe("D10 §6 field verbs", () => {
       recordId: again.record.id,
     });
     again.core.cards.resolve({ cardId: second.cardId!, decision: "denied", actor: "field" });
-    const denied = again.core.habitat.wake({
+    const denied = await again.core.habitat.wake({
       kind: "card_decide",
       tenantId: "deny-http",
       pack: again.pack,
@@ -1529,7 +1619,10 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
-  it("bound + credentialed wake enters the recorded vendor think path, not adapterThink", async () => {
+  it("bound + credentialed wake issues live HTTP think, not adapterThink", async () => {
+    const double = await useVendorHttp({
+      talking: { pass: "talking", act: "follow_up" },
+    });
     const stack = await habitatThinkStack();
     bindAndCredential({
       tenantId: stack.tenantId,
@@ -1557,7 +1650,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
 
     expect(DeepAgentsAdapter.invocations).toBe(0);
     expect(DeepAgentsAdapter.vendorInvocations).toBe(0);
-    const talking = stack.core.habitat.wake(
+    const talking = await stack.core.habitat.wake(
       {
         kind: "field_start",
         tenantId: stack.tenantId,
@@ -1574,9 +1667,21 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(talking.launchedWorker).toBe(false);
     expect(talking.talkingDidHeavyWork).toBe(false);
     expect(talking.run?.status).toBe("talking");
+    expect(talking.run?.pendingIntent).toBeUndefined();
     expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
+    expect(double.requests).toHaveLength(1);
+    expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.url).toBe(VENDOR_THINK_PATH);
+    expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
+    expect(double.requests[0]?.body).toMatchObject({
+      model: "ci-double",
+      pass: "talking",
+      kind: "field_start",
+    });
+    expect(JSON.stringify(double.requests[0]?.body)).not.toContain(VENDOR_FIXTURE_KEY);
+    expect(JSON.stringify(double.requests[0]?.body)).not.toMatch(/apiKey|secret|password/);
 
-    const working = stack.core.habitat.wake({
+    const working = await stack.core.habitat.wake({
       kind: "field_start",
       tenantId: stack.tenantId,
       pack: stack.pack,
@@ -1602,10 +1707,19 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(adapterSrc).not.toMatch(/createDeepAgent\s*\(/);
     expect(adapterSrc).not.toMatch(/thinkFn \?\? adapterThink/);
     expect(adapterSrc).toMatch(/vendorThink/);
+    expect(adapterSrc).toMatch(/hostedVendorClient/);
     expect(adapterSrc).toMatch(/adapterThink/);
+    expect(adapterSrc).not.toMatch(/recordedVendorClient/);
     const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
     expect(vendorSrc).not.toMatch(/adapterThink|dryThink/);
     expect(vendorSrc).not.toMatch(/createDeepAgent\s*\(/);
+    expect(vendorSrc).not.toMatch(/recordedVendorClient|replayRecordedVendor/);
+    expect(vendorSrc).toMatch(/await fetch\(/);
+    expect(vendorSrc).toMatch(/authorization: `Bearer \$\{apiKey\}`/);
+    expect(double.requests.length).toBeGreaterThanOrEqual(3);
+    expect(double.requests.some((r) => r.body && typeof r.body === "object" && (r.body as { pass?: string }).pass === "worker")).toBe(
+      true,
+    );
   });
 
   it("unbound wake is ADAPTER_UNBOUND with no think, worker, or dry-stem stamp", async () => {
@@ -1613,7 +1727,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const paths = computerRoot(stack.computerBaseDir, stack.tenantId);
     expect(existsSync(paths.adapterBindFile)).toBe(false);
     expect(DeepAgentsAdapter.invocations).toBe(0);
-    expect(() =>
+    await expect(
       stack.core.habitat.wake({
         kind: "field_start",
         tenantId: stack.tenantId,
@@ -1621,9 +1735,9 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
         goal: "one goal",
         recordId: stack.record.id,
       }),
-    ).toThrow(AvError);
+    ).rejects.toThrow(AvError);
     try {
-      stack.core.habitat.wake({
+      await stack.core.habitat.wake({
         kind: "field_start",
         tenantId: stack.tenantId,
         pack: stack.pack,
@@ -1651,7 +1765,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const stack = await habitatThinkStack("t1", (unsigned) => {
       unsigned.adapter = { defaultModelId: "ci-double", allowList: ["ci-double"] };
     });
-    expect(() =>
+    await expect(
       stack.core.habitat.wake({
         kind: "field_start",
         tenantId: stack.tenantId,
@@ -1659,7 +1773,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
         goal: "one goal",
         recordId: stack.record.id,
       }),
-    ).toThrow(/ADAPTER_UNBOUND|no silent default/);
+    ).rejects.toThrow(/ADAPTER_UNBOUND|no silent default/);
     expect(DeepAgentsAdapter.invocations).toBe(0);
     expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
     expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
@@ -1675,7 +1789,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       computerBaseDir: stack.computerBaseDir,
       architectToken: stack.architectToken,
     });
-    expect(() =>
+    await expect(
       stack.core.habitat.wake({
         kind: "field_start",
         tenantId: stack.tenantId,
@@ -1683,9 +1797,9 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
         goal: "one goal",
         recordId: stack.record.id,
       }),
-    ).toThrow(AvError);
+    ).rejects.toThrow(AvError);
     try {
-      stack.core.habitat.wake({
+      await stack.core.habitat.wake({
         kind: "field_start",
         tenantId: stack.tenantId,
         pack: stack.pack,
@@ -1706,6 +1820,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
   });
 
   it("bootFieldCore with no adapter option and Architect bind + credentials invokes vendor think", async () => {
+    const double = await useVendorHttp();
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-http-bound-"));
     const { core, field, architectToken } = await liveProductField("t1", dir);
     expect(architectToken).toBeDefined();
@@ -1723,6 +1838,11 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThan(0);
     expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
+    expect(double.requests.length).toBeGreaterThan(0);
+    expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.url).toBe(VENDOR_THINK_PATH);
+    expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
+    expect(JSON.stringify(double.requests[0]?.body)).not.toContain(VENDOR_FIXTURE_KEY);
     expect(core.habitat.getRun("t1")?.runId).toMatch(/^run_/);
     expect(core.habitat.trailerExists("t1")).toBe(true);
     expect(core.habitat.getRun("t1")?.talkingDidHeavyWork).toBe(false);
@@ -1793,7 +1913,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(core.habitat.activeWorker("t1")?.workerId).toBe(worker.workerId);
     expect(core.habitat.activeWorker("t1")?.pid).toBe(worker.pid);
     expect(isPidAlive(worker.pid)).toBe(true);
-    const kernelFollow = core.habitat.observeFieldStart({
+    const kernelFollow = await core.habitat.observeFieldStart({
       tenantId: "t1",
       pack,
       goal: started.journey.objective,
@@ -1852,6 +1972,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
   });
 
   it("field-serve with no adapter option and Architect bind + credentials invokes vendor think", async () => {
+    const double = await useVendorHttp();
     const dir = await mkdtemp(path.join(os.tmpdir(), "av-think-serve-bound-"));
     const architect = architectIssueFieldToken({
       tenantId: "t1",
@@ -1881,6 +2002,9 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThan(0);
     expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
+    expect(double.requests.length).toBeGreaterThan(0);
+    expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(true);
     expect(existsSync(computerRoot(dir, "t1").workersFile)).toBe(true);
     const onDisk = JSON.parse(readFileSync(computerRoot(dir, "t1").runsFile, "utf8")) as {
@@ -1970,6 +2094,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
   });
 
   it("allow-list bind of the declared model invokes think", async () => {
+    const double = await useVendorHttp();
     const stack = await habitatThinkStack("t1", (unsigned) => {
       unsigned.adapter = { allowList: ["ci-double"], defaultModelId: "ci-double" };
     });
@@ -1978,7 +2103,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       computerBaseDir: stack.computerBaseDir,
       architectToken: stack.architectToken,
     });
-    const started = stack.core.habitat.wake({
+    const started = await stack.core.habitat.wake({
       kind: "field_start",
       tenantId: stack.tenantId,
       pack: stack.pack,
@@ -1991,6 +2116,8 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(DeepAgentsAdapter.lastModelId).toBe("ci-double");
     expect(started.launchedWorker).toBe(true);
     expect(started.run?.workerType).toBe("coder");
+    expect(double.requests.length).toBeGreaterThan(0);
+    expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
   });
 
   it("corrupt adapter-bind.json fails closed", async () => {
@@ -1998,7 +2125,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const file = computerRoot(stack.computerBaseDir, stack.tenantId).adapterBindFile;
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, "{not-json", "utf8");
-    expect(() =>
+    await expect(
       stack.core.habitat.wake({
         kind: "field_start",
         tenantId: stack.tenantId,
@@ -2006,7 +2133,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
         goal: "one goal",
         recordId: stack.record.id,
       }),
-    ).toThrow(/ADAPTER_BIND_CORRUPT|corrupt/i);
+    ).rejects.toThrow(/ADAPTER_BIND_CORRUPT|corrupt/i);
     expect(DeepAgentsAdapter.invocations).toBe(0);
     expect(stack.core.habitat.getRun(stack.tenantId)).toBeUndefined();
   });
@@ -2104,7 +2231,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     expect(existsSync(paths.adapterBindFile)).toBe(true);
     expect(existsSync(paths.adapterCredentialsFile)).toBe(false);
     expect(DeepAgentsAdapter.invocations).toBe(0);
-    expect(() =>
+    await expect(
       stack.core.habitat.wake({
         kind: "field_start",
         tenantId: stack.tenantId,
@@ -2112,9 +2239,9 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
         goal: "one goal",
         recordId: stack.record.id,
       }),
-    ).toThrow(AvError);
+    ).rejects.toThrow(AvError);
     try {
-      stack.core.habitat.wake({
+      await stack.core.habitat.wake({
         kind: "field_start",
         tenantId: stack.tenantId,
         pack: stack.pack,
@@ -2167,13 +2294,14 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
   });
 
   it("credentials stay off bind, pack, trailer, and wake-log", async () => {
+    const double = await useVendorHttp();
     const stack = await habitatThinkStack();
     bindAndCredential({
       tenantId: stack.tenantId,
       computerBaseDir: stack.computerBaseDir,
       architectToken: stack.architectToken,
     });
-    const working = stack.core.habitat.wake({
+    const working = await stack.core.habitat.wake({
       kind: "field_start",
       tenantId: stack.tenantId,
       pack: stack.pack,
@@ -2201,6 +2329,39 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
     const trailerListing = readFileSync(path.join(worker!.trailerPath, "coder-exec.mjs"), "utf8");
     expect(trailerListing).not.toContain(VENDOR_FIXTURE_KEY);
     expect(JSON.stringify(working.memory)).not.toContain(VENDOR_FIXTURE_KEY);
+    expect(double.requests.length).toBeGreaterThan(0);
+    expect(JSON.stringify(double.requests.map((r) => r.body))).not.toContain(VENDOR_FIXTURE_KEY);
+  });
+
+  it("bind + credentials the HTTP double rejects is ADAPTER_CREDENTIALS_REJECTED, not a canned think", async () => {
+    const double = await useVendorHttp({ rejectAuth: true });
+    const stack = await habitatThinkStack();
+    bindAndCredential({
+      tenantId: stack.tenantId,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    await expect(
+      stack.core.habitat.wake({
+        kind: "field_start",
+        tenantId: stack.tenantId,
+        pack: stack.pack,
+        goal: "one goal",
+        recordId: stack.record.id,
+      }),
+    ).rejects.toMatchObject({
+      code: "ADAPTER_CREDENTIALS_REJECTED",
+      closed: true,
+    });
+    expect(double.requests).toHaveLength(1);
+    expect(double.requests[0]?.method).toBe("POST");
+    expect(double.requests[0]?.url).toBe(VENDOR_THINK_PATH);
+    expect(double.requests[0]?.authorization).toBe(`Bearer ${VENDOR_FIXTURE_KEY}`);
+    expect(DeepAgentsAdapter.lastThinkPath).toBe("vendor");
+    expect(DeepAgentsAdapter.vendorInvocations).toBeGreaterThan(0);
+    expect(stack.core.habitat.trailerExists(stack.tenantId)).toBe(false);
+    expect(stack.core.habitat.activeWorker(stack.tenantId)).toBeUndefined();
   });
 
   it("explicit thinkFn is the CI double path, not the product default", async () => {
@@ -2220,7 +2381,7 @@ describe("D10 HK-055–HK-059 real think / Architect bind", () => {
       architectToken: architect.token,
     });
     expect(existsSync(computerRoot(computerBaseDir, "t1").adapterCredentialsFile)).toBe(false);
-    const started = core.habitat.wake({
+    const started = await core.habitat.wake({
       kind: "field_start",
       tenantId: "t1",
       pack: loaded.loaded,
@@ -2274,7 +2435,7 @@ describe("D10 CS-013 routine wakes", () => {
     expect(existsSync(paths.routinesFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "routines.json"))).toBe(false);
 
-    const fired = core.habitat.fireDue(tenantId, { pack });
+    const fired = await core.habitat.fireDue(tenantId, { pack });
     expect(fired).toHaveLength(1);
     expect(fired[0]?.run?.runId).toMatch(/^run_/);
     expect(fired[0]?.run?.goal).toBe("one goal");
@@ -2300,7 +2461,7 @@ describe("D10 CS-013 routine wakes", () => {
     expect(wakes.find((w) => w.kind === "routine")?.detail).toMatchObject({
       routineId: "morning-brief",
     });
-    const again = core.habitat.fireDue(tenantId, { pack });
+    const again = await core.habitat.fireDue(tenantId, { pack });
     expect(again).toHaveLength(0);
   });
 
@@ -2322,7 +2483,7 @@ describe("D10 CS-013 routine wakes", () => {
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
-    const fired = core.habitat.fireDue("t1", { pack });
+    const fired = await core.habitat.fireDue("t1", { pack });
     expect(fired).toHaveLength(1);
     expect(fired[0]?.run?.runId).toBe(run!.runId);
     expect(fired[0]?.launchedWorker).toBe(false);
@@ -2351,7 +2512,7 @@ describe("D10 CS-013 routine wakes", () => {
       architectToken: architectToken!,
     });
     try {
-      core.habitat.fireDue("t1", { pack });
+      await core.habitat.fireDue("t1", { pack });
       throw new Error("expected ONE_GOAL");
     } catch (err) {
       expect(err).toMatchObject({ code: "ONE_GOAL", closed: true });
@@ -2369,12 +2530,12 @@ describe("D10 CS-013 routine wakes", () => {
   it("missing routines.json is empty without inventing", async () => {
     const { core, pack, tenantId, computerBaseDir } = await habitatStack();
     expect(existsSync(computerRoot(computerBaseDir, tenantId).routinesFile)).toBe(false);
-    const fired = core.habitat.fireDue(tenantId, { pack });
+    const fired = await core.habitat.fireDue(tenantId, { pack });
     expect(fired).toEqual([]);
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     expect(existsSync(computerRoot(computerBaseDir, tenantId).runsFile)).toBe(false);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "routine",
         tenantId,
@@ -2382,7 +2543,7 @@ describe("D10 CS-013 routine wakes", () => {
         goal: "invented",
         routineId: "not-stored",
       }),
-    ).toThrow(/ROUTINE_STORE_MISSING|refusing to invent/);
+    ).rejects.toThrow(/ROUTINE_STORE_MISSING|refusing to invent/);
   });
 
   it("corrupt routines.json fails closed (ROUTINE_STORE_CORRUPT)", async () => {
@@ -2390,11 +2551,11 @@ describe("D10 CS-013 routine wakes", () => {
     const file = computerRoot(computerBaseDir, tenantId).routinesFile;
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, "{not-json", "utf8");
-    expect(() => core.habitat.fireDue(tenantId, { pack })).toThrow(/ROUTINE_STORE_CORRUPT|corrupt/i);
+    await expect(core.habitat.fireDue(tenantId, { pack })).rejects.toThrow(/ROUTINE_STORE_CORRUPT|corrupt/i);
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     writeFileSync(file, `${JSON.stringify({ routines: [{ routineId: "x" }] })}\n`, "utf8");
-    expect(() => core.habitat.fireDue(tenantId, { pack })).toThrow(/ROUTINE_STORE_CORRUPT|corrupt/i);
+    await expect(core.habitat.fireDue(tenantId, { pack })).rejects.toThrow(/ROUTINE_STORE_CORRUPT|corrupt/i);
   });
 
   it("pack declaration is not live until stored on the tenant computer", async () => {
@@ -2412,7 +2573,7 @@ describe("D10 CS-013 routine wakes", () => {
     const record = core.records.put("t1", { type: "case", label: "Subject" });
     const architect = core.fieldTokens.issue({ tenantId: "t1", principal: "architect" });
     expect(existsSync(computerRoot(computerBaseDir, "t1").routinesFile)).toBe(false);
-    expect(core.habitat.fireDue("t1", { pack: loaded.loaded })).toEqual([]);
+    expect(await core.habitat.fireDue("t1", { pack: loaded.loaded })).toEqual([]);
     expect(core.habitat.getRun("t1")).toBeUndefined();
 
     architectMaterializePackRoutines({
@@ -2427,7 +2588,7 @@ describe("D10 CS-013 routine wakes", () => {
     };
     expect(onDisk.routines[0]?.boundBy).toBe("pack");
     expect(onDisk.routines[0]?.routineId).toBe("pack-brief");
-    const fired = core.habitat.fireDue("t1", { pack: loaded.loaded });
+    const fired = await core.habitat.fireDue("t1", { pack: loaded.loaded });
     expect(fired).toHaveLength(1);
     expect(fired[0]?.run?.goal).toBe("one goal");
     expect(fired[0]?.run?.recordId).toBeUndefined();
@@ -2496,7 +2657,7 @@ describe("D10 CS-013 routine wakes", () => {
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
-    const fired = core.habitat.fireDue("t1", { pack });
+    const fired = await core.habitat.fireDue("t1", { pack });
     expect(fired[0]?.run?.runId).toMatch(/^run_/);
     expect(core.habitat.trailerExists("t1")).toBe(true);
     const worker = core.habitat.activeWorker("t1");
@@ -2598,7 +2759,7 @@ describe("D10 CS-013 routine ticker", () => {
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.getRun("t1")?.runId).toBe(runA!.runId);
     expect(core.habitat.getRun("t1")?.goal).toBe(first.journey.objective);
     expect(core.habitat.listWakes("t1").some((w) => w.kind === "routine")).toBe(false);
@@ -2619,12 +2780,12 @@ describe("D10 CS-013 routine ticker", () => {
     const file = computerRoot(computerBaseDir, tenantId).routinesFile;
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, "{not-json", "utf8");
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     expect(existsSync(computerRoot(computerBaseDir, tenantId).runsFile)).toBe(false);
     writeFileSync(file, `${JSON.stringify({ routines: [{ routineId: "x" }] })}\n`, "utf8");
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     core.habitat.stopDueTicker();
@@ -2645,11 +2806,11 @@ describe("D10 CS-013 routine ticker", () => {
       computerBaseDir,
       architectToken: architect.token,
     });
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     expect(DeepAgentsAdapter.invocations).toBe(0);
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     core.habitat.stopDueTicker();
   });
@@ -2715,7 +2876,7 @@ describe("D10 CS-018 mail wakes", () => {
     const worker = core.habitat.activeWorker("t1");
     const goalsBefore = core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective);
 
-    const delivered = core.habitat.deliverMail({
+    const delivered = await core.habitat.deliverMail({
       tenantId: "t1",
       addresseeId: addressee.agentId,
       fromAgentId: orch.agentId,
@@ -2776,7 +2937,7 @@ describe("D10 CS-018 mail wakes", () => {
     const orch = core.agents.list("t1").find((a) => a.isOrchestrator)!;
     const addressee = core.agents.list("t1").find((a) => !a.isOrchestrator)!;
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
-    expect(() =>
+    await expect(
       core.habitat.deliverMail({
         tenantId: "t1",
         addresseeId: addressee.agentId,
@@ -2784,20 +2945,20 @@ describe("D10 CS-018 mail wakes", () => {
         body: "No run is open.",
         deliveredBy: "habitat",
       }),
-    ).toThrow(/NO_OPEN_RUN|no implicit start/);
+    ).rejects.toThrow(/NO_OPEN_RUN|no implicit start/);
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
     expect(existsSync(computerRoot(dir, "t1").mailFile)).toBe(false);
     expect(core.habitat.getRun("t1")).toBeUndefined();
     expect(core.habitat.listWakes("t1")).toEqual([]);
     expect(core.habitat.trailerExists("t1")).toBe(false);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "mail",
         tenantId: "t1",
         addresseeId: addressee.agentId,
         mailId: "mail_invented",
       }),
-    ).toThrow(/MAIL_STORE_MISSING|refusing to invent/);
+    ).rejects.toThrow(/MAIL_STORE_MISSING|refusing to invent/);
   });
 
   it("mail does not confer authority", async () => {
@@ -2816,7 +2977,7 @@ describe("D10 CS-018 mail wakes", () => {
     expect(existsSync(computerRoot(dir, "t1").adapterBindFile)).toBe(false);
     expect(existsSync(computerRoot(dir, "t1").routinesFile)).toBe(false);
 
-    const delivered = core.habitat.deliverMail({
+    const delivered = await core.habitat.deliverMail({
       tenantId: "t1",
       addresseeId: addressee.agentId,
       fromAgentId: orch.agentId,
@@ -2843,7 +3004,7 @@ describe("D10 CS-018 mail wakes", () => {
     const orch = core.agents.list("t1").find((a) => a.isOrchestrator)!;
     await createOpenStart(field, "buyer", "Work this buyer journey");
 
-    expect(() =>
+    await expect(
       architectDeliverMail({
         tenantId: "t1",
         addresseeId: addressee.agentId,
@@ -2852,7 +3013,7 @@ describe("D10 CS-018 mail wakes", () => {
         habitat: core.habitat,
         architectToken: fieldToken,
       }),
-    ).toThrow(/cannot bind|field token|mail/i);
+    ).rejects.toThrow(/cannot bind|field token|mail/i);
     expect(core.habitat.listWakes("t1").some((w) => w.kind === "mail")).toBe(false);
 
     const mailBlocked = await fetch(`${url}/field/mail`, {
@@ -2913,7 +3074,7 @@ describe("D10 CS-018 mail wakes", () => {
     expect(fieldSrc).not.toMatch(/pickAgent/);
     expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/mail/);
 
-    const ok = architectDeliverMail({
+    const ok = await architectDeliverMail({
       tenantId: "t1",
       addresseeId: addressee.agentId,
       body: "Architect may deliver.",
@@ -2935,7 +3096,7 @@ describe("D10 CS-018 mail wakes", () => {
     expect(readTenantMail(computerBaseDir, tenantId)).toEqual({ items: [] });
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "mail",
         tenantId,
@@ -2943,7 +3104,7 @@ describe("D10 CS-018 mail wakes", () => {
         addresseeId: core.agents.list(tenantId).find((a) => !a.isOrchestrator)!.agentId,
         mailId: "not-stored",
       }),
-    ).toThrow(/MAIL_STORE_MISSING|refusing to invent/);
+    ).rejects.toThrow(/MAIL_STORE_MISSING|refusing to invent/);
     expect(existsSync(paths.mailFile)).toBe(false);
     expect(existsSync(paths.runsFile)).toBe(false);
 
@@ -2952,7 +3113,7 @@ describe("D10 CS-018 mail wakes", () => {
     const orch = core.agents.list(tenantId).find((a) => a.isOrchestrator)!;
     const addressee = core.agents.list(tenantId).find((a) => !a.isOrchestrator)!;
     expect(() => readTenantMail(computerBaseDir, tenantId)).toThrow(/MAIL_STORE_CORRUPT|corrupt/i);
-    expect(() =>
+    await expect(
       core.habitat.deliverMail({
         tenantId,
         addresseeId: addressee.agentId,
@@ -2960,8 +3121,8 @@ describe("D10 CS-018 mail wakes", () => {
         body: "corrupt store",
         deliveredBy: "habitat",
       }),
-    ).toThrow(/MAIL_STORE_CORRUPT|corrupt/i);
-    expect(() =>
+    ).rejects.toThrow(/MAIL_STORE_CORRUPT|corrupt/i);
+    await expect(
       core.habitat.wake({
         kind: "mail",
         tenantId,
@@ -2969,7 +3130,7 @@ describe("D10 CS-018 mail wakes", () => {
         addresseeId: addressee.agentId,
         mailId: "x",
       }),
-    ).toThrow(/MAIL_STORE_CORRUPT|corrupt/i);
+    ).rejects.toThrow(/MAIL_STORE_CORRUPT|corrupt/i);
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     writeFileSync(paths.mailFile, `${JSON.stringify({ items: [{ mailId: "x" }] })}\n`, "utf8");
@@ -3033,7 +3194,7 @@ describe("D10 deadline wakes", () => {
     expect(existsSync(paths.deadlinesFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "deadlines.json"))).toBe(false);
 
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
 
     expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
     expect(core.habitat.getRun("t1")?.goal).toBe(started.journey.objective);
@@ -3066,7 +3227,7 @@ describe("D10 deadline wakes", () => {
     expect(onDisk.runs[0]?.runId).toBe(run!.runId);
     expect(core.store.journeys.filter((j) => j.tenantId === "t1").map((j) => j.objective)).toEqual(goalsBefore);
 
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.listWakes("t1").filter((w) => w.kind === "deadline")).toHaveLength(1);
 
     await field.kill("stop after deadline");
@@ -3085,33 +3246,33 @@ describe("D10 deadline wakes", () => {
       architectToken: architectToken!,
     });
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "deadline",
         tenantId: "t1",
         deadlineId: "lonely-due",
       }),
-    ).toThrow(/NO_OPEN_RUN|no implicit start/);
+    ).rejects.toThrow(/NO_OPEN_RUN|no implicit start/);
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
     expect(core.habitat.getRun("t1")).toBeUndefined();
     expect(core.habitat.listWakes("t1")).toEqual([]);
     expect(core.habitat.trailerExists("t1")).toBe(false);
 
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
     expect(core.habitat.getRun("t1")).toBeUndefined();
     expect(core.habitat.listWakes("t1")).toEqual([]);
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
     expect(core.habitat.getRun("t1")).toBeUndefined();
     expect(core.habitat.listWakes("t1")).toEqual([]);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "deadline",
         tenantId: "t1",
         deadlineId: "not-stored",
       }),
-    ).toThrow(/DEADLINE_STORE_MISSING|refusing to invent/);
+    ).rejects.toThrow(/DEADLINE_STORE_MISSING|refusing to invent/);
   });
 
   it("corrupt deadlines.json fails closed; missing file is empty without inventing", async () => {
@@ -3121,35 +3282,35 @@ describe("D10 deadline wakes", () => {
     expect(readTenantDeadlines(computerBaseDir, tenantId)).toEqual({ deadlines: [] });
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "deadline",
         tenantId,
         pack,
         deadlineId: "not-stored",
       }),
-    ).toThrow(/DEADLINE_STORE_MISSING|refusing to invent/);
+    ).rejects.toThrow(/DEADLINE_STORE_MISSING|refusing to invent/);
     expect(existsSync(paths.deadlinesFile)).toBe(false);
     expect(existsSync(paths.runsFile)).toBe(false);
 
     mkdirSync(path.dirname(paths.deadlinesFile), { recursive: true });
     writeFileSync(paths.deadlinesFile, "{not-json", "utf8");
     expect(() => readTenantDeadlines(computerBaseDir, tenantId)).toThrow(/DEADLINE_STORE_CORRUPT|corrupt/i);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "deadline",
         tenantId,
         pack,
         deadlineId: "x",
       }),
-    ).toThrow(/DEADLINE_STORE_CORRUPT|corrupt/i);
-    core.habitat.advanceClock(new Date().toISOString());
+    ).rejects.toThrow(/DEADLINE_STORE_CORRUPT|corrupt/i);
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     expect(existsSync(paths.runsFile)).toBe(false);
     writeFileSync(paths.deadlinesFile, `${JSON.stringify({ deadlines: [{ deadlineId: "x" }] })}\n`, "utf8");
     expect(() => readTenantDeadlines(computerBaseDir, tenantId)).toThrow(/DEADLINE_STORE_CORRUPT|corrupt/i);
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
   });
@@ -3222,7 +3383,7 @@ describe("D10 deadline wakes", () => {
     ).tokens.length;
     expect(existsSync(computerRoot(dir, "t1").adapterBindFile)).toBe(false);
 
-    const delivered = core.habitat.deliverMail({
+    const delivered = await core.habitat.deliverMail({
       tenantId: "t1",
       addresseeId: addressee.agentId,
       fromAgentId: orch.agentId,
@@ -3292,7 +3453,7 @@ describe("D10 connector wakes", () => {
     expect(existsSync(paths.connectorBindFile)).toBe(true);
     expect(existsSync(path.join(paths.disk, "connector-bind.json"))).toBe(false);
 
-    const delivered = core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" });
+    const delivered = await core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" });
     expect(delivered.run?.runId).toBe(run!.runId);
     expect(delivered.launchedWorker).toBe(false);
     expect(delivered.wokeOps).toBe(false);
@@ -3339,16 +3500,16 @@ describe("D10 connector wakes", () => {
     const run = core.habitat.getRun("t1");
     expect(existsSync(computerRoot(dir, "t1").connectorBindFile)).toBe(false);
     expect(readTenantConnectorBinds(dir, "t1")).toEqual({ connectors: [] });
-    expect(() => core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" })).toThrow(
+    await expect(core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" })).rejects.toThrow(
       /CONNECTOR_UNBOUND|no silent no-op/,
     );
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "connector",
         tenantId: "t1",
         connectorId: "mls",
       }),
-    ).toThrow(/CONNECTOR_UNBOUND|no silent no-op/);
+    ).rejects.toThrow(/CONNECTOR_UNBOUND|no silent no-op/);
     expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
     expect(core.habitat.listWakes("t1").some((w) => w.kind === "connector")).toBe(false);
     expect(core.store.journeys.filter((j) => j.tenantId === "t1")).toHaveLength(1);
@@ -3369,9 +3530,9 @@ describe("D10 connector wakes", () => {
     });
     expect(existsSync(computerRoot(dir, "t1").connectorBindFile)).toBe(true);
     expect(existsSync(computerRoot(dir, "t1").connectorCredentialsFile)).toBe(false);
-    expect(() => core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "crm" })).toThrow(AvError);
+    await expect(core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "crm" })).rejects.toThrow(AvError);
     try {
-      core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "crm" });
+      await core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "crm" });
       expect.fail("bound connector without credentials must fail closed");
     } catch (err) {
       expect(err).toBeInstanceOf(AvError);
@@ -3391,7 +3552,7 @@ describe("D10 connector wakes", () => {
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
-    const ok = core.habitat.admitConnector({ tenantId: "t1", connectorId: "crm" });
+    const ok = await core.habitat.admitConnector({ tenantId: "t1", connectorId: "crm" });
     expect(ok.run?.runId).toBe(run!.runId);
     expect(core.habitat.listWakes("t1").some((w) => w.kind === "connector" && w.runId === run!.runId)).toBe(true);
   });
@@ -3406,20 +3567,20 @@ describe("D10 connector wakes", () => {
       architectToken: architectToken!,
     });
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
-    expect(() => core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" })).toThrow(
+    await expect(core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" })).rejects.toThrow(
       /NO_OPEN_RUN|no implicit start/,
     );
     expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(false);
     expect(core.habitat.getRun("t1")).toBeUndefined();
     expect(core.habitat.listWakes("t1")).toEqual([]);
     expect(core.habitat.trailerExists("t1")).toBe(false);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "connector",
         tenantId: "t1",
         connectorId: "mls",
       }),
-    ).toThrow(/NO_OPEN_RUN|no implicit start/);
+    ).rejects.toThrow(/NO_OPEN_RUN|no implicit start/);
   });
 
   it("corrupt connector-bind.json fails closed; missing file is empty without inventing", async () => {
@@ -3429,31 +3590,31 @@ describe("D10 connector wakes", () => {
     expect(readTenantConnectorBinds(computerBaseDir, tenantId)).toEqual({ connectors: [] });
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "connector",
         tenantId,
         pack,
         connectorId: "not-bound",
       }),
-    ).toThrow(/CONNECTOR_UNBOUND|no silent no-op/);
+    ).rejects.toThrow(/CONNECTOR_UNBOUND|no silent no-op/);
     expect(existsSync(paths.connectorBindFile)).toBe(false);
     expect(existsSync(paths.runsFile)).toBe(false);
 
     mkdirSync(path.dirname(paths.connectorBindFile), { recursive: true });
     writeFileSync(paths.connectorBindFile, "{not-json", "utf8");
     expect(() => readTenantConnectorBinds(computerBaseDir, tenantId)).toThrow(/CONNECTOR_STORE_CORRUPT|corrupt/i);
-    expect(() => core.habitat.deliverConnectorEvent({ tenantId, connectorId: "x" })).toThrow(
+    await expect(core.habitat.deliverConnectorEvent({ tenantId, connectorId: "x" })).rejects.toThrow(
       /CONNECTOR_STORE_CORRUPT|corrupt/i,
     );
-    expect(() =>
+    await expect(
       core.habitat.wake({
         kind: "connector",
         tenantId,
         pack,
         connectorId: "x",
       }),
-    ).toThrow(/CONNECTOR_STORE_CORRUPT|corrupt/i);
+    ).rejects.toThrow(/CONNECTOR_STORE_CORRUPT|corrupt/i);
     expect(core.habitat.getRun(tenantId)).toBeUndefined();
     expect(core.habitat.listWakes(tenantId)).toEqual([]);
     writeFileSync(paths.connectorBindFile, `${JSON.stringify({ connectors: [{ connectorId: "x" }] })}\n`, "utf8");
@@ -3535,7 +3696,7 @@ describe("D10 connector wakes", () => {
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
-    const delivered = core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" });
+    const delivered = await core.habitat.deliverConnectorEvent({ tenantId: "t1", connectorId: "mls" });
     expect(delivered.run?.runId).toBe(run!.runId);
     expect(delivered.run?.pendingCardId).toBe(pendingCard);
     expect(core.cards.get(pendingCard!)?.status).toBe("pending");
@@ -3546,7 +3707,7 @@ describe("D10 connector wakes", () => {
     expect(existsSync(computerRoot(dir, "t1").routinesFile)).toBe(false);
     expect(core.agents.list("t1").map((a) => a.agentId)).toEqual(agentsBefore);
 
-    const mailed = core.habitat.deliverMail({
+    const mailed = await core.habitat.deliverMail({
       tenantId: "t1",
       addresseeId: addressee.agentId,
       fromAgentId: orch.agentId,
@@ -3564,7 +3725,7 @@ describe("D10 connector wakes", () => {
       computerBaseDir: dir,
       architectToken: architectToken!,
     });
-    core.habitat.advanceClock(new Date().toISOString());
+    await core.habitat.advanceClock(new Date().toISOString());
     expect(core.habitat.listWakes("t1").some((w) => w.kind === "deadline" && w.runId === run!.runId)).toBe(true);
     expect(core.habitat.getRun("t1")?.runId).toBe(run!.runId);
     expect(orch.agentId).toBeDefined();

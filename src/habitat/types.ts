@@ -185,7 +185,7 @@ export interface CognitiveAdapter {
    * An explicit CI thinkFn double does not.
    */
   readonly requiresCredentials?: boolean;
-  think(input: AdapterInput): CognitiveIntent;
+  think(input: AdapterInput): CognitiveIntent | Promise<CognitiveIntent>;
 }
 
 export interface WorkerRecord {

@@ -1,7 +1,7 @@
 import { createDeepAgent } from "deepagents";
 import { AvError } from "../errors.js";
 import type { AdapterInput, CognitiveAdapter, CognitiveIntent } from "./types.js";
-import { recordedVendorClient, vendorThink, type VendorThinkClient } from "./vendor-think.js";
+import { hostedVendorClient, vendorThink, type VendorThinkClient } from "./vendor-think.js";
 
 export { createDeepAgent };
 
@@ -11,8 +11,13 @@ export type DeepAgentsThinkPath = "vendor" | "double";
 export interface DeepAgentsAdapterOptions {
   /** Explicit CI test double. Not the product default. */
   thinkFn?: AdapterThinkFn;
-  /** Explicit recorded vendor fixture. Not adapterThink. */
+  /** Explicit hosted-model HTTP client. Tests inject a local base URL. */
   vendor?: VendorThinkClient;
+  /**
+   * Hosted-model base URL. Tests inject a local HTTP double.
+   * Product reads AV_VENDOR_BASE_URL. Not a field setter. Not on bind.
+   */
+  vendorBaseUrl?: string;
 }
 
 /**
@@ -23,10 +28,9 @@ export interface DeepAgentsAdapterOptions {
  * The published SDK entry is imported as sdkEntry. It SHALL NOT own the loop.
  * Think is this adapter. Kernel still wake / run / worker / admit / coder.
  *
- * Product think: Architect bind + Architect-written credentials → vendor hop
- * (recorded vendor fixture this slice; live hosted model is leftover).
- * An explicit thinkFn is the CI test-double path. It is not the product default.
- * Dry-stem is not this adapter's production path.
+ * Product think: Architect bind + Architect-written credentials → live HTTP
+ * to the hosted model. An explicit thinkFn is the CI test-double path.
+ * It is not the product default. Dry-stem is not this adapter's production path.
  */
 export class DeepAgentsAdapter implements CognitiveAdapter {
   readonly name = "deepagents";
@@ -44,11 +48,11 @@ export class DeepAgentsAdapter implements CognitiveAdapter {
   constructor(thinkFnOrOpts?: AdapterThinkFn | DeepAgentsAdapterOptions) {
     const opts = normalizeOpts(thinkFnOrOpts);
     this.thinkFn = opts.thinkFn;
-    this.vendor = opts.vendor ?? recordedVendorClient;
+    this.vendor = opts.vendor ?? hostedVendorClient(opts.vendorBaseUrl);
     this.requiresCredentials = !this.thinkFn;
   }
 
-  think(input: AdapterInput): CognitiveIntent {
+  async think(input: AdapterInput): Promise<CognitiveIntent> {
     const modelId = input.bind?.modelId?.trim();
     if (!modelId) {
       throw new AvError(

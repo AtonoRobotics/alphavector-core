@@ -122,9 +122,9 @@ export class HabitatKernel {
    * Advance the kernel-owned clock and run the due ticker.
    * Tests use this instead of calling fireDue.
    */
-  advanceClock(iso: string): void {
+  async advanceClock(iso: string): Promise<void> {
     this.frozenNow = iso;
-    this.tickDue();
+    await this.tickDueAsync();
   }
 
   /** Remember the loaded pack so the ticker can fireDue without a test passing pack. */
@@ -188,12 +188,12 @@ export class HabitatKernel {
    * A second start with a different goal throws ONE_GOAL — one tenant, one
    * pack, one orchestrator, one goal. Same fail-closed rule as `wake()`.
    */
-  observeFieldStart(event: Omit<WakeEvent, "kind"> & { pack: LoadedPack; goal: string }): WakeResult {
+  async observeFieldStart(event: Omit<WakeEvent, "kind"> & { pack: LoadedPack; goal: string }): Promise<WakeResult> {
     this.packs.set(event.tenantId, event.pack);
     return this.wake({ ...event, kind: "field_start" }, { holdWorker: true });
   }
 
-  wake(event: WakeEvent, opts?: { until?: "talking" | "card" | "done"; holdWorker?: boolean }): WakeResult {
+  async wake(event: WakeEvent, opts?: { until?: "talking" | "card" | "done"; holdWorker?: boolean }): Promise<WakeResult> {
     this.bus.emit(event);
     if (event.pack) this.packs.set(event.tenantId, event.pack);
     const pack = event.pack ?? this.packs.get(event.tenantId);
@@ -252,7 +252,7 @@ export class HabitatKernel {
    * Corrupt store fails closed. Each due routine calls wake({ kind: "routine" }).
    * Not a workflow-engine bus and not field-configured.
    */
-  fireDue(tenantId: string, opts?: { now?: string; holdWorker?: boolean; pack?: LoadedPack }): WakeResult[] {
+  async fireDue(tenantId: string, opts?: { now?: string; holdWorker?: boolean; pack?: LoadedPack }): Promise<WakeResult[]> {
     const store = readTenantRoutines(this.opts.computerBaseDir, tenantId);
     const now = opts?.now ?? this.now();
     const pack = opts?.pack ?? this.packs.get(tenantId);
@@ -260,7 +260,7 @@ export class HabitatKernel {
     const results: WakeResult[] = [];
     let next = store;
     for (const routine of due) {
-      const result = this.wake(
+      const result = await this.wake(
         {
           kind: "routine",
           tenantId,
@@ -288,16 +288,20 @@ export class HabitatKernel {
    * swallowed so the interval keeps ticking. Does not invent routines or deadlines.
    */
   private tickDue(): void {
+    void this.tickDueAsync();
+  }
+
+  private async tickDueAsync(): Promise<void> {
     if (!this.opts.computerBaseDir) return;
     const now = this.now();
     for (const tenantId of this.tickerTenantIds()) {
       try {
-        this.fireDue(tenantId, { now });
+        await this.fireDue(tenantId, { now });
       } catch {
         // keep ticking
       }
       try {
-        this.fireDueDeadlines(tenantId, { now });
+        await this.fireDueDeadlines(tenantId, { now });
       } catch {
         // keep ticking
       }
@@ -310,13 +314,13 @@ export class HabitatKernel {
    * Each due deadline calls wake({ kind: "deadline" }). Kernel-owned; not Temporal.
    * Called from tickDue / advanceClock — not a field-configured bus.
    */
-  private fireDueDeadlines(tenantId: string, opts?: { now?: string }): void {
+  private async fireDueDeadlines(tenantId: string, opts?: { now?: string }): Promise<void> {
     const store = readTenantDeadlines(this.opts.computerBaseDir, tenantId);
     const now = opts?.now ?? this.now();
     const due = store.deadlines.filter((row) => row.tenantId === tenantId && isDeadlineDue(row, now));
     let next = store;
     for (const deadline of due) {
-      this.wake({
+      await this.wake({
         kind: "deadline",
         tenantId,
         pack: this.packs.get(tenantId),
@@ -358,13 +362,13 @@ export class HabitatKernel {
    * attach to the open run or start one goal if none is open. ONE_GOAL if the
    * routine's goal is distinct from the open run.
    */
-  private routineWake(
+  private async routineWake(
     event: WakeEvent,
     pack: LoadedPack | undefined,
     decision: ReturnType<typeof stem>,
     until: "talking" | "card" | "done",
     holdWorker: boolean,
-  ): WakeResult {
+  ): Promise<WakeResult> {
     const stored = this.requireStoredRoutine(event);
     const goal = event.goal ?? stored.goal;
     const existing = this.runs.get(event.tenantId);
@@ -383,17 +387,17 @@ export class HabitatKernel {
     );
   }
 
-  private attachRoutine(
+  private async attachRoutine(
     event: WakeEvent,
     stored: RoutineRecord,
     run: RunRecord,
     decision: ReturnType<typeof stem>,
-  ): WakeResult {
+  ): Promise<WakeResult> {
     const creature = this.requireOrchestrator(event.tenantId);
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, event.pack ?? this.packs.get(event.tenantId));
-    const talking = this.adapter.think({
+    const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
@@ -440,13 +444,13 @@ export class HabitatKernel {
    * requires an existing sender agent. Architect path is gated separately.
    * Mail SHALL NOT confer authority. Attach only — no second goal, no coder.
    */
-  deliverMail(input: {
+  async deliverMail(input: {
     tenantId: string;
     addresseeId: string;
     fromAgentId: string;
     body: string;
     deliveredBy: "architect" | "habitat";
-  }): WakeResult {
+  }): Promise<WakeResult> {
     const addresseeId = input.addresseeId.trim();
     const fromAgentId = input.fromAgentId.trim();
     if (!addresseeId) {
@@ -493,7 +497,7 @@ export class HabitatKernel {
    * Talking stays thin — no pickAgent, no coder launch. No implicit start.
    * Mail SHALL NOT confer authority.
    */
-  private mailWake(event: WakeEvent, decision: ReturnType<typeof stem>): WakeResult {
+  private async mailWake(event: WakeEvent, decision: ReturnType<typeof stem>): Promise<WakeResult> {
     const stored = this.requireStoredMail(event);
     const addresseeId = event.addresseeId?.trim() || stored.toAgentId;
     this.requireAddressee(event.tenantId, addresseeId);
@@ -507,7 +511,7 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, addresseeId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
-    const talking = this.adapter.think({
+    const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
@@ -576,7 +580,7 @@ export class HabitatKernel {
    * Talking stays thin — no pickAgent, no coder launch. No implicit start
    * (unlike routine, which may start one goal). Attach only, like mail / field_ask.
    */
-  private deadlineWake(event: WakeEvent, decision: ReturnType<typeof stem>): WakeResult {
+  private async deadlineWake(event: WakeEvent, decision: ReturnType<typeof stem>): Promise<WakeResult> {
     const stored = this.requireStoredDeadline(event);
     const run = this.runs.get(event.tenantId);
     if (!run || isTerminal(run.status)) {
@@ -586,7 +590,7 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
-    const talking = this.adapter.think({
+    const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
@@ -620,10 +624,10 @@ export class HabitatKernel {
    * Attach only — no second goal, no coder. Connector SHALL NOT confer authority.
    * Temporal is not the bus.
    */
-  deliverConnectorEvent(input: {
+  async deliverConnectorEvent(input: {
     tenantId: string;
     connectorId: string;
-  }): WakeResult {
+  }): Promise<WakeResult> {
     return this.admitConnector(input);
   }
 
@@ -632,7 +636,7 @@ export class HabitatKernel {
    * Unbound → CONNECTOR_UNBOUND. Missing required creds → CONNECTOR_CREDENTIALS_MISSING.
    * No open run → NO_OPEN_RUN. Does not mint a run or a goal.
    */
-  admitConnector(input: { tenantId: string; connectorId: string }): WakeResult {
+  async admitConnector(input: { tenantId: string; connectorId: string }): Promise<WakeResult> {
     const connectorId = input.connectorId.trim();
     if (!connectorId) {
       throw new AvError("CONNECTOR_UNBOUND", "Connector admit requires an Architect bind; refusing to invent");
@@ -657,7 +661,7 @@ export class HabitatKernel {
    * (unlike routine, which may start one goal). Attach only, like mail / deadline.
    * Connector SHALL NOT confer authority.
    */
-  private connectorWake(event: WakeEvent, decision: ReturnType<typeof stem>): WakeResult {
+  private async connectorWake(event: WakeEvent, decision: ReturnType<typeof stem>): Promise<WakeResult> {
     const stored = this.requireConnectorBind(event.tenantId, event.connectorId);
     const run = this.runs.get(event.tenantId);
     if (!run || isTerminal(run.status)) {
@@ -667,7 +671,7 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
-    const talking = this.adapter.think({
+    const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
@@ -743,7 +747,7 @@ export class HabitatKernel {
    * Field ask: a wake on the open run. Does not mint a run or a goal.
    * Talking stays thin — no pickAgent, no coder launch. No implicit start.
    */
-  private fieldAsk(event: WakeEvent, decision: ReturnType<typeof stem>): WakeResult {
+  private async fieldAsk(event: WakeEvent, decision: ReturnType<typeof stem>): Promise<WakeResult> {
     const run = this.runs.get(event.tenantId);
     if (!run || isTerminal(run.status)) {
       throw new AvError("NO_OPEN_RUN", "Ask requires an open run; no implicit start");
@@ -752,7 +756,7 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, creature.agentId);
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
-    const talking = this.adapter.think({
+    const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
@@ -779,13 +783,13 @@ export class HabitatKernel {
     };
   }
 
-  private fieldStart(
+  private async fieldStart(
     event: WakeEvent,
     pack: LoadedPack | undefined,
     decision: ReturnType<typeof stem>,
     until: "talking" | "card" | "done",
     holdWorker: boolean,
-  ): WakeResult {
+  ): Promise<WakeResult> {
     if (!pack) throw new AvError("NO_ACTIVE_PACK", "Habitat start requires a loaded pack");
     if (!event.goal) throw new AvError("GOAL_REQUIRED", "Habitat start requires one goal");
     const existing = this.runs.get(event.tenantId);
@@ -853,7 +857,7 @@ export class HabitatKernel {
     });
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
-    const talking = this.adapter.think({
+    const talking = await this.adapter.think({
       pass: "talking",
       event,
       run,
@@ -881,14 +885,14 @@ export class HabitatKernel {
     return this.actLaunchAndWork(event, pack, orch, skills, holdWorker, until);
   }
 
-  private actLaunchAndWork(
+  private async actLaunchAndWork(
     event: WakeEvent,
     pack: LoadedPack,
     orch: AgentRecord,
     skills: SkillFile[],
     holdWorker: boolean,
     until: "talking" | "card" | "done",
-  ): WakeResult {
+  ): Promise<WakeResult> {
     const run = this.requireRun(event.tenantId);
     const resolved = this.requireThinkBind(event.tenantId, pack);
     const followUp = Boolean(run.workerId && this.workers.getById(event.tenantId, run.workerId));
@@ -918,7 +922,7 @@ export class HabitatKernel {
     });
     const memory = this.injectMemory(event.tenantId, worker.agent.agentId);
     this.assertLabeled(memory);
-    const intent = this.adapter.think({
+    const intent = await this.adapter.think({
       pass: "worker",
       event,
       run: this.requireRun(event.tenantId),
@@ -946,7 +950,7 @@ export class HabitatKernel {
     };
   }
 
-  private cardDecide(event: WakeEvent, pack: LoadedPack | undefined, until: "talking" | "card" | "done"): WakeResult {
+  private async cardDecide(event: WakeEvent, pack: LoadedPack | undefined, until: "talking" | "card" | "done"): Promise<WakeResult> {
     const run = this.runs.get(event.tenantId);
     const memory = this.injectMemory(
       event.tenantId,
@@ -1075,11 +1079,11 @@ export class HabitatKernel {
     };
   }
 
-  private finishAfterEffect(
+  private async finishAfterEffect(
     tenantId: string,
     proposed: { effect?: EffectResult; cardId?: string },
-  ): WakeResult {
-    const done = this.wake({ kind: "worker_done", tenantId });
+  ): Promise<WakeResult> {
+    const done = await this.wake({ kind: "worker_done", tenantId });
     return {
       ...done,
       effect: proposed.effect,
