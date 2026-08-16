@@ -13,6 +13,7 @@ export * from "./routine-store.js";
 export * from "./mail-store.js";
 export * from "./deadline-store.js";
 export * from "./connector-bind.js";
+export * from "./brokerage-bind.js";
 export * from "./connector-credentials.js";
 export * from "./connector-world.js";
 export * from "./vendor-think.js";

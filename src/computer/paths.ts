@@ -49,6 +49,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     connectorBindFile: path.join(root, "connector-bind.json"),
     // Connector credentials. Same class as adapter-credentials: not on bind, not on disk/, not a pack.
     connectorCredentialsFile: path.join(root, "connector-credentials.json"),
+    // Counsel-signed brokerage bind. Same class as adapter-bind / cards: not field UI, not on disk/, not pack schema.
+    brokerageFile: path.join(root, "brokerage.json"),
   };
 }
 

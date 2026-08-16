@@ -396,6 +396,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/mail",
       "/field/deadlines",
       "/field/connectors",
+      "/field/brokerage",
       "/field/skills",
       "/field/proposals",
       "/field/promote",

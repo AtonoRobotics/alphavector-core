@@ -11,6 +11,7 @@ export * from "./architect-routines.js";
 export * from "./architect-mail.js";
 export * from "./architect-deadlines.js";
 export * from "./architect-connectors.js";
+export * from "./architect-brokerage.js";
 export * from "./architect-skills.js";
 export * from "./architect-promote.js";
 export * from "./architect-habitat.js";

@@ -78,6 +78,12 @@ export interface ComputerPaths {
    * beside the disk, never on connector-bind.json, never a field file.
    */
   connectorCredentialsFile: string;
+  /**
+   * Counsel-signed brokerage rules the tenant bound (DEC-020).
+   * Same class as adapter-bind / connector-bind / cards: beside the disk,
+   * never inside the bind-mounted /home, never a field file, never pack schema.
+   */
+  brokerageFile: string;
 }
 
 export interface TenantComputer {
