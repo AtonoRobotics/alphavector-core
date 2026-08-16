@@ -105,14 +105,31 @@ export class FieldClient {
   }
 
   /**
+   * Record a generic fact through the existing card path: request → approve → persist.
+   * Not a back door — same routes as the Linux page.
+   */
+  async recordApprovedFact(id: string): Promise<NonNullable<FieldApproveResult["fact"]>> {
+    const cardId = await this.requestFactCard(id, "record");
+    const approved = await this.approve(cardId);
+    if (!approved.fact?.present) {
+      throw new Error(`fact record approve did not persist ${id}`);
+    }
+    return approved.fact;
+  }
+
+  /**
    * Completes one pack journey and one owner card approve against a live field API.
    * Used by the Linux client so a reviewer can finish the required path today.
+   * Records authored journey.buyer and purpose.follow-up through the fact card
+   * path before start/progress. Does not mint tokens or skip the card.
    */
   async completeBuyerJourneyAndCard(): Promise<{
     journey: Journey;
     cardId: string;
     effect: NonNullable<FieldProgressResult["effect"]>;
   }> {
+    await this.recordApprovedFact("journey.buyer");
+    await this.recordApprovedFact("purpose.follow-up");
     const journey = await this.start("buyer", "Work this buyer journey");
     let cardId = "";
     try {

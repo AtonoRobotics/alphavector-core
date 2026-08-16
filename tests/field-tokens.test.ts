@@ -13,7 +13,7 @@ import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT } from "./helpers.js";
 
-const RE_PIN = "84f1410e9735882551f3ec3e77dea94aa096bdf2";
+const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
@@ -47,7 +47,7 @@ function issueFieldAsArchitect(dir: string, tenantId: string, architectToken: st
 }
 
 describe("tenant-issued field tokens on computer disk", () => {
-  it("keeps the RE fixture pin at 84f1410", () => {
+  it("keeps the RE fixture pin at 5091328", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
@@ -132,6 +132,8 @@ describe("tenant-issued field tokens on computer disk", () => {
     const issued = issueFieldAsArchitect(dir, "restart", architect.token);
     const first = await listenServe("restart", dir);
     const field = new FieldClient(first.url, issued.token);
+    await field.recordApprovedFact("journey.buyer");
+    await field.recordApprovedFact("purpose.follow-up");
     const journey = await field.start("buyer", "Work this buyer journey");
     expect(journey.journeyKind).toBe("buyer");
     let cardId = "";
@@ -210,6 +212,7 @@ describe("tenant-issued field tokens on computer disk", () => {
 
     const first = await listenServe("issued", dir);
     const field = new FieldClient(first.url, issued.token);
+    await field.recordApprovedFact("journey.buyer");
     const journey = await field.start("buyer", "Architect issued this token");
     expect(journey.status).toBe("open");
     await first.server.close();

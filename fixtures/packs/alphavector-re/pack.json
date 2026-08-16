@@ -103,23 +103,72 @@
   "journeyKinds": [
     {
       "id": "buyer",
-      "label": "Buyer"
+      "label": "Buyer",
+      "REQUIRES": [
+        "journey.buyer"
+      ],
+      "PREFERS": [
+        "purpose.showing"
+      ],
+      "AVOIDS": [
+        "consent.dnc",
+        "consent.quiet-hours"
+      ]
     },
     {
       "id": "seller",
-      "label": "Seller"
+      "label": "Seller",
+      "REQUIRES": [
+        "journey.seller"
+      ],
+      "PREFERS": [
+        "purpose.listing"
+      ],
+      "AVOIDS": [
+        "consent.dnc",
+        "consent.quiet-hours"
+      ]
     },
     {
       "id": "listing",
-      "label": "Listing"
+      "label": "Listing",
+      "REQUIRES": [
+        "journey.listing"
+      ],
+      "PREFERS": [
+        "purpose.listing",
+        "subject.listing"
+      ],
+      "AVOIDS": [
+        "consent.assumed-autonomy"
+      ]
     },
     {
       "id": "transaction",
-      "label": "Transaction"
+      "label": "Transaction",
+      "REQUIRES": [
+        "journey.transaction"
+      ],
+      "PREFERS": [
+        "purpose.transaction"
+      ],
+      "AVOIDS": [
+        "consent.assumed-autonomy"
+      ]
     },
     {
       "id": "past-client",
-      "label": "Past client"
+      "label": "Past client",
+      "REQUIRES": [
+        "journey.past-client"
+      ],
+      "PREFERS": [
+        "purpose.follow-up"
+      ],
+      "AVOIDS": [
+        "consent.dnc",
+        "consent.quiet-hours"
+      ]
     }
   ],
   "actionClassVerbs": [
@@ -137,7 +186,11 @@
       "externalEffect": true,
       "startRequiresAuthorization": true,
       "mayGraduate": true,
-      "ceiling": "bounded_autonomy"
+      "ceiling": "bounded_autonomy",
+      "AVOIDS": [
+        "consent.crm-update",
+        "consent.assumed-autonomy"
+      ]
     },
     {
       "id": "communicate",
@@ -145,7 +198,17 @@
       "externalEffect": true,
       "startRequiresAuthorization": true,
       "mayGraduate": true,
-      "ceiling": "bounded_autonomy"
+      "ceiling": "bounded_autonomy",
+      "REQUIRES": [
+        "purpose.follow-up"
+      ],
+      "AVOIDS": [
+        "consent.dnc",
+        "consent.quiet-hours",
+        "consent.assumed-autonomy",
+        "consent.recovery",
+        "consent.scheduling"
+      ]
     },
     {
       "id": "material_state",
