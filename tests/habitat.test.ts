@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -334,6 +334,130 @@ describe("D10 §6 habitat kernel", () => {
     const evalReplay = new EvalRunner().replayFacilities(core.habitat.listWakes(tenantId));
     expect(evalReplay.passed).toBe(true);
     expect(evalReplay.kinds).toEqual(replayed.kinds);
+  });
+
+  it("HTTP start then ask, replayFacilities on tenant disk log passes without a model", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-http-"));
+    const { core, field } = await liveField("t1", dir);
+    expect(DeepAgentsAdapter.invocations).toBe(0);
+    await createOpenStart(field, "buyer", "Work this buyer journey");
+    const run = core.habitat.getRun("t1");
+    expect(run?.runId).toMatch(/^run_/);
+    await field.ask("status?", "read");
+    expect(existsSync(computerRoot(dir, "t1").wakeLogFile)).toBe(true);
+    expect(existsSync(computerRoot(dir, "t1").runsFile)).toBe(true);
+
+    const before = DeepAgentsAdapter.invocations;
+    const replayed = new EvalRunner().replayFacilities({ computerBaseDir: dir, tenantId: "t1" });
+    expect(replayed.passed).toBe(true);
+    expect(replayed.error).toBeUndefined();
+    expect(replayed.kinds).toContain("field_start");
+    expect(replayed.kinds).toContain("field_ask");
+    expect(replayed.runIds).toEqual([run!.runId]);
+    expect(DeepAgentsAdapter.invocations).toBe(before);
+
+    const replaySrc = readFileSync(path.join(process.cwd(), "src/habitat/wake-log.ts"), "utf8");
+    expect(replaySrc).toMatch(/stem\(/);
+    expect(replaySrc).not.toMatch(/createDeepAgent|\.think\(/);
+    const evalSrc = readFileSync(path.join(process.cwd(), "src/eval/runner.ts"), "utf8");
+    expect(evalSrc).not.toMatch(/createDeepAgent|\.think\(/);
+  });
+
+  it("missing wake-log file fails closed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-missing-"));
+    expect(existsSync(computerRoot(dir, "t1").wakeLogFile)).toBe(false);
+    try {
+      new EvalRunner().replayFacilities({ computerBaseDir: dir, tenantId: "t1" });
+      expect.fail("missing wake log must fail closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect(err).toMatchObject({ code: "WAKE_LOG_MISSING", closed: true });
+    }
+  });
+
+  it("corrupt wake-log JSON fails closed", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-corrupt-"));
+    const wakeLogFile = computerRoot(dir, "t1").wakeLogFile;
+    mkdirSync(path.dirname(wakeLogFile), { recursive: true });
+    writeFileSync(wakeLogFile, "{not-json", "utf8");
+    try {
+      new EvalRunner().replayFacilities({ computerBaseDir: dir, tenantId: "t1" });
+      expect.fail("corrupt wake log must fail closed");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AvError);
+      expect(err).toMatchObject({ code: "WAKE_LOG_CORRUPT", closed: true });
+    }
+  });
+
+  it("mismatched wake log fails closed", async () => {
+    const runner = new EvalRunner();
+    const at = "2026-08-16T00:00:00.000Z";
+    const empty = runner.replayFacilities([]);
+    expect(empty.passed).toBe(false);
+    expect(empty.error).toBe("WAKE_LOG_EMPTY");
+
+    const unknown = runner.replayFacilities([
+      { seq: 1, kind: "not_a_kind" as "field_start", tenantId: "t1", at },
+    ]);
+    expect(unknown.passed).toBe(false);
+    expect(unknown.error).toBe("WAKE_LOG_MISMATCH");
+
+    const askWithoutRun = runner.replayFacilities([{ seq: 1, kind: "field_ask", tenantId: "t1", at }]);
+    expect(askWithoutRun.passed).toBe(false);
+    expect(askWithoutRun.error).toBe("WAKE_LOG_MISMATCH");
+
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-mismatch-"));
+    const paths = computerRoot(dir, "t1");
+    mkdirSync(path.dirname(paths.wakeLogFile), { recursive: true });
+    writeFileSync(
+      paths.wakeLogFile,
+      `${JSON.stringify({
+        entries: [{ seq: 1, kind: "field_ask", tenantId: "t1", runId: "run_other", at }],
+      })}\n`,
+      "utf8",
+    );
+    writeFileSync(
+      paths.runsFile,
+      `${JSON.stringify({
+        runs: [
+          {
+            runId: "run_real",
+            tenantId: "t1",
+            goal: "one goal",
+            status: "open",
+            talkingDidHeavyWork: false,
+            createdAt: at,
+            updatedAt: at,
+          },
+        ],
+      })}\n`,
+      "utf8",
+    );
+    const mismatchedRun = runner.replayFacilities({ computerBaseDir: dir, tenantId: "t1" });
+    expect(mismatchedRun.passed).toBe(false);
+    expect(mismatchedRun.error).toBe("WAKE_LOG_MISMATCH");
+
+    const emptyDir = await mkdtemp(path.join(os.tmpdir(), "av-hab-replay-empty-"));
+    const emptyFile = computerRoot(emptyDir, "t1").wakeLogFile;
+    mkdirSync(path.dirname(emptyFile), { recursive: true });
+    writeFileSync(emptyFile, `${JSON.stringify({ entries: [] })}\n`, "utf8");
+    const emptyDisk = runner.replayFacilities({ computerBaseDir: emptyDir, tenantId: "t1" });
+    expect(emptyDisk.passed).toBe(false);
+    expect(emptyDisk.error).toBe("WAKE_LOG_EMPTY");
+
+    writeFileSync(emptyFile, `${JSON.stringify({ entries: [null] })}\n`, "utf8");
+    const invalidDisk = runner.replayFacilities({ computerBaseDir: emptyDir, tenantId: "t1" });
+    expect(invalidDisk.passed).toBe(false);
+    expect(invalidDisk.error).toBe("WAKE_LOG_MISMATCH");
+  });
+
+  it("replayWakeLog does not always return pass", () => {
+    const src = readFileSync(path.join(process.cwd(), "src/habitat/wake-log.ts"), "utf8");
+    expect(src).not.toMatch(/return \{ passed: true, kinds, runIds \}/);
+    expect(src).toMatch(/WAKE_LOG_MISSING/);
+    expect(src).toMatch(/WAKE_LOG_CORRUPT/);
+    expect(src).toMatch(/WAKE_LOG_MISMATCH/);
+    expect(src).toMatch(/WAKE_LOG_EMPTY/);
   });
 
   it("missing recordId and existing fail-closed paths stay fail-closed", async () => {

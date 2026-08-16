@@ -1,7 +1,9 @@
 import { computerRoot } from "../computer/paths.js";
 import { AvError } from "../errors.js";
 import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
-import type { WakeLogEntry } from "./types.js";
+import { loadRunStore } from "./run-store.js";
+import { stem } from "./stem.js";
+import type { WakeKind, WakeLogEntry } from "./types.js";
 
 export interface TenantWakeLog {
   entries: WakeLogEntry[];
@@ -44,14 +46,19 @@ export class WakeLog {
   }
 }
 
-export function loadWakeLog(file: string): TenantWakeLog {
+export function loadWakeLog(file: string, opts?: { required?: boolean }): TenantWakeLog {
   let raw: unknown;
   try {
     raw = readJsonFileStrict<unknown>(file);
   } catch {
     throw new AvError("WAKE_LOG_CORRUPT", "Wake log is corrupt; refusing to invent a wake");
   }
-  if (raw === undefined) return { entries: [] };
+  if (raw === undefined) {
+    if (opts?.required) {
+      throw new AvError("WAKE_LOG_MISSING", "Wake log is missing; refusing to invent a replay");
+    }
+    return { entries: [] };
+  }
   if (!isRecord(raw) || !Array.isArray(raw.entries)) {
     throw new AvError("WAKE_LOG_CORRUPT", "Wake log is corrupt; refusing to invent a wake");
   }
@@ -62,16 +69,76 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-/**
- * Replay facilities from a wake log with no model and no adapter.
- * Deterministic: kinds in order are the proof.
- */
-export function replayWakeLog(entries: WakeLogEntry[]): {
+const KNOWN_WAKE_KINDS: ReadonlySet<WakeKind> = new Set([
+  "field_start",
+  "field_ask",
+  "card_decide",
+  "worker_done",
+  "kill",
+  "deadline",
+  "connector",
+  "routine",
+  "mail",
+]);
+
+export interface WakeLogReplayResult {
   passed: boolean;
   kinds: string[];
   runIds: string[];
-} {
-  const kinds = entries.map((e) => e.kind);
-  const runIds = [...new Set(entries.map((e) => e.runId).filter((id): id is string => Boolean(id)))];
-  return { passed: true, kinds, runIds };
+  error?: string;
+}
+
+export interface WakeLogReplayContext {
+  /** Stored run ids from runs.json (or the in-memory run record). */
+  runs?: Array<{ runId: string }>;
+}
+
+/**
+ * Replay facilities from a wake log with no model and no adapter.
+ * Re-applies stem() per entry. Missing, empty, unknown, or mismatched logs fail closed.
+ */
+export function replayWakeLog(entries: unknown, context?: WakeLogReplayContext): WakeLogReplayResult {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { passed: false, kinds: [], runIds: [], error: "WAKE_LOG_EMPTY" };
+  }
+
+  const kinds: string[] = [];
+  const runIds: string[] = [];
+  const storedRunIds = context?.runs?.map((run) => run.runId);
+
+  for (const raw of entries) {
+    if (!isRecord(raw) || typeof raw.kind !== "string" || !KNOWN_WAKE_KINDS.has(raw.kind as WakeKind)) {
+      return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
+    }
+    const kind = raw.kind as WakeKind;
+    if (typeof raw.tenantId !== "string" || !raw.tenantId) {
+      return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
+    }
+    const runId = typeof raw.runId === "string" && raw.runId ? raw.runId : undefined;
+    // Facilities only. stem() is deterministic; no adapter, no model.
+    stem({ kind, tenantId: raw.tenantId, runId });
+    if (kind === "field_ask" && !runId) {
+      return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
+    }
+    if (runId && storedRunIds && !storedRunIds.includes(runId)) {
+      return { passed: false, kinds, runIds, error: "WAKE_LOG_MISMATCH" };
+    }
+    kinds.push(kind);
+    if (runId && !runIds.includes(runId)) runIds.push(runId);
+  }
+
+  return { passed: kinds.length > 0, kinds, runIds };
+}
+
+/** Load wake-log.json (and runs.json when present) from tenant disk, then replay. No model. */
+export function replayWakeLogFromDisk(computerBaseDir: string, tenantId: string): WakeLogReplayResult {
+  const paths = computerRoot(computerBaseDir, tenantId);
+  const loaded = loadWakeLog(paths.wakeLogFile, { required: true });
+  let runs: Array<{ runId: string }> = [];
+  try {
+    runs = loadRunStore(paths.runsFile).runs;
+  } catch {
+    runs = [];
+  }
+  return replayWakeLog(loaded.entries, { runs });
 }
