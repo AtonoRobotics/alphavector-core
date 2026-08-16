@@ -1,0 +1,170 @@
+import type { AgentRecord } from "../agents/types.js";
+import type { LoadedPack } from "../packs/types.js";
+
+/** Wake kinds for this slice. Deadline / connector / routine / mail are types only. */
+export type WakeKind =
+  | "field_start"
+  | "card_decide"
+  | "worker_done"
+  | "kill"
+  | "deadline"
+  | "connector"
+  | "routine"
+  | "mail";
+
+export type RunStatus =
+  | "open"
+  | "talking"
+  | "working"
+  | "awaiting_card"
+  | "completed"
+  | "denied"
+  | "killed";
+
+export type WorkerTypeId = "coder";
+
+/** Habitat owns the coder type. Not the Deep Agents SDK. */
+export const CODER_TYPE = {
+  id: "coder" as const,
+  executor: true,
+  branch: true,
+};
+
+export const HABITAT_OWNED = ["wake", "run", "worker", "admit", "coder"] as const;
+export const ADAPTER_OWNED = ["think"] as const;
+
+export interface WakeEvent {
+  kind: WakeKind;
+  tenantId: string;
+  pack?: LoadedPack;
+  goal?: string;
+  journeyId?: string;
+  recordId?: string;
+  runId?: string;
+  cardId?: string;
+  decision?: "approved" | "denied";
+  reason?: string;
+  workerId?: string;
+}
+
+export interface PendingEffect {
+  actionClass: string;
+  channel: string;
+  purpose: string;
+  subject: string;
+  agentId: string;
+}
+
+export interface RunRecord {
+  runId: string;
+  tenantId: string;
+  goal: string;
+  status: RunStatus;
+  workerId?: string;
+  workerType?: WorkerTypeId;
+  pendingCardId?: string;
+  pendingEffect?: PendingEffect;
+  pendingIntent?: "launch_worker";
+  journeyId?: string;
+  recordId?: string;
+  talkingDidHeavyWork: false;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WakeLogEntry {
+  seq: number;
+  kind: WakeKind;
+  tenantId: string;
+  runId?: string;
+  at: string;
+  detail?: Record<string, unknown>;
+}
+
+export interface AgentProfile {
+  agentId: string;
+  tenantId: string;
+  notes: string[];
+  updatedAt: string;
+}
+
+export interface DatedLogEntry {
+  logId: string;
+  agentId: string;
+  tenantId: string;
+  date: string;
+  text: string;
+  createdAt: string;
+  isFact: false;
+}
+
+export interface RecallItem {
+  recallId: string;
+  scope: "agent" | "user" | "tenant";
+  subjectId: string;
+  text: string;
+  createdAt: string;
+  isFact: false;
+}
+
+/** Labeled memory injected on every wake. An unlabeled blob does not count. */
+export interface LabeledMemory {
+  profile: { label: "profile"; agentId: string; body: AgentProfile | null };
+  logs: { label: "logs"; agentId: string; entries: DatedLogEntry[] };
+  recall: { label: "recall"; scope: string; items: RecallItem[] };
+}
+
+export interface SkillFile {
+  name: string;
+  path: string;
+}
+
+export type AdapterPass = "talking" | "worker";
+
+export interface AdapterInput {
+  pass: AdapterPass;
+  event: WakeEvent;
+  run: RunRecord;
+  memory: LabeledMemory;
+  skills: SkillFile[];
+}
+
+export interface CognitiveIntent {
+  pass: AdapterPass;
+  act: "launch_worker" | "propose_effect" | "done" | "follow_up";
+  workerType?: WorkerTypeId;
+  actionClass?: string;
+  channel?: string;
+  purpose?: string;
+  subject?: string;
+}
+
+export interface CognitiveAdapter {
+  readonly name: string;
+  readonly owns: readonly string[];
+  think(input: AdapterInput): CognitiveIntent;
+}
+
+export interface WorkerRecord {
+  workerId: string;
+  tenantId: string;
+  runId: string;
+  type: WorkerTypeId;
+  isolation: "trailer";
+  trailerPath: string;
+  branch: string;
+  pid?: number;
+  agent: AgentRecord;
+  createdAt: string;
+}
+
+export interface WakeResult {
+  run?: RunRecord;
+  wokeOrchestrator: boolean;
+  wokeOps: boolean;
+  launchedWorker: boolean;
+  talkingDidHeavyWork: false;
+  effect?: { actionId: string; executed: boolean; policyDecision: string };
+  cardId?: string;
+  memory: LabeledMemory;
+}

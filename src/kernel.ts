@@ -2,6 +2,7 @@ import { AgentMail } from "./agents/mail.js";
 import { MemoryTiers } from "./agents/memory.js";
 import { Orchestrator } from "./agents/orchestrator.js";
 import { AgentRuntime } from "./agents/runtime.js";
+import { HabitatKernel } from "./habitat/kernel.js";
 import { CardBook } from "./auth/cards.js";
 import { FieldTokenBook } from "./auth/field-tokens.js";
 import { ComputerHost, type ComputerHostOptions } from "./computer/host.js";
@@ -34,6 +35,7 @@ export class AlphaVectorCore {
   readonly mail = new AgentMail();
   readonly memory = new MemoryTiers();
   readonly orchestrator = new Orchestrator();
+  readonly habitat: HabitatKernel;
   readonly grants = new GrantBook();
   readonly cards: CardBook;
   readonly fieldTokens: FieldTokenBook;
@@ -73,6 +75,13 @@ export class AlphaVectorCore {
       this.facts,
       this.records,
     );
+    this.habitat = new HabitatKernel({
+      computerBaseDir,
+      cards: this.cards,
+      effects: this.effects,
+      agents: this.agents,
+      orchestrator: this.orchestrator,
+    });
   }
 
   static async boot(opts: KernelOptions): Promise<AlphaVectorCore> {

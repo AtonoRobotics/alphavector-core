@@ -15,6 +15,16 @@ export interface ComputerPaths {
   factsFile: string;
   /** Generic subject records facts attach to. Beside facts, cards, and tokens, never inside disk/. */
   recordsFile: string;
+  /** Habitat run records. Control state, beside cards.json, never inside disk/. */
+  runsFile: string;
+  /** Replayable wake log. Beside runs.json, never inside disk/. */
+  wakeLogFile: string;
+  /** CS-012 disk memory (profile, dated logs, scoped recall). Not the in-process MemoryTiers array. */
+  memoryDir: string;
+  /** Pack skill files the worker or role-agent can read. */
+  skillsDir: string;
+  /** Worker trailer isolation. Torn down on worker_done / kill. */
+  trailersDir: string;
 }
 
 export interface TenantComputer {
