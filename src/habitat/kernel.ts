@@ -52,6 +52,7 @@ import {
 } from "./connector-credentials.js";
 import { invokeConnectorWorld } from "./connector-world.js";
 import { RunStore } from "./run-store.js";
+import { writeProposalFile } from "./proposals.js";
 import { loadSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
 import {
@@ -63,6 +64,8 @@ import {
   type CognitiveIntent,
   type LabeledMemory,
   type HabitatIsolationRecord,
+  type ProposalFile,
+  type ProposalKind,
   type RunRecord,
   type SkillFile,
   type WakeEvent,
@@ -1432,8 +1435,43 @@ export class HabitatKernel {
   }
 
   /**
+   * Self-improve door (HK-071). Writes a skill draft or strategy note onto
+   * tenant disk as a proposal. Not a live skill. Not policy. Not promotion.
+   * Think cannot write a live skill. Habitat cannot promote itself.
+   */
+  writeProposal(input: {
+    tenantId: string;
+    name: string;
+    kind: ProposalKind;
+    description: string;
+    body: string;
+  }): ProposalFile {
+    if (!this.opts.computerBaseDir) {
+      throw new AvError("PROPOSAL_STORE_MISSING", "Proposal store is missing; refusing to invent a proposal");
+    }
+    return writeProposalFile(this.opts.computerBaseDir, input.tenantId, {
+      name: input.name,
+      kind: input.kind,
+      description: input.description,
+      body: input.body,
+    });
+  }
+
+  /**
+   * Habitat cannot promote a proposal into a live skill (DEC-013 / DEC-023).
+   * Promotion is Architect + eval only. Surprise graduation is a product failure.
+   */
+  promoteProposal(_input?: { tenantId: string; name: string }): never {
+    throw new AvError(
+      "HABITAT_CANNOT_PROMOTE",
+      "Habitat cannot promote itself; promotion is Architect + eval only",
+    );
+  }
+
+  /**
    * Load Architect-written skill files for think. Empty store is no skills.
    * Missing or corrupt files fail closed. Does not invent stubs from pack labels.
+   * Does not load proposals — a proposal is not a skill.
    */
   private injectSkills(tenantId: string): SkillFile[] {
     return loadSkillFiles(this.opts.computerBaseDir, tenantId);

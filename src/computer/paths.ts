@@ -30,6 +30,9 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     memoryDir: path.join(root, "memory"),
     // Architect-written skill files. Same class as memory / cards: not on agent disk/.
     skillsDir: path.join(root, "skills"),
+    // Habitat-written proposals. Same class as skills / memory / cards: not on agent disk/.
+    // A proposal is not a skill. loadSkillFiles does not read this directory.
+    proposalsDir: path.join(root, "proposals"),
     trailersDir: path.join(root, "trailers"),
     // Architect adapter bind. Same reason as field-tokens: not field UI, not on agent disk/.
     adapterBindFile: path.join(root, "adapter-bind.json"),

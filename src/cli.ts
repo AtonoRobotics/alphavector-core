@@ -9,12 +9,15 @@ import { architectIssueFieldToken, architectRevokeFieldToken } from "./auth/arch
 import { architectDeliverMail } from "./auth/architect-mail.js";
 import { architectWriteRoutine } from "./auth/architect-routines.js";
 import { architectSit } from "./auth/architect-habitat.js";
+import { architectPromoteProposal } from "./auth/architect-promote.js";
 import { architectWriteSkill } from "./auth/architect-skills.js";
+import { requireArchitect } from "./auth/require-architect.js";
 import { PackLoadError } from "./errors.js";
 import { FieldClient } from "./http/field-client.js";
 import { startFieldServe } from "./http/field-listen.js";
 import { PRODUCT } from "./identity.js";
 import { AlphaVectorCore } from "./kernel.js";
+import { resolveProductTrustAnchors } from "./packs/trust-anchors.js";
 import type { PrincipalKind } from "./packs/types.js";
 
 function flag(args: string[], name: string): string | undefined {
@@ -84,7 +87,7 @@ async function main(): Promise<void> {
     const [sub, ...flags] = rest;
     if (!sub || sub === "help" || sub === "--help") {
       console.log(
-        "Architect (off the field home screen). Commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill",
+        "Architect (off the field home screen). Commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill | promote-proposal",
       );
       console.log("Present --architect-token or AV_ARCHITECT_TOKEN. Shell is not Architect.");
       console.log("First Architect credential: issue-field-token --principal architect (once).");
@@ -111,7 +114,10 @@ async function main(): Promise<void> {
         "deliver-mail writes tenants/{id}/mail.json then habitat wake kind mail. Mail SHALL NOT confer authority. Field cannot deliver.",
       );
       console.log(
-        "write-skill writes tenants/{id}/skills/{name}/SKILL.md (agentskills frontmatter + body). Field cannot add skills. Eval-gated promotion is HK-071.",
+        "write-skill writes tenants/{id}/skills/{name}/SKILL.md (agentskills frontmatter + body). Field cannot add skills.",
+      );
+      console.log(
+        "promote-proposal copies a complete habitat skill_draft from tenants/{id}/proposals/{name}/PROPOSAL.md into the live skill store after eval. Habitat cannot promote. Field cannot promote.",
       );
       console.log(
         "habitat reads live org, open runs, workers, grants, eval, isolation. Not five booleans. Not a write. Field cannot sit.",
@@ -294,6 +300,31 @@ async function main(): Promise<void> {
       );
       return;
     }
+    if (sub === "promote-proposal") {
+      const name = flag(flags, "--name");
+      if (!name) {
+        throw new Error("architect promote-proposal requires --name");
+      }
+      requireArchitect(tenantId, dir, architectToken);
+      const core = new AlphaVectorCore(resolveProductTrustAnchors(), path.join(dir, "state"), dir);
+      const pack = core.packs.active(tenantId);
+      const written = architectPromoteProposal({
+        tenantId,
+        name,
+        computerBaseDir: dir,
+        pack,
+        eval: core.eval,
+        architectToken,
+      });
+      console.log(
+        JSON.stringify(
+          { ok: true, tenantId, name: written.name, path: written.path, promotedBy: "architect" },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
     if (sub === "deliver-mail") {
       const addresseeId = flag(flags, "--addressee-id");
       const body = flag(flags, "--body");
@@ -337,7 +368,7 @@ async function main(): Promise<void> {
       return;
     }
     throw new Error(
-      "architect commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill",
+      "architect commands: habitat | issue-field-token | revoke-field-token | bind-adapter | set-adapter-credentials | bind-routine | bind-connector | set-connector-credentials | bind-deadline | deliver-mail | write-skill | promote-proposal",
     );
   }
   if (cmd === "field-serve") {

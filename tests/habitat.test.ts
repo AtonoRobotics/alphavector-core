@@ -17,6 +17,7 @@ import { architectBindConnector, architectWriteConnectorCredentials } from "../s
 import { architectWriteDeadline } from "../src/auth/architect-deadlines.js";
 import { architectDeliverMail } from "../src/auth/architect-mail.js";
 import { architectMaterializePackRoutines, architectWriteRoutine } from "../src/auth/architect-routines.js";
+import { architectPromoteProposal, fieldPromoteProposal } from "../src/auth/architect-promote.js";
 import { architectWriteSkill } from "../src/auth/architect-skills.js";
 import {
   adapterThink,
@@ -33,7 +34,9 @@ import {
   reapHeldCoders,
   HabitatMemoryStore,
   invokeConnectorWorld,
+  loadProposalFiles,
   loadSkillFiles,
+  readProposalFile,
   readSkillFile,
   resetDeepAgentsInvocations,
   resolveLiveConnectorHandle,
@@ -5684,6 +5687,284 @@ describe("HK-070 skills are loadable files", () => {
     expect(loaded[0]?.name).toBe("dispatch");
     seen.push(...loaded);
     expect(seen[0]?.path).toMatch(/skills\/dispatch\/SKILL\.md$/);
+  });
+});
+
+describe("HK-071 self-improve writes a proposal only", () => {
+  it("keeps the RE fixture pin at 5091328 and does not add skill_manage, VEYRA, or T0–T3", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const proposalSrc = readFileSync(path.join(process.cwd(), "src/habitat/proposals.ts"), "utf8");
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    const promoteSrc = readFileSync(path.join(process.cwd(), "src/auth/architect-promote.ts"), "utf8");
+    const skillSrc = readFileSync(path.join(process.cwd(), "src/habitat/skills.ts"), "utf8");
+    const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    const cliSrc = readFileSync(path.join(process.cwd(), "src/cli.ts"), "utf8");
+    const productSrc = [
+      proposalSrc,
+      kernelSrc,
+      promoteSrc,
+      skillSrc,
+      vendorSrc,
+      fieldSrc,
+      cliSrc,
+      readFileSync(path.join(process.cwd(), "src/habitat/deep-agents.ts"), "utf8"),
+      readFileSync(path.join(process.cwd(), "src/habitat/adapter.ts"), "utf8"),
+    ].join("\n");
+    expect(productSrc).not.toMatch(/skill_manage/);
+    expect(productSrc).not.toMatch(/VEYRA/);
+    expect(proposalSrc).not.toMatch(/\bT0\b|\bT1\b|\bT2\b|\bT3\b/);
+    expect(proposalSrc).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
+    expect(proposalSrc).not.toMatch(/Mission-Control|\bDesk\b|\bShape\b|\bPlay\b|\bPlant\b|\bHIL\b|\bThor\b/);
+    expect(kernelSrc).toMatch(/writeProposal/);
+    expect(kernelSrc).toMatch(/HABITAT_CANNOT_PROMOTE/);
+    expect(kernelSrc).not.toMatch(/writeSkillFile/);
+    expect(skillSrc).toMatch(/loadSkillFiles/);
+    expect(skillSrc).toMatch(/skillsDir/);
+    expect(skillSrc).not.toMatch(/proposalsDir/);
+    expect(promoteSrc).toMatch(/architectPromoteProposal/);
+    expect(promoteSrc).toMatch(/eval\.run/);
+    expect(cliSrc).toMatch(/promote-proposal/);
+    expect(fieldSrc).toMatch(/proposals\?\|promote/);
+    expect(vendorSrc).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+  });
+
+  it("self-improve proposal lands on tenant disk and is not loaded as a skill on the next wake", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-proposal-wake-"));
+    const seen: AdapterInput[] = [];
+    const { anchors, binding } = await signedGenericPack();
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: {
+        name: "proposal-think",
+        owns: ["think"],
+        think(input) {
+          seen.push(input);
+          return dryThink(input);
+        },
+      },
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    const marker = "SELF-IMPROVE-PROPOSAL-BODY-MUST-NOT-LOAD";
+    const written = core.habitat.writeProposal({
+      tenantId: "t1",
+      name: "dispatch",
+      kind: "skill_draft",
+      description: "Draft dispatch",
+      body: marker,
+    });
+    expect(written.isSkill).toBe(false);
+    expect(written.isPolicy).toBe(false);
+    expect(written.kind).toBe("skill_draft");
+    const paths = computerRoot(computerBaseDir, "t1");
+    expect(written.path).toBe(path.join(paths.proposalsDir, "dispatch", "PROPOSAL.md"));
+    expect(existsSync(written.path)).toBe(true);
+    expect(existsSync(path.join(paths.skillsDir, "dispatch", "SKILL.md"))).toBe(false);
+    expect(paths.proposalsDir.startsWith(paths.disk + path.sep)).toBe(false);
+    expect(loadSkillFiles(computerBaseDir, "t1")).toEqual([]);
+    expect(readProposalFile(computerBaseDir, "t1", "dispatch").body).toBe(marker);
+
+    await core.habitat.wake({
+      kind: "field_start",
+      tenantId: "t1",
+      pack: loaded.loaded,
+      goal: "one goal",
+      recordId: record.id,
+    });
+
+    const talking = seen.find((s) => s.pass === "talking");
+    const working = seen.find((s) => s.pass === "worker");
+    expect(talking?.skills).toEqual([]);
+    expect(working?.skills).toEqual([]);
+    expect(JSON.stringify(talking?.skills)).not.toContain(marker);
+    expect(loadSkillFiles(computerBaseDir, "t1")).toEqual([]);
+    expect(loadProposalFiles(computerBaseDir, "t1")).toHaveLength(1);
+  });
+
+  it("Architect + eval is the only promote path; field and habitat self-promote fail closed", async () => {
+    const { core, pack, tenantId, computerBaseDir } = await habitatStack();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    const field = core.fieldTokens.issue({
+      tenantId,
+      principal: "field",
+      presented: architect.token,
+    });
+    const marker = "PROMOTED-SKILL-BODY-AFTER-EVAL";
+    core.habitat.writeProposal({
+      tenantId,
+      name: "dispatch",
+      kind: "skill_draft",
+      description: "Draft dispatch",
+      body: marker,
+    });
+    expect(loadSkillFiles(computerBaseDir, tenantId)).toEqual([]);
+
+    expect(() => core.habitat.promoteProposal({ tenantId, name: "dispatch" })).toThrow(AvError);
+    expect(() => core.habitat.promoteProposal({ tenantId, name: "dispatch" })).toThrow(/cannot promote itself/);
+    expect(loadSkillFiles(computerBaseDir, tenantId)).toEqual([]);
+
+    expect(() => fieldPromoteProposal()).toThrow(/Field cannot promote/);
+    expect(() =>
+      architectPromoteProposal({
+        tenantId,
+        name: "dispatch",
+        computerBaseDir,
+        pack,
+        eval: core.eval,
+        architectToken: field.token,
+      }),
+    ).toThrow(/field token|cannot promote|promote a proposal/i);
+    expect(loadSkillFiles(computerBaseDir, tenantId)).toEqual([]);
+
+    const promoted = architectPromoteProposal({
+      tenantId,
+      name: "dispatch",
+      computerBaseDir,
+      pack,
+      eval: core.eval,
+      architectToken: architect.token,
+    });
+    expect(promoted.body).toBe(marker);
+    expect(promoted.path).toBe(path.join(computerRoot(computerBaseDir, tenantId).skillsDir, "dispatch", "SKILL.md"));
+    const live = loadSkillFiles(computerBaseDir, tenantId);
+    expect(live).toHaveLength(1);
+    expect(live[0]?.body).toBe(marker);
+    expect(readSkillFile(computerBaseDir, tenantId, "dispatch").body).toBe(marker);
+  });
+
+  it("unsigned or incomplete proposals fail closed and do not become policy", async () => {
+    const { core, pack, tenantId, computerBaseDir } = await habitatStack();
+    const architect = core.fieldTokens.issue({ tenantId, principal: "architect" });
+    expect(() =>
+      core.habitat.writeProposal({
+        tenantId,
+        name: "dispatch",
+        kind: "skill_draft",
+        description: "",
+        body: "body",
+      }),
+    ).toThrow(expect.objectContaining({ code: "PROPOSAL_INCOMPLETE", closed: true }));
+    expect(() =>
+      core.habitat.writeProposal({
+        tenantId,
+        name: "dispatch",
+        kind: "skill_draft",
+        description: "Draft",
+        body: "",
+      }),
+    ).toThrow(expect.objectContaining({ code: "PROPOSAL_INCOMPLETE", closed: true }));
+    expect(loadProposalFiles(computerBaseDir, tenantId)).toEqual([]);
+    expect(loadSkillFiles(computerBaseDir, tenantId)).toEqual([]);
+
+    const dir = computerRoot(computerBaseDir, tenantId).proposalsDir;
+    mkdirSync(path.join(dir, "unsigned"), { recursive: true });
+    writeFileSync(path.join(dir, "unsigned", "PROPOSAL.md"), "not a signed proposal\n", "utf8");
+    expect(() => loadProposalFiles(computerBaseDir, tenantId)).toThrow(AvError);
+    expect(() => loadProposalFiles(computerBaseDir, tenantId)).toThrow(/incomplete|policy/);
+    expect(() =>
+      architectPromoteProposal({
+        tenantId,
+        name: "unsigned",
+        computerBaseDir,
+        pack,
+        eval: core.eval,
+        architectToken: architect.token,
+      }),
+    ).toThrow(/incomplete|policy/);
+    expect(loadSkillFiles(computerBaseDir, tenantId)).toEqual([]);
+
+    mkdirSync(path.join(dir, "claimed-policy"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "claimed-policy", "PROPOSAL.md"),
+      "---\nname: claimed-policy\nkind: skill_draft\ndescription: Claim\npolicy: true\n---\n\nbody\n",
+      "utf8",
+    );
+    expect(() => readProposalFile(computerBaseDir, tenantId, "claimed-policy")).toThrow(
+      expect.objectContaining({ code: "PROPOSAL_NOT_POLICY", closed: true }),
+    );
+    expect(loadSkillFiles(computerBaseDir, tenantId)).toEqual([]);
+
+    core.habitat.writeProposal({
+      tenantId,
+      name: "note",
+      kind: "strategy",
+      description: "A strategy note",
+      body: "strategy body",
+    });
+    expect(() =>
+      architectPromoteProposal({
+        tenantId,
+        name: "note",
+        computerBaseDir,
+        pack,
+        eval: { run: () => ({ passed: false, failed: ["no independent outcome evidence kind"] }) },
+        architectToken: architect.token,
+      }),
+    ).toThrow(expect.objectContaining({ code: "PROPOSAL_NOT_SKILL", closed: true }));
+    expect(loadSkillFiles(computerBaseDir, tenantId)).toEqual([]);
+
+    core.habitat.writeProposal({
+      tenantId,
+      name: "draft",
+      kind: "skill_draft",
+      description: "Draft",
+      body: "draft body",
+    });
+    expect(() =>
+      architectPromoteProposal({
+        tenantId,
+        name: "draft",
+        computerBaseDir,
+        pack,
+        eval: { run: () => ({ passed: false, failed: ["no independent outcome evidence kind"] }) },
+        architectToken: architect.token,
+      }),
+    ).toThrow(expect.objectContaining({ code: "PROPOSAL_EVAL_FAILED", closed: true }));
+    expect(loadSkillFiles(computerBaseDir, tenantId)).toEqual([]);
+  });
+
+  it("field cannot promote or configure models / prompts / Temporal / tools; POST /field/proposals is 403", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-proposal-field-"));
+    const { field, fieldToken, url, core, pack } = await liveField("t1", dir);
+    expect(() =>
+      architectPromoteProposal({
+        tenantId: "t1",
+        name: "dispatch",
+        computerBaseDir: dir,
+        pack,
+        eval: core.eval,
+        architectToken: fieldToken,
+      }),
+    ).toThrow(/field token|cannot promote|promote a proposal/i);
+    expect(existsSync(path.join(computerRoot(dir, "t1").skillsDir, "dispatch", "SKILL.md"))).toBe(false);
+
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/PROPOSAL\.md|promote-proposal|skill promotion/i);
+    expect(home.architectControls).toEqual([]);
+
+    for (const pathName of ["/field/proposals", "/field/promote", "/field/models", "/field/prompts", "/field/temporal", "/field/tools"]) {
+      const blocked = await fetch(`${url}${pathName}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${fieldToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ name: "dispatch", body: "field-authored" }),
+      });
+      expect(blocked.status).toBe(403);
+      const body = (await blocked.json()) as { error: string };
+      expect(body.error).toBe("SURFACE_VIOLATION");
+    }
+    expect(existsSync(path.join(computerRoot(dir, "t1").skillsDir, "dispatch", "SKILL.md"))).toBe(false);
+
+    const cli = runArchitectCli(
+      ["architect", "promote-proposal", "--tenant", "t1", "--name", "dispatch", "--architect-token", fieldToken],
+      { computerBaseDir: dir },
+    );
+    expect(cli.status).not.toBe(0);
+    expect(existsSync(path.join(computerRoot(dir, "t1").skillsDir, "dispatch", "SKILL.md"))).toBe(false);
   });
 });
 

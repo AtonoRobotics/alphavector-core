@@ -8,8 +8,9 @@ import { requireArchitect } from "./require-architect.js";
  * Same class as adapter-bind / routines / field-tokens. Shell is not Architect.
  * Field SHALL NOT add, author, or upload. Not a /field route.
  *
- * This is the write/promote path. Eval-gated promotion is HK-071 — do not
- * invent a promotion exam here.
+ * This is the Architect live write. Habitat cannot call it.
+ * Eval-gated promotion of a habitat proposal is architectPromoteProposal
+ * (HK-071). Do not invent a promotion exam here.
  */
 export function architectWriteSkill(input: {
   tenantId: string;
