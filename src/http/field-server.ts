@@ -25,7 +25,8 @@ const CORS = {
   "access-control-allow-methods": "GET, POST, OPTIONS",
 } as const;
 
-const CONFIG_PATH = /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|vendor-base-url|base-?url/i;
+const CONFIG_PATH =
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|memory|vendor-base-url|base-?url/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -38,7 +39,7 @@ export interface FieldHttpServerOptions {
 
 /**
  * Field-only HTTP surface. Architect/admin is not callable here.
- * Field users cannot configure models, prompts, Temporal, or tools.
+ * Field users cannot configure models, prompts, Temporal, tools, or memory stores.
  */
 export class FieldHttpServer {
   private server?: http.Server;

@@ -31,6 +31,7 @@ import {
   readTenantDeadlines,
   readTenantMail,
   reapHeldCoders,
+  HabitatMemoryStore,
   loadSkillFiles,
   readSkillFile,
   resetDeepAgentsInvocations,
@@ -5168,6 +5169,322 @@ describe("HK-070 skills are loadable files", () => {
     expect(loaded[0]?.name).toBe("dispatch");
     seen.push(...loaded);
     expect(seen[0]?.path).toMatch(/skills\/dispatch\/SKILL\.md$/);
+  });
+});
+
+function expectThinkReceivedDiskMemory(
+  input: AdapterInput | undefined,
+  markers: { profile: string; log: string; recall: string[] },
+): void {
+  expect(input, "a wake that thinks without inject fails").toBeDefined();
+  expect(input!.memory.profile.label).toBe("profile");
+  expect(input!.memory.logs.label).toBe("logs");
+  expect(input!.memory.recall.label).toBe("recall");
+  expect(input!.memory.profile.body?.notes).toContain(markers.profile);
+  expect(input!.memory.logs.entries.some((e) => e.text === markers.log)).toBe(true);
+  for (const text of markers.recall) {
+    expect(input!.memory.recall.items.some((e) => e.text === text)).toBe(true);
+  }
+}
+
+describe("HK-072 durable memory injected on every wake", () => {
+  it("keeps the RE fixture pin at 5091328 and does not add Neo4j, vector, HRR, or a vendor host", () => {
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
+    const memorySrc = readFileSync(path.join(process.cwd(), "src/habitat/memory-store.ts"), "utf8");
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    expect(memorySrc).toMatch(/profiles/);
+    expect(memorySrc).toMatch(/logs/);
+    expect(memorySrc).toMatch(/recall/);
+    expect(memorySrc).toMatch(/loadRecall\(tenantId, "tenant"/);
+    expect(kernelSrc).toMatch(/injectMemory/);
+    expect(kernelSrc).toMatch(/assertLabeled/);
+    expect(vendorSrc).toMatch(/memory: input\.memory/);
+    expect(fieldSrc).toMatch(/memory/);
+    for (const src of [memorySrc, kernelSrc, vendorSrc]) {
+      expect(src).not.toMatch(/neo4j|hindsight|holograph|vector db|HRR/i);
+      expect(src).not.toMatch(/api\.openai\.com|api\.anthropic\.com|anthropic\.com|openai\.azure\.com/);
+      expect(src).not.toMatch(/Mission-Control|\bDesk\b|\bShape\b|\bPlay\b|\bPlant\b|\bHIL\b|\bThor\b/);
+      expect(src).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
+    }
+  });
+
+  it("durable Grok Bot-shaped memory lives on tenant disk beside disk/, not only in-process", async () => {
+    const { core, tenantId, agents, computerBaseDir } = await habitatStack("disk-mem");
+    const agentId = agents.find((a) => a.isOrchestrator)!.agentId;
+    core.habitat.memory.writeProfile({ tenantId, agentId, note: "disk-profile" });
+    core.habitat.memory.writeLog({ tenantId, agentId, text: "disk-log", date: "2026-08-16" });
+    core.habitat.memory.writeRecall({ tenantId, scope: "agent", subjectId: agentId, text: "disk-agent-recall" });
+    core.habitat.memory.writeRecall({ tenantId, scope: "tenant", subjectId: tenantId, text: "disk-tenant-recall" });
+    const paths = computerRoot(computerBaseDir, tenantId);
+    expect(paths.memoryDir).toBe(path.join(computerBaseDir, "tenants", tenantId, "memory"));
+    expect(paths.memoryDir.startsWith(paths.disk + path.sep)).toBe(false);
+    expect(existsSync(path.join(paths.memoryDir, "profiles", `${agentId}.json`))).toBe(true);
+    expect(existsSync(path.join(paths.memoryDir, "logs", agentId, "2026-08-16.json"))).toBe(true);
+    expect(existsSync(path.join(paths.memoryDir, "recall", `agent-${agentId}.json`))).toBe(true);
+    expect(existsSync(path.join(paths.memoryDir, "recall", `tenant-${tenantId}.json`))).toBe(true);
+    expect(existsSync(path.join(paths.disk, "memory"))).toBe(false);
+    expect(core.memory.list(tenantId)).toEqual([]);
+  });
+
+  it("every think pass receives injected labeled disk memory, including tenant-scoped recall", async () => {
+    const computerBaseDir = await mkdtemp(path.join(os.tmpdir(), "av-mem-think-"));
+    const seen: AdapterInput[] = [];
+    const { anchors, binding } = await signedGenericPack();
+    const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {
+      adapter: {
+        name: "memory-think",
+        owns: ["think"],
+        think(input) {
+          seen.push(input);
+          return dryThink(input);
+        },
+      },
+    });
+    const loaded = core.packs.load({ tenantId: "t1", binding, actor: "architect" });
+    if (!loaded.ok) throw new Error(loaded.message);
+    core.agents.instantiateFromPack(loaded.loaded, "architect");
+    const record = core.records.put("t1", { type: "case", label: "Subject" });
+    const orch = core.agents.list("t1").find((a) => a.isOrchestrator)!;
+    const addressee = core.agents.list("t1").find((a) => !a.isOrchestrator)!;
+    const architect = core.fieldTokens.issue({ tenantId: "t1", principal: "architect" });
+    const markers = {
+      profile: "HK-072-profile-must-reach-think",
+      log: "HK-072-log-must-reach-think",
+      recall: ["HK-072-agent-recall-must-reach-think", "HK-072-tenant-recall-must-reach-think"],
+    };
+    core.habitat.memory.writeProfile({ tenantId: "t1", agentId: orch.agentId, note: markers.profile });
+    core.habitat.memory.writeLog({ tenantId: "t1", agentId: orch.agentId, text: markers.log });
+    core.habitat.memory.writeRecall({
+      tenantId: "t1",
+      scope: "agent",
+      subjectId: orch.agentId,
+      text: markers.recall[0]!,
+    });
+    core.habitat.memory.writeRecall({
+      tenantId: "t1",
+      scope: "tenant",
+      subjectId: "t1",
+      text: markers.recall[1]!,
+    });
+    core.habitat.memory.writeProfile({
+      tenantId: "t1",
+      agentId: addressee.agentId,
+      note: markers.profile,
+    });
+    core.habitat.memory.writeLog({ tenantId: "t1", agentId: addressee.agentId, text: markers.log });
+    core.habitat.memory.writeRecall({
+      tenantId: "t1",
+      scope: "agent",
+      subjectId: addressee.agentId,
+      text: markers.recall[0]!,
+    });
+
+    await core.habitat.wake({
+      kind: "field_start",
+      tenantId: "t1",
+      pack: loaded.loaded,
+      goal: "one goal",
+      recordId: record.id,
+    });
+    const talking = seen.find((s) => s.pass === "talking" && s.event.kind === "field_start");
+    const working = seen.find((s) => s.pass === "worker" && s.event.kind === "field_start");
+    expectThinkReceivedDiskMemory(talking, markers);
+    expectThinkReceivedDiskMemory(working, markers);
+
+    await core.habitat.wake({ kind: "field_ask", tenantId: "t1", pack: loaded.loaded });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "field_ask"),
+      markers,
+    );
+
+    architectWriteRoutine({
+      tenantId: "t1",
+      routineId: "mem-brief",
+      goal: "one goal",
+      dueAt: new Date(0).toISOString(),
+      recordId: record.id,
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    await core.habitat.fireDue("t1", { pack: loaded.loaded });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "routine"),
+      markers,
+    );
+
+    await core.habitat.deliverMail({
+      tenantId: "t1",
+      addresseeId: addressee.agentId,
+      fromAgentId: orch.agentId,
+      body: "status",
+      deliveredBy: "habitat",
+    });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "mail"),
+      markers,
+    );
+
+    architectWriteDeadline({
+      tenantId: "t1",
+      deadlineId: "mem-due",
+      dueAt: new Date(0).toISOString(),
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    await core.habitat.wake({
+      kind: "deadline",
+      tenantId: "t1",
+      pack: loaded.loaded,
+      deadlineId: "mem-due",
+    });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "deadline"),
+      markers,
+    );
+
+    architectBindConnector({
+      tenantId: "t1",
+      connectorId: "mem-connector",
+      computerBaseDir,
+      architectToken: architect.token,
+    });
+    await core.habitat.admitConnector({ tenantId: "t1", connectorId: "mem-connector" });
+    expectThinkReceivedDiskMemory(
+      seen.find((s) => s.event.kind === "connector"),
+      markers,
+    );
+
+    const thinkKinds = new Set(seen.map((s) => s.event.kind));
+    for (const kind of ["field_start", "field_ask", "routine", "mail", "deadline", "connector"] as const) {
+      expect(thinkKinds.has(kind), `${kind} must think with inject`).toBe(true);
+    }
+    expect(seen.every((s) => s.memory.profile.label === "profile")).toBe(true);
+    expect(JSON.stringify(seen.map((s) => s.memory))).not.toMatch(/listing_id|person_id|household_id|buyer_id/);
+  });
+
+  it("a kernel think call without injectMemory fails the source scan", () => {
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
+    const parts = kernelSrc.split("this.adapter.think(");
+    expect(parts.length).toBeGreaterThan(6);
+    for (let i = 1; i < parts.length; i++) {
+      const before = parts[i - 1]!.slice(-500);
+      expect(before, `think site ${i} must inject durable memory`).toMatch(/injectMemory\(/);
+      expect(parts[i], `think site ${i} must pass memory into think`).toMatch(/memory,/);
+    }
+    expect(vendorSrc).toMatch(/memory: input\.memory/);
+    expect(vendorSrc).toMatch(/memory: LabeledMemory/);
+  });
+
+  it("vendor think receives labeled disk memory contents, not only a path", async () => {
+    const double = await useVendorHttp();
+    const stack = await habitatThinkStack();
+    bindAndCredential({
+      tenantId: stack.tenantId,
+      computerBaseDir: stack.computerBaseDir,
+      architectToken: stack.architectToken,
+    });
+    const orchId = stack.agents.find((a) => a.isOrchestrator)!.agentId;
+    const profile = "VENDOR-THINK-MUST-SEE-THIS-PROFILE";
+    const log = "VENDOR-THINK-MUST-SEE-THIS-LOG";
+    const recall = "VENDOR-THINK-MUST-SEE-THIS-RECALL";
+    stack.core.habitat.memory.writeProfile({ tenantId: stack.tenantId, agentId: orchId, note: profile });
+    stack.core.habitat.memory.writeLog({ tenantId: stack.tenantId, agentId: orchId, text: log });
+    stack.core.habitat.memory.writeRecall({
+      tenantId: stack.tenantId,
+      scope: "tenant",
+      subjectId: stack.tenantId,
+      text: recall,
+    });
+    await stack.core.habitat.wake({
+      kind: "field_start",
+      tenantId: stack.tenantId,
+      pack: stack.pack,
+      goal: "one goal",
+      recordId: stack.record.id,
+    });
+    expect(double.requests.length).toBeGreaterThan(0);
+    const bodies = JSON.stringify(double.requests.map((r) => r.body));
+    expect(bodies).toContain(profile);
+    expect(bodies).toContain(log);
+    expect(bodies).toContain(recall);
+    expect(bodies).toContain('"label":"profile"');
+    expect(bodies).toContain('"label":"logs"');
+    expect(bodies).toContain('"label":"recall"');
+  });
+
+  it("memory write is not a fact, consent, or outcome", async () => {
+    const { core, tenantId, record, agents } = await habitatStack("stay-mem");
+    const agentId = agents.find((a) => a.isOrchestrator)!.agentId;
+    const factsBefore = core.facts.presentIds(tenantId, record.id);
+    const journeysBefore = core.store.journeys.filter((j) => j.tenantId === tenantId);
+    const cardsBefore = core.cards.fieldInbox(tenantId);
+    const log = core.habitat.memory.writeLog({ tenantId, agentId, text: "stay memory" });
+    core.habitat.memory.writeProfile({ tenantId, agentId, note: "stay profile" });
+    core.habitat.memory.writeRecall({ tenantId, scope: "tenant", subjectId: tenantId, text: "stay recall" });
+    expect(core.facts.presentIds(tenantId, record.id)).toEqual(factsBefore);
+    expect(core.store.journeys.filter((j) => j.tenantId === tenantId)).toEqual(journeysBefore);
+    expect(core.cards.fieldInbox(tenantId)).toEqual(cardsBefore);
+    expect(() => core.habitat.memory.promoteToFact(log.logId)).toThrow(AvError);
+    expect(() => core.habitat.memory.promoteToFact(log.logId)).toThrow(/SHALL NOT become verified facts/);
+    const memorySrc = readFileSync(path.join(process.cwd(), "src/habitat/memory-store.ts"), "utf8");
+    expect(memorySrc).not.toMatch(/FactBook|commitApprovedFact|resolveCard|journeys\.put|store\.actions/);
+  });
+
+  it("missing or corrupt memory store fails closed (typed)", async () => {
+    const missing = new HabitatMemoryStore();
+    expect(() => missing.labeled("t1", "ops")).toThrow(AvError);
+    expect(() => missing.labeled("t1", "ops")).toThrow(
+      expect.objectContaining({ code: "MEMORY_DISK_REQUIRED", closed: true }),
+    );
+
+    const { core, pack, tenantId, record, computerBaseDir, agents } = await habitatStack();
+    const orchId = agents.find((a) => a.isOrchestrator)!.agentId;
+    const file = path.join(computerRoot(computerBaseDir, tenantId).memoryDir, "profiles", `${orchId}.json`);
+    mkdirSync(path.dirname(file), { recursive: true });
+    writeFileSync(file, "not-json\n", "utf8");
+    await expect(
+      core.habitat.wake({
+        kind: "field_start",
+        tenantId,
+        pack,
+        goal: "one goal",
+        recordId: record.id,
+      }),
+    ).rejects.toMatchObject({ code: "MEMORY_STORE_CORRUPT", closed: true });
+  });
+
+  it("field cannot configure the memory store; home has no authoring; POST /field/memory is 403", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "av-mem-field-"));
+    const { field, fieldToken, url, core } = await liveField("t1", dir);
+    const orchId = core.agents.list("t1").find((a) => a.isOrchestrator)!.agentId;
+    const home = await field.home();
+    expect(JSON.stringify(home)).not.toMatch(/write-memory|memory-store|profile\.md/i);
+    expect(home.architectControls).toEqual([]);
+
+    const blocked = await fetch(`${url}/field/memory`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fieldToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ note: "field-authored" }),
+    });
+    expect(blocked.status).toBe(403);
+    const body = (await blocked.json()) as { error: string };
+    expect(body.error).toBe("SURFACE_VIOLATION");
+    expect(core.habitat.memory.loadProfile("t1", orchId)).toBeUndefined();
+
+    const html = await (await fetch(url)).text();
+    expect(html).not.toMatch(/id="memory"|write-memory|memory store/i);
+    const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    expect(fieldSrc).toMatch(/memory/);
+    expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/memory/);
+    const ios = readFileSync(path.join(process.cwd(), "clients/field-ios/Field/HomeView.swift"), "utf8");
+    expect(ios).not.toMatch(/memory store|write-memory|neo4j|vector store/i);
+    expect(core.habitat.getRun("t1")).toBeUndefined();
   });
 });
 

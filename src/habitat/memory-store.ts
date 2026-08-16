@@ -7,8 +7,9 @@ import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 import type { AgentProfile, DatedLogEntry, LabeledMemory, RecallItem } from "./types.js";
 
 /**
- * CS-012 memory on tenant disk: per-agent profile, dated logs, scoped recall JSON.
+ * CS-012 / HK-072 memory on tenant disk: per-agent profile, dated logs, scoped recall JSON.
  * This is habitat memory. The in-process MemoryTiers array is not the store.
+ * Memory that is not injected into the next think pass is a diary and does not count.
  * Memory SHALL NOT become fact, consent, or outcome.
  */
 export class HabitatMemoryStore {
@@ -86,10 +87,16 @@ export class HabitatMemoryStore {
   }
 
   /**
-   * HK-051 / HK-072: labeled memory for the next pass. Not an unlabeled blob.
+   * HK-072: labeled memory the next think pass actually receives.
+   * Selects agent-scoped and tenant-scoped recall. Files that are never
+   * selected are a diary and do not count. Not an unlabeled blob.
    */
   labeled(tenantId: string, agentId: string): LabeledMemory {
-    const recallScope = `agent:${agentId}`;
+    const agentItems = this.loadRecall(tenantId, "agent", agentId);
+    const tenantItems = this.loadRecall(tenantId, "tenant", tenantId);
+    const items = [...agentItems, ...tenantItems].sort((a, b) =>
+      a.createdAt.localeCompare(b.createdAt),
+    );
     return {
       profile: {
         label: "profile",
@@ -99,8 +106,8 @@ export class HabitatMemoryStore {
       logs: { label: "logs", agentId, entries: this.loadLogs(tenantId, agentId) },
       recall: {
         label: "recall",
-        scope: recallScope,
-        items: this.loadRecall(tenantId, "agent", agentId),
+        scope: `agent:${agentId}|tenant:${tenantId}`,
+        items,
       },
     };
   }
