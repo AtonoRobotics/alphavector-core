@@ -2265,9 +2265,13 @@ describe("D10 CS-013 routine wakes", () => {
     expect(fired[0]?.memory.profile.label).toBe("profile");
     expect(fired[0]?.memory.logs.label).toBe("logs");
     expect(fired[0]?.memory.recall.label).toBe("recall");
-    expect(fired[0]?.memory.profile.body?.notes).toContain("routine-profile");
-    expect(fired[0]?.memory.logs.entries.some((e) => e.text === "routine-log")).toBe(true);
-    expect(fired[0]?.memory.recall.items.some((e) => e.text === "routine-recall")).toBe(true);
+    const orchMem = core.habitat.memory.labeled(tenantId, orchId);
+    expect(orchMem.profile.label).toBe("profile");
+    expect(orchMem.logs.label).toBe("logs");
+    expect(orchMem.recall.label).toBe("recall");
+    expect(orchMem.profile.body?.notes).toContain("routine-profile");
+    expect(orchMem.logs.entries.some((e) => e.text === "routine-log")).toBe(true);
+    expect(orchMem.recall.items.some((e) => e.text === "routine-recall")).toBe(true);
     expect(fired[0]?.run?.talkingDidHeavyWork).toBe(false);
     expect(core.habitat.getRun(tenantId)?.runId).toBe(fired[0]?.run?.runId);
     const wakes = core.habitat.listWakes(tenantId);
