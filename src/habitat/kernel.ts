@@ -65,12 +65,19 @@ import {
 import { writeProposalFile } from "./proposals.js";
 import { loadSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
+import {
+  ILLEGAL_ADAPTER_VERB,
+  isIllegalAdapterVerbError,
+  isLegalTalkingVerb,
+  isLegalWorkerVerb,
+} from "./illegal-adapter-verb.js";
 import { talkingShallNotReject } from "./talking-shall-not.js";
 import {
   CODER_TYPE,
   HABITAT_OWNED,
   type AdapterBind,
   type AdapterCredentials,
+  type AdapterInput,
   type CognitiveAdapter,
   type CognitiveIntent,
   type LabeledMemory,
@@ -655,15 +662,20 @@ export class HabitatKernel {
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, event.pack ?? this.packs.get(event.tenantId));
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
+      decision,
       run,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+    );
     this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
@@ -765,15 +777,20 @@ export class HabitatKernel {
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
+      decision,
       run,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+    );
     this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
@@ -845,15 +862,20 @@ export class HabitatKernel {
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
+      decision,
       run,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+    );
     this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
@@ -922,15 +944,20 @@ export class HabitatKernel {
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
+      decision,
       run,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+    );
     this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
@@ -1020,15 +1047,20 @@ export class HabitatKernel {
     const pack = event.pack ?? this.packs.get(event.tenantId);
     const resolved = this.requireThinkBind(event.tenantId, pack);
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
+      decision,
       run,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+    );
     this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory, {
       pack,
@@ -1134,15 +1166,20 @@ export class HabitatKernel {
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
+      decision,
       run,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+    );
     this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
@@ -1205,15 +1242,20 @@ export class HabitatKernel {
     const pack = event.pack ?? this.packs.get(event.tenantId);
     const resolved = this.requireThinkBind(event.tenantId, pack);
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run: open,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
-      run: open,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+      decision,
+      open,
+    );
     this.validateTalking(talking, event, decision, open);
     const applied = await this.applyTalkingVerbs(event, decision, open, talking, memory, { skipAppend: true });
     if (applied.handled) return applied.handled;
@@ -1241,15 +1283,20 @@ export class HabitatKernel {
     this.assertLabeled(memory);
     const resolved = this.requireThinkBind(event.tenantId, this.packs.get(event.tenantId));
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
+      decision,
       run,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+    );
     this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
@@ -1335,15 +1382,20 @@ export class HabitatKernel {
     });
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
+      decision,
       run,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+    );
     this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory, {
       pack,
@@ -1429,19 +1481,22 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
     const brief = this.readBookedBrief(event.tenantId, worker);
-    const intent = await this.adapter.think({
-      pass: "worker",
+    const intent = await this.thinkAdapter(
+      {
+        pass: "worker",
+        event,
+        run: this.requireRun(event.tenantId),
+        memory,
+        skills,
+        ...(brief ? { brief } : {}),
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
-      run: this.requireRun(event.tenantId),
-      memory,
-      skills,
-      ...(brief ? { brief } : {}),
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
-    if (intent.act !== "propose_effect") {
-      throw new AvError("WORKER_INTENT", "Worker pass must propose the one external effect");
-    }
+      stem(event),
+      this.requireRun(event.tenantId),
+    );
+    this.validateWorker(intent, event, stem(event), this.requireRun(event.tenantId));
     this.assertAdapterNextWake(intent);
     this.writeAdapterNextWake(this.requireRun(event.tenantId), intent);
     const stoppedAfterThink = this.ifKilled(event.tenantId);
@@ -1567,15 +1622,20 @@ export class HabitatKernel {
     const pack = event.pack ?? this.packs.get(event.tenantId);
     const resolved = this.requireThinkBind(event.tenantId, pack);
     const skills = this.injectSkills(event.tenantId);
-    const talking = await this.adapter.think({
-      pass: "talking",
+    const talking = await this.thinkAdapter(
+      {
+        pass: "talking",
+        event,
+        run: open,
+        memory,
+        skills,
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
-      run: open,
-      memory,
-      skills,
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
+      decision,
+      open,
+    );
     this.validateTalking(talking, event, decision, open);
     const applied = await this.applyTalkingVerbs(event, decision, open, talking, memory, {
       pack,
@@ -1878,6 +1938,26 @@ export class HabitatKernel {
     return { bind, credentials: { apiKey: creds.apiKey } };
   }
 
+  /**
+   * Adapter think with HK-032 evidence. An illegal verb thrown by the mapper
+   * (ADAPTER_VENDOR_REJECTED) is recorded on the run and wake before rethrow.
+   */
+  private async thinkAdapter(
+    input: AdapterInput,
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+    run: RunRecord | undefined,
+  ): Promise<CognitiveIntent> {
+    try {
+      return await this.adapter.think(input);
+    } catch (err) {
+      if (isIllegalAdapterVerbError(err)) {
+        this.recordTalkingReject(event, decision, run, err.code);
+      }
+      throw err;
+    }
+  }
+
   private validateTalking(
     intent: CognitiveIntent,
     event: WakeEvent,
@@ -1898,15 +1978,8 @@ export class HabitatKernel {
     if (intent.act === "propose_effect") {
       fail("TALKING_PASS", "Talking pass must not do heavy work");
     }
-    if (
-      intent.act !== "launch_worker" &&
-      intent.act !== "done" &&
-      intent.act !== "follow_up" &&
-      intent.act !== "write_brief" &&
-      intent.act !== "steer" &&
-      intent.act !== "report"
-    ) {
-      fail("TALKING_PASS", "Talking pass issued an unknown verb");
+    if (!isLegalTalkingVerb(intent.act)) {
+      fail(ILLEGAL_ADAPTER_VERB, "Talking pass issued an illegal adapter verb");
     }
     if (intent.workerType !== undefined && intent.workerType !== "coder") {
       fail("TALKING_PASS", "Talking pass must not invent a worker type");
@@ -1916,8 +1989,27 @@ export class HabitatKernel {
   }
 
   /**
-   * Persist HK-031 reject evidence on the run and wake log. The forbidden
-   * change is not applied. talkingDidHeavyWork stays false.
+   * Worker must propose the one external effect. An illegal tool/verb fails
+   * closed with the same evidence spine as talkingReject. Does not execute.
+   */
+  private validateWorker(
+    intent: CognitiveIntent,
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+    run: RunRecord | undefined,
+  ): void {
+    const fail = (code: string, message: string): never => {
+      this.recordTalkingReject(event, decision, run, code);
+      throw new AvError(code, message);
+    };
+    if (intent.pass !== "worker" || !isLegalWorkerVerb(intent.act)) {
+      fail(ILLEGAL_ADAPTER_VERB, "Worker pass must propose the one external effect");
+    }
+  }
+
+  /**
+   * Persist HK-031 / HK-032 reject evidence on the run and wake log. The
+   * forbidden change is not applied. talkingDidHeavyWork stays false.
    */
   private recordTalkingReject(
     event: WakeEvent,
@@ -2083,19 +2175,22 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
     const brief = this.readBookedBrief(event.tenantId, worker);
-    const intent = await this.adapter.think({
-      pass: "worker",
+    const intent = await this.thinkAdapter(
+      {
+        pass: "worker",
+        event,
+        run: this.requireRun(event.tenantId),
+        memory,
+        skills,
+        ...(brief ? { brief } : {}),
+        bind: resolved.bind,
+        credentials: resolved.credentials,
+      },
       event,
-      run: this.requireRun(event.tenantId),
-      memory,
-      skills,
-      ...(brief ? { brief } : {}),
-      bind: resolved.bind,
-      credentials: resolved.credentials,
-    });
-    if (intent.act !== "propose_effect") {
-      throw new AvError("WORKER_INTENT", "Worker pass must propose the one external effect");
-    }
+      stem(event),
+      this.requireRun(event.tenantId),
+    );
+    this.validateWorker(intent, event, stem(event), this.requireRun(event.tenantId));
     this.assertAdapterNextWake(intent);
     this.writeAdapterNextWake(this.requireRun(event.tenantId), intent);
     const stoppedAfterThink = this.ifKilled(event.tenantId);
