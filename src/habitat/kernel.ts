@@ -65,6 +65,7 @@ import {
 import { writeProposalFile } from "./proposals.js";
 import { loadSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
+import { talkingShallNotReject } from "./talking-shall-not.js";
 import {
   CODER_TYPE,
   HABITAT_OWNED,
@@ -663,7 +664,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
     this.appendWake(event, decision, applied.run.runId, { routineId: stored.routineId, attached: true });
@@ -773,7 +774,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
     this.appendWake(event, decision, applied.run.runId, {
@@ -853,7 +854,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
     this.appendWake(event, decision, applied.run.runId, { deadlineId: stored.deadlineId, attached: true });
@@ -930,7 +931,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
     this.appendWake(event, decision, applied.run.runId, {
@@ -1028,7 +1029,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory, {
       pack,
       orch: creature,
@@ -1142,7 +1143,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
     this.appendWake(event, decision, applied.run.runId, {
@@ -1213,7 +1214,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, open);
     const applied = await this.applyTalkingVerbs(event, decision, open, talking, memory, { skipAppend: true });
     if (applied.handled) return applied.handled;
     return {
@@ -1249,7 +1250,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
     if (applied.handled) return applied.handled;
     this.appendWake(event, decision, applied.run.runId);
@@ -1343,7 +1344,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, run);
     const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory, {
       pack,
       orch,
@@ -1575,7 +1576,7 @@ export class HabitatKernel {
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
-    this.validateTalking(talking);
+    this.validateTalking(talking, event, decision, open);
     const applied = await this.applyTalkingVerbs(event, decision, open, talking, memory, {
       pack,
       orch,
@@ -1877,12 +1878,25 @@ export class HabitatKernel {
     return { bind, credentials: { apiKey: creds.apiKey } };
   }
 
-  private validateTalking(intent: CognitiveIntent): void {
+  private validateTalking(
+    intent: CognitiveIntent,
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+    run: RunRecord | undefined,
+  ): void {
+    const fail = (code: string, message: string): never => {
+      this.recordTalkingReject(event, decision, run, code);
+      throw new AvError(code, message);
+    };
     if (intent.pass !== "talking") {
-      throw new AvError("TALKING_PASS", "Talking pass must stay a talking pass");
+      fail("TALKING_PASS", "Talking pass must stay a talking pass");
+    }
+    const named = talkingShallNotReject(intent);
+    if (named) {
+      fail(named.code, named.message);
     }
     if (intent.act === "propose_effect") {
-      throw new AvError("TALKING_PASS", "Talking pass must not do heavy work");
+      fail("TALKING_PASS", "Talking pass must not do heavy work");
     }
     if (
       intent.act !== "launch_worker" &&
@@ -1892,13 +1906,33 @@ export class HabitatKernel {
       intent.act !== "steer" &&
       intent.act !== "report"
     ) {
-      throw new AvError("TALKING_PASS", "Talking pass issued an unknown verb");
+      fail("TALKING_PASS", "Talking pass issued an unknown verb");
     }
     if (intent.workerType !== undefined && intent.workerType !== "coder") {
-      throw new AvError("TALKING_PASS", "Talking pass must not invent a worker type");
+      fail("TALKING_PASS", "Talking pass must not invent a worker type");
     }
     this.assertAdapterNextWake(intent);
     this.assertAdapterBrief(intent);
+  }
+
+  /**
+   * Persist HK-031 reject evidence on the run and wake log. The forbidden
+   * change is not applied. talkingDidHeavyWork stays false.
+   */
+  private recordTalkingReject(
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+    run: RunRecord | undefined,
+    code: string,
+  ): void {
+    if (!run) return;
+    this.putRun({
+      ...run,
+      talkingReject: { code, closed: true },
+      talkingDidHeavyWork: false,
+      updatedAt: nowIso(),
+    });
+    this.appendWake(event, decision, run.runId, { talkingReject: code, closed: true });
   }
 
   /**

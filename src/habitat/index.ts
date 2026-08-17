@@ -22,4 +22,5 @@ export * from "./vendor-think.js";
 export * from "./sdk-think.js";
 export * from "./deep-agents.js";
 export * from "./stem.js";
+export * from "./talking-shall-not.js";
 export * from "./kernel.js";
