@@ -76,7 +76,7 @@ import {
   type WorkerRecord,
 } from "./types.js";
 import { WakeBus } from "./wake-bus.js";
-import { replayWakeLog, replayWakeLogFromDisk, WakeLog } from "./wake-log.js";
+import { recordWake, replayWakeLog, replayWakeLogFromDisk, WakeLog, wakeTarget } from "./wake-log.js";
 import { WorkerBook } from "./worker.js";
 
 /** Core-owned due interval. Not field-configured. Not Temporal (DEC-020). */
@@ -228,6 +228,26 @@ export class HabitatKernel {
     return this.wakeLog.list(tenantId);
   }
 
+  /** Persist an immutable HK-014 wake record. Do not write a wake without a run. */
+  private appendWake(
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+    runId: string | undefined,
+    detail?: Record<string, unknown>,
+  ): void {
+    if (!runId) return;
+    this.wakeLog.append(
+      recordWake({
+        kind: event.kind,
+        tenantId: event.tenantId,
+        run: runId,
+        target: wakeTarget(event, decision),
+        decision,
+        detail,
+      }),
+    );
+  }
+
   activeWorker(tenantId: string): WorkerRecord | undefined {
     return this.workers.get(tenantId);
   }
@@ -365,13 +385,8 @@ export class HabitatKernel {
     }
     if (event.kind !== "field_start") {
       const memory = this.injectMemory(event.tenantId, this.orchestratorId(event.tenantId));
-      this.wakeLog.append({
-        kind: event.kind,
-        tenantId: event.tenantId,
-        at: nowIso(),
-        decision,
-        detail: { typedOnly: true },
-      });
+      this.appendWake(event, decision, this.runs.get(event.tenantId)?.runId, { typedOnly: true } as { typedOnly: true });
+      // detail: { typedOnly: true } — typed-only fallback; closed kinds have their own append.
       return {
         run: this.runs.get(event.tenantId),
         wokeOrchestrator: decision.wakeOrchestrator,
@@ -594,14 +609,7 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.wakeLog.append({
-      kind: "routine",
-      tenantId: event.tenantId,
-      runId: run.runId,
-      at: nowIso(),
-      decision,
-      detail: { routineId: stored.routineId, attached: true },
-    });
+    this.appendWake(event, decision, run.runId, { routineId: stored.routineId, attached: true });
     return {
       run,
       wokeOrchestrator: decision.wakeOrchestrator,
@@ -709,13 +717,11 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.wakeLog.append({
-      kind: "mail",
-      tenantId: event.tenantId,
-      runId: run.runId,
-      at: nowIso(),
-      decision,
-      detail: { mailId: stored.mailId, addresseeId, attached: true, confersAuthority: false },
+    this.appendWake(event, decision, run.runId, {
+      mailId: stored.mailId,
+      addresseeId,
+      attached: true,
+      confersAuthority: false,
     });
     return {
       run,
@@ -789,14 +795,7 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.wakeLog.append({
-      kind: "deadline",
-      tenantId: event.tenantId,
-      runId: run.runId,
-      at: nowIso(),
-      decision,
-      detail: { deadlineId: stored.deadlineId, attached: true },
-    });
+    this.appendWake(event, decision, run.runId, { deadlineId: stored.deadlineId, attached: true });
     return {
       run,
       wokeOrchestrator: decision.wakeOrchestrator,
@@ -871,13 +870,10 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.wakeLog.append({
-      kind: "connector",
-      tenantId: event.tenantId,
-      runId: run.runId,
-      at: nowIso(),
-      decision,
-      detail: { connectorId: stored.connectorId, attached: true, confersAuthority: false },
+    this.appendWake(event, decision, run.runId, {
+      connectorId: stored.connectorId,
+      attached: true,
+      confersAuthority: false,
     });
     return {
       run,
@@ -970,14 +966,7 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.wakeLog.append({
-      kind: "field_continue",
-      tenantId: event.tenantId,
-      runId: run.runId,
-      at: nowIso(),
-      decision,
-      detail: { wakeOnly: true },
-    });
+    this.appendWake(event, decision, run.runId, { wakeOnly: true });
     if (talking.act === "launch_worker" && pack && !this.workers.isLive(event.tenantId)) {
       this.runs.put({
         ...run,
@@ -1084,17 +1073,10 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.wakeLog.append({
-      kind: "architect_message",
-      tenantId: event.tenantId,
-      runId: run.runId,
-      at: nowIso(),
-      decision,
-      detail: {
-        fromAgentId: "architect",
-        loadedAgentId: loaded.agentId,
-        ...(addresseeId ? { addresseeId } : {}),
-      },
+    this.appendWake(event, decision, run.runId, {
+      fromAgentId: "architect",
+      loadedAgentId: loaded.agentId,
+      ...(addresseeId ? { addresseeId } : {}),
     });
     return {
       run,
@@ -1113,13 +1095,9 @@ export class HabitatKernel {
   private async workerFailed(event: WakeEvent): Promise<WakeResult> {
     const run = this.runs.get(event.tenantId);
     const decision = stem(event);
-    this.wakeLog.append({
-      kind: "worker_failed",
-      tenantId: event.tenantId,
-      runId: run?.runId,
-      at: nowIso(),
-      decision,
-      detail: { workerId: event.workerId ?? run?.workerId, reason: event.reason ?? "worker_failed" },
+    this.appendWake(event, decision, run?.runId, {
+      workerId: event.workerId ?? run?.workerId,
+      reason: event.reason ?? "worker_failed",
     });
     this.expectedTeardown.add(event.tenantId);
     try {
@@ -1198,13 +1176,7 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.wakeLog.append({
-      kind: "field_ask",
-      tenantId: event.tenantId,
-      runId: run.runId,
-      at: nowIso(),
-      decision,
-    });
+    this.appendWake(event, decision, run.runId);
     return {
       run,
       wokeOrchestrator: decision.wakeOrchestrator,
@@ -1250,13 +1222,9 @@ export class HabitatKernel {
         event.tenantId,
         this.workers.get(event.tenantId)?.agent.agentId ?? this.orchestratorId(event.tenantId),
       );
-      this.wakeLog.append({
-        kind: event.kind,
-        tenantId: event.tenantId,
-        runId: existing.runId,
-        at: nowIso(),
-        decision,
-        detail: { followUp: true, ...(event.routineId ? { routineId: event.routineId } : {}) },
+      this.appendWake(event, decision, existing.runId, {
+        followUp: true,
+        ...(event.routineId ? { routineId: event.routineId } : {}),
       });
       return {
         run: existing,
@@ -1284,13 +1252,9 @@ export class HabitatKernel {
             createdAt: nowIso(),
             updatedAt: nowIso(),
           });
-    this.wakeLog.append({
-      kind: event.kind,
-      tenantId: event.tenantId,
-      runId: run.runId,
-      at: nowIso(),
-      decision,
-      detail: { goal: event.goal, ...(event.routineId ? { routineId: event.routineId } : {}) },
+    this.appendWake(event, decision, run.runId, {
+      goal: event.goal,
+      ...(event.routineId ? { routineId: event.routineId } : {}),
     });
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
@@ -1408,14 +1372,7 @@ export class HabitatKernel {
       event.tenantId,
       this.workers.get(event.tenantId)?.agent.agentId ?? this.orchestratorId(event.tenantId),
     );
-    this.wakeLog.append({
-      kind: "card_decide",
-      tenantId: event.tenantId,
-      runId: run?.runId,
-      at: nowIso(),
-      decision: stem(event),
-      detail: { cardId: event.cardId, decision: event.decision },
-    });
+    this.appendWake(event, stem(event), run?.runId, { cardId: event.cardId, decision: event.decision });
     if (!run || !event.cardId || run.pendingCardId !== event.cardId) {
       return {
         run,
@@ -1468,14 +1425,7 @@ export class HabitatKernel {
     this.assertFieldCannotPickAgent(event);
     const run = this.runs.get(event.tenantId);
     const decision = stem(event);
-    this.wakeLog.append({
-      kind: "worker_done",
-      tenantId: event.tenantId,
-      runId: run?.runId,
-      at: nowIso(),
-      decision,
-      detail: { workerId: event.workerId ?? run?.workerId },
-    });
+    this.appendWake(event, decision, run?.runId, { workerId: event.workerId ?? run?.workerId });
     this.expectedTeardown.add(event.tenantId);
     try {
       this.workers.teardown(event.tenantId);
@@ -1574,14 +1524,7 @@ export class HabitatKernel {
 
   private kill(event: WakeEvent): WakeResult {
     const run = this.runs.get(event.tenantId);
-    this.wakeLog.append({
-      kind: "kill",
-      tenantId: event.tenantId,
-      runId: run?.runId,
-      at: nowIso(),
-      decision: stem(event),
-      detail: { reason: event.reason ?? "kill" },
-    });
+    this.appendWake(event, stem(event), run?.runId, { reason: event.reason ?? "kill" });
     this.expectedTeardown.add(event.tenantId);
     try {
       this.workers.teardown(event.tenantId);

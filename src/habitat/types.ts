@@ -115,11 +115,29 @@ export interface RunRecord {
   updatedAt: string;
 }
 
+/**
+ * Immutable eval-spine record (HK-014). Every persisted wake has kind, time,
+ * tenant, run, target, and payloadHash. seq is append-only order.
+ * tenantId / runId / at stay as aliases of tenant / run / time.
+ */
 export interface WakeLogEntry {
   seq: number;
   kind: WakeKind;
+  /** ISO timestamp. Required name for the eval spine. */
+  time: string;
+  /** Tenant id. Required name for the eval spine. */
+  tenant: string;
+  /** Open or just-created run id. Required — do not persist a wake without a run. */
+  run: string;
+  /**
+   * Who the wake is aimed at: orchestrator | ops | addressed agent id | worker
+   * (or the concrete worker id). Derived from stem / admission. Not a WakeKind.
+   */
+  target: string;
+  /** Hash of the wake payload, not the stem decision. */
+  payloadHash: string;
   tenantId: string;
-  runId?: string;
+  runId: string;
   at: string;
   /** Stem decision persisted at append. Missing on replay is fail-closed. */
   decision: StemDecision;

@@ -1,4 +1,3 @@
-import type { WakeLogEntry } from "../habitat/types.js";
 import { replayWakeLog, replayWakeLogFromDisk, type WakeLogReplayResult } from "../habitat/wake-log.js";
 import type { LoadedPack } from "../packs/types.js";
 
@@ -21,7 +20,7 @@ export class EvalRunner {
 
   /** Replay habitat facilities from a wake log or tenant disk. No model. */
   replayFacilities(
-    source: readonly WakeLogEntry[] | { computerBaseDir: string; tenantId: string },
+    source: readonly unknown[] | { computerBaseDir: string; tenantId: string },
   ): WakeLogReplayResult {
     if ("computerBaseDir" in source) {
       return replayWakeLogFromDisk(source.computerBaseDir, source.tenantId);
