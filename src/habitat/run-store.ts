@@ -128,6 +128,17 @@ function parseRun(raw: unknown): RunRecord {
   if (typeof raw.journeyId === "string") run.journeyId = raw.journeyId;
   if (typeof raw.recordId === "string") run.recordId = raw.recordId;
   if (raw.pendingIntent === "launch_worker") run.pendingIntent = "launch_worker";
+  if (raw.talkingReject !== undefined) {
+    if (
+      !isRecord(raw.talkingReject) ||
+      typeof raw.talkingReject.code !== "string" ||
+      !raw.talkingReject.code ||
+      raw.talkingReject.closed !== true
+    ) {
+      throw new AvError("RUN_STORE_CORRUPT", "Run store is corrupt; refusing to invent a run");
+    }
+    run.talkingReject = { code: raw.talkingReject.code, closed: true };
+  }
   if (isRecord(raw.pendingEffect)) {
     const effect = raw.pendingEffect;
     if (

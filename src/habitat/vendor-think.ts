@@ -1,4 +1,8 @@
 import { AvError } from "../errors.js";
+import {
+  copyTalkingShallNotMarkers,
+  isTalkingShallNotAct,
+} from "./talking-shall-not.js";
 import type { AdapterCredentials, AdapterInput, CognitiveIntent, LabeledMemory } from "./types.js";
 
 /**
@@ -196,11 +200,12 @@ function asCognitiveIntent(raw: unknown): CognitiveIntent {
     raw.act !== "follow_up" &&
     raw.act !== "write_brief" &&
     raw.act !== "steer" &&
-    raw.act !== "report"
+    raw.act !== "report" &&
+    !isTalkingShallNotAct(raw.act)
   ) {
     throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
   }
-  const intent: CognitiveIntent = { pass: raw.pass, act: raw.act };
+  const intent: CognitiveIntent = { pass: raw.pass, act: raw.act as CognitiveIntent["act"] };
   if (raw.workerType === "coder") intent.workerType = "coder";
   if (typeof raw.actionClass === "string") intent.actionClass = raw.actionClass;
   if (typeof raw.channel === "string") intent.channel = raw.channel;
@@ -221,6 +226,7 @@ function asCognitiveIntent(raw: unknown): CognitiveIntent {
     }
     intent.brief = raw.brief;
   }
+  copyTalkingShallNotMarkers(raw, intent);
   return intent;
 }
 

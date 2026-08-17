@@ -157,6 +157,11 @@ export interface RunRecord {
   journeyId?: string;
   recordId?: string;
   talkingDidHeavyWork: false;
+  /**
+   * Last talking SHALL NOT reject (HK-031). Evidence that an unvalidated
+   * talking decision did not succeed. Absent means no talking reject.
+   */
+  talkingReject?: { code: string; closed: true };
   createdAt: string;
   updatedAt: string;
 }
