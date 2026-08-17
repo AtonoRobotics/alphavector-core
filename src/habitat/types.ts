@@ -84,6 +84,16 @@ export interface WakeEvent {
   workerType?: string;
   /** Rejected on field_continue / worker_done. Field SHALL NOT pick an assignee. */
   assigneeAgentId?: string;
+  /**
+   * Rejected. Field SHALL NOT set the run orchestrator. Kernel sets it
+   * from the loaded orchestrator. Not a field picker.
+   */
+  orchestratorId?: string;
+  /**
+   * Rejected. Field SHALL NOT set the run budget. Kernel-owned.
+   * Not a trust-ladder number.
+   */
+  budget?: number;
 }
 
 export interface PendingEffect {
@@ -98,11 +108,23 @@ export interface PendingEffect {
   from?: string;
 }
 
+/** Kernel-owned empty run budget. Not a trust-ladder number. Field SHALL NOT set this. */
+export const KERNEL_RUN_BUDGET = 0;
+
 export interface RunRecord {
   runId: string;
   tenantId: string;
+  /** Objective. Existing name stays — do not rename to objective. */
   goal: string;
   status: RunStatus;
+  /** Loaded orchestrator for this run. Kernel sets this. Field SHALL NOT. */
+  orchestratorId: string;
+  /** Booked worker ids on this run. Empty or one today. Not a new worker type. */
+  workers: string[];
+  /** Next wake. Empty until HK-024. Persist only — no fire loop in this slice. */
+  nextWake: string;
+  /** Kernel-owned budget. Empty/zero. Not a trust ladder. Field SHALL NOT set this. */
+  budget: number;
   workerId?: string;
   workerType?: WorkerTypeId;
   pendingCardId?: string;

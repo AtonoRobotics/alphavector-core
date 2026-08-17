@@ -7,7 +7,7 @@ import type { AgentRuntime } from "../agents/runtime.js";
 import type { CardBook } from "../auth/cards.js";
 import { ComputerHost } from "../computer/host.js";
 import { defaultImageCacheDir } from "../computer/image.js";
-import { AuthorizationRequiredError, AvError } from "../errors.js";
+import { AuthorizationRequiredError, AvError, SurfaceViolationError } from "../errors.js";
 import type { EffectExecutor, EffectResult } from "../effects/executor.js";
 import { assertHabitatMayAsk, habitatAskReason } from "../grants/ask.js";
 import type { GrantBook } from "../grants/store.js";
@@ -69,6 +69,7 @@ import {
   type HabitatIsolationRecord,
   type ProposalFile,
   type ProposalKind,
+  KERNEL_RUN_BUDGET,
   type RunRecord,
   type SkillFile,
   type WakeEvent,
@@ -312,6 +313,7 @@ export class HabitatKernel {
   async wake(event: WakeEvent, opts?: { until?: "talking" | "card" | "done"; holdWorker?: boolean }): Promise<WakeResult> {
     this.bus.emit(event);
     if (event.pack) this.packs.set(event.tenantId, event.pack);
+    this.assertFieldCannotSetRunKernel(event);
 
     if (event.kind === "kill") {
       return this.kill(event);
@@ -968,7 +970,7 @@ export class HabitatKernel {
     this.validateTalking(talking);
     this.appendWake(event, decision, run.runId, { wakeOnly: true });
     if (talking.act === "launch_worker" && pack && !this.workers.isLive(event.tenantId)) {
-      this.runs.put({
+      this.putRun({
         ...run,
         pendingIntent: "launch_worker",
         updatedAt: nowIso(),
@@ -1118,7 +1120,7 @@ export class HabitatKernel {
       };
     }
 
-    const open = this.runs.put({
+    const open = this.putRun({
       ...run,
       status: "talking",
       pendingCardId: undefined,
@@ -1241,7 +1243,7 @@ export class HabitatKernel {
     const run =
       existing && existing.goal === event.goal
         ? existing
-        : this.runs.put({
+        : this.putRun({
             runId: newId("run"),
             tenantId: event.tenantId,
             goal: event.goal,
@@ -1270,7 +1272,7 @@ export class HabitatKernel {
     this.validateTalking(talking);
     const stopped = this.ifKilled(event.tenantId);
     if (stopped) return stopped;
-    this.runs.put({
+    this.putRun({
       ...run,
       status: "talking",
       pendingIntent: talking.act === "launch_worker" ? "launch_worker" : undefined,
@@ -1324,7 +1326,7 @@ export class HabitatKernel {
         goal: run.goal,
       });
     }
-    this.runs.put({
+    this.putRun({
       ...run,
       status: "working",
       workerId: worker.workerId,
@@ -1386,7 +1388,7 @@ export class HabitatKernel {
     if (event.decision === "denied") {
       this.opts.orchestrator.completeGoal(event.tenantId);
       this.workers.teardown(event.tenantId);
-      const next = this.runs.put({
+      const next = this.putRun({
         ...run,
         status: "denied",
         pendingCardId: undefined,
@@ -1436,7 +1438,7 @@ export class HabitatKernel {
     if (!run || isTerminal(run.status)) {
       this.opts.orchestrator.completeGoal(event.tenantId);
       const next = run
-        ? this.runs.put({
+        ? this.putRun({
             ...run,
             status: run.status === "denied" || run.status === "killed" ? run.status : "completed",
             pendingCardId: undefined,
@@ -1455,7 +1457,7 @@ export class HabitatKernel {
       };
     }
 
-    const open = this.runs.put({
+    const open = this.putRun({
       ...run,
       status: "talking",
       pendingCardId: undefined,
@@ -1482,7 +1484,7 @@ export class HabitatKernel {
 
     if (talking.act === "follow_up" || talking.act === "launch_worker") {
       if (!pack) throw new AvError("NO_ACTIVE_PACK", "Follow-up launch requires a loaded pack");
-      this.runs.put({
+      this.putRun({
         ...open,
         pendingIntent: "launch_worker",
         updatedAt: nowIso(),
@@ -1491,7 +1493,7 @@ export class HabitatKernel {
     }
 
     this.opts.orchestrator.completeGoal(event.tenantId);
-    const next = this.runs.put({
+    const next = this.putRun({
       ...open,
       status: "completed",
       pendingIntent: undefined,
@@ -1522,6 +1524,36 @@ export class HabitatKernel {
     }
   }
 
+  /**
+   * Field SHALL NOT set orchestratorId or budget. Kernel owns both.
+   * Fail closed — do not ignore a supplied id into the durable run.
+   */
+  private assertFieldCannotSetRunKernel(event: WakeEvent): void {
+    if (nonempty(event.orchestratorId) || event.budget !== undefined) {
+      throw new SurfaceViolationError("Field SHALL NOT set orchestratorId or budget");
+    }
+  }
+
+  /**
+   * Persist the run with kernel-owned fields. orchestratorId is the loaded
+   * orchestrator. workers is the booked set (0 or 1). nextWake stays empty
+   * until HK-024 — this is not a fire loop. budget is the kernel empty/zero.
+   */
+  private putRun(
+    run: Omit<RunRecord, "orchestratorId" | "workers" | "nextWake" | "budget"> &
+      Partial<Pick<RunRecord, "orchestratorId" | "workers" | "nextWake" | "budget">>,
+  ): RunRecord {
+    const booked = this.workers.get(run.tenantId);
+    return this.runs.put({
+      ...run,
+      orchestratorId: this.requireOrchestrator(run.tenantId).agentId,
+      workers: booked ? [booked.workerId] : [],
+      nextWake: typeof run.nextWake === "string" ? run.nextWake : "",
+      budget: KERNEL_RUN_BUDGET,
+      talkingDidHeavyWork: false,
+    });
+  }
+
   private kill(event: WakeEvent): WakeResult {
     const run = this.runs.get(event.tenantId);
     this.appendWake(event, stem(event), run?.runId, { reason: event.reason ?? "kill" });
@@ -1533,7 +1565,7 @@ export class HabitatKernel {
     }
     this.opts.orchestrator.completeGoal(event.tenantId);
     const next = run
-      ? this.runs.put({
+      ? this.putRun({
           ...run,
           status: "killed",
           pendingCardId: undefined,
@@ -1612,7 +1644,7 @@ export class HabitatKernel {
         agentId: agent.agentId,
         ...connectorSendFields(intent),
       });
-      this.runs.put({
+      this.putRun({
         ...run,
         status: "working",
         updatedAt: nowIso(),
@@ -1621,7 +1653,7 @@ export class HabitatKernel {
     } catch (err) {
       if (err instanceof AuthorizationRequiredError) {
         assertHabitatMayAsk(askReason);
-        this.runs.put({
+        this.putRun({
           ...run,
           status: "awaiting_card",
           pendingCardId: err.cardId,
