@@ -12,7 +12,7 @@ export function stem(event: WakeEvent): StemDecision {
   switch (event.kind) {
     case "field_start":
     case "field_ask":
-    case "field_continue":
+    case "field_continue": // habitat clock fires run.nextWake as this kind
     case "routine":
     case "mail":
     case "deadline":

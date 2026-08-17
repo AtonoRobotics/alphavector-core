@@ -94,6 +94,11 @@ export interface WakeEvent {
    * Not a trust-ladder number.
    */
   budget?: number;
+  /**
+   * Rejected. Field SHALL NOT set run.nextWake. Kernel writes it from a
+   * validated adapter decision. Stem fires it on the habitat clock.
+   */
+  nextWake?: string;
 }
 
 export interface PendingEffect {
@@ -121,7 +126,11 @@ export interface RunRecord {
   orchestratorId: string;
   /** Booked worker ids on this run. Empty or one today. Not a new worker type. */
   workers: string[];
-  /** Next wake. Empty until HK-024. Persist only — no fire loop in this slice. */
+  /**
+   * Next wake due time (ISO). Empty means nothing to fire.
+   * Kernel writes this from a validated adapter decision. Field SHALL NOT.
+   * The habitat clock fires it through stem as field_continue on this run.
+   */
   nextWake: string;
   /** Kernel-owned budget. Empty/zero. Not a trust ladder. Field SHALL NOT set this. */
   budget: number;
@@ -268,6 +277,12 @@ export interface CognitiveIntent {
   to?: string;
   body?: string;
   from?: string;
+  /**
+   * Optional ISO due time. Kernel persists this onto run.nextWake after
+   * validation. Absent means the adapter did not decide. Empty clears.
+   * Invalid or unvalidated is fail-closed — do not persist.
+   */
+  nextWake?: string;
 }
 
 export interface CognitiveAdapter {

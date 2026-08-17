@@ -462,10 +462,11 @@ export class HabitatKernel {
 
   /**
    * Product ticker body. Habitat owns this clock. Calls fireDue (routines),
-   * fireDueDeadlines, and reapCrashedWorkers per tenant. Same clock — not a
-   * second Temporal-like bus. isolation() is a read and does not reap.
-   * Typed fail (ONE_GOAL, ADAPTER_UNBOUND, NO_OPEN_RUN, *_STORE_CORRUPT, ...) is
-   * swallowed so the interval keeps ticking. Does not invent routines or deadlines.
+   * fireDueDeadlines, fireDueNextWake, and reapCrashedWorkers per tenant.
+   * Same clock — not a second Temporal-like bus. isolation() is a read and
+   * does not reap. Typed fail (ONE_GOAL, ADAPTER_UNBOUND, NO_OPEN_RUN,
+   * *_STORE_CORRUPT, ...) is swallowed so the interval keeps ticking.
+   * Does not invent routines, deadlines, or an empty nextWake.
    */
   private tickDue(): void {
     void this.tickDueAsync();
@@ -486,11 +487,39 @@ export class HabitatKernel {
         // keep ticking
       }
       try {
+        await this.fireDueNextWake(tenantId, now);
+      } catch {
+        // keep ticking
+      }
+      try {
         await this.reapCrashedWorkers(tenantId);
       } catch {
         // keep ticking
       }
     }
+  }
+
+  /**
+   * Fire a due run.nextWake through stem as field_continue on the same run.
+   * Empty nextWake fires nothing. Clears the field first so it cannot re-fire.
+   * Goes through wake() — HK-013 queues during a pass; HK-060 kill still cuts in.
+   * Same habitat clock as routines/deadlines. Not a second ticker.
+   */
+  private async fireDueNextWake(tenantId: string, now: string): Promise<void> {
+    const run = this.runs.get(tenantId);
+    if (!run || isTerminal(run.status)) return;
+    if (!isNextWakeDue(run.nextWake, now)) return;
+    this.putRun({
+      ...run,
+      nextWake: "",
+      updatedAt: nowIso(),
+    });
+    await this.wake({
+      kind: "field_continue",
+      tenantId,
+      pack: this.packs.get(tenantId),
+      runId: run.runId,
+    });
   }
 
   /**
@@ -611,9 +640,10 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.appendWake(event, decision, run.runId, { routineId: stored.routineId, attached: true });
+    const next = this.writeAdapterNextWake(run, talking);
+    this.appendWake(event, decision, next.runId, { routineId: stored.routineId, attached: true });
     return {
-      run,
+      run: next,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -719,14 +749,15 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.appendWake(event, decision, run.runId, {
+    const next = this.writeAdapterNextWake(run, talking);
+    this.appendWake(event, decision, next.runId, {
       mailId: stored.mailId,
       addresseeId,
       attached: true,
       confersAuthority: false,
     });
     return {
-      run,
+      run: next,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -797,9 +828,10 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.appendWake(event, decision, run.runId, { deadlineId: stored.deadlineId, attached: true });
+    const next = this.writeAdapterNextWake(run, talking);
+    this.appendWake(event, decision, next.runId, { deadlineId: stored.deadlineId, attached: true });
     return {
-      run,
+      run: next,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -872,13 +904,14 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.appendWake(event, decision, run.runId, {
+    const next = this.writeAdapterNextWake(run, talking);
+    this.appendWake(event, decision, next.runId, {
       connectorId: stored.connectorId,
       attached: true,
       confersAuthority: false,
     });
     return {
-      run,
+      run: next,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -968,17 +1001,18 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.appendWake(event, decision, run.runId, { wakeOnly: true });
+    const next = this.writeAdapterNextWake(run, talking);
+    this.appendWake(event, decision, next.runId, { wakeOnly: true });
     if (talking.act === "launch_worker" && pack && !this.workers.isLive(event.tenantId)) {
       this.putRun({
-        ...run,
+        ...next,
         pendingIntent: "launch_worker",
         updatedAt: nowIso(),
       });
       return this.actLaunchAndWork(event, pack, creature, skills, holdWorker, "card");
     }
     return {
-      run,
+      run: next,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1075,13 +1109,14 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.appendWake(event, decision, run.runId, {
+    const next = this.writeAdapterNextWake(run, talking);
+    this.appendWake(event, decision, next.runId, {
       fromAgentId: "architect",
       loadedAgentId: loaded.agentId,
       ...(addresseeId ? { addresseeId } : {}),
     });
     return {
-      run,
+      run: next,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1144,8 +1179,9 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
+    const next = this.writeAdapterNextWake(open, talking);
     return {
-      run: open,
+      run: next,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1178,9 +1214,10 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    this.appendWake(event, decision, run.runId);
+    const next = this.writeAdapterNextWake(run, talking);
+    this.appendWake(event, decision, next.runId);
     return {
-      run,
+      run: next,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1270,10 +1307,11 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
+    const withWake = this.writeAdapterNextWake(run, talking);
     const stopped = this.ifKilled(event.tenantId);
     if (stopped) return stopped;
     this.putRun({
-      ...run,
+      ...withWake,
       status: "talking",
       pendingIntent: talking.act === "launch_worker" ? "launch_worker" : undefined,
       updatedAt: nowIso(),
@@ -1348,6 +1386,8 @@ export class HabitatKernel {
     if (intent.act !== "propose_effect") {
       throw new AvError("WORKER_INTENT", "Worker pass must propose the one external effect");
     }
+    this.assertAdapterNextWake(intent);
+    this.writeAdapterNextWake(this.requireRun(event.tenantId), intent);
     const stoppedAfterThink = this.ifKilled(event.tenantId);
     if (stoppedAfterThink) return stoppedAfterThink;
     const proposed = await this.admit(pack, worker.agent, intent);
@@ -1481,11 +1521,12 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
+    const decided = this.writeAdapterNextWake(open, talking);
 
     if (talking.act === "follow_up" || talking.act === "launch_worker") {
       if (!pack) throw new AvError("NO_ACTIVE_PACK", "Follow-up launch requires a loaded pack");
       this.putRun({
-        ...open,
+        ...decided,
         pendingIntent: "launch_worker",
         updatedAt: nowIso(),
       });
@@ -1494,7 +1535,7 @@ export class HabitatKernel {
 
     this.opts.orchestrator.completeGoal(event.tenantId);
     const next = this.putRun({
-      ...open,
+      ...decided,
       status: "completed",
       pendingIntent: undefined,
       updatedAt: nowIso(),
@@ -1525,19 +1566,20 @@ export class HabitatKernel {
   }
 
   /**
-   * Field SHALL NOT set orchestratorId or budget. Kernel owns both.
-   * Fail closed — do not ignore a supplied id into the durable run.
+   * Field SHALL NOT set orchestratorId, budget, or nextWake. Kernel owns all
+   * three. Fail closed — do not persist a field-supplied nextWake.
    */
   private assertFieldCannotSetRunKernel(event: WakeEvent): void {
-    if (nonempty(event.orchestratorId) || event.budget !== undefined) {
-      throw new SurfaceViolationError("Field SHALL NOT set orchestratorId or budget");
+    if (nonempty(event.orchestratorId) || event.budget !== undefined || event.nextWake !== undefined) {
+      throw new SurfaceViolationError("Field SHALL NOT set orchestratorId, budget, or nextWake");
     }
   }
 
   /**
    * Persist the run with kernel-owned fields. orchestratorId is the loaded
-   * orchestrator. workers is the booked set (0 or 1). nextWake stays empty
-   * until HK-024 — this is not a fire loop. budget is the kernel empty/zero.
+   * orchestrator. workers is the booked set (0 or 1). nextWake is written
+   * only from a validated adapter decision (or cleared after stem fire).
+   * budget is the kernel empty/zero.
    */
   private putRun(
     run: Omit<RunRecord, "orchestratorId" | "workers" | "nextWake" | "budget"> &
@@ -1776,6 +1818,35 @@ export class HabitatKernel {
     if (intent.act === "propose_effect") {
       throw new AvError("TALKING_PASS", "Talking pass must not do heavy work");
     }
+    this.assertAdapterNextWake(intent);
+  }
+
+  /**
+   * nextWake on an adapter decision is optional. Absent is no-op. Empty is
+   * valid (clear). Anything else must be a parseable ISO time. Unvalidated
+   * values fail closed and are not persisted.
+   */
+  private assertAdapterNextWake(intent: CognitiveIntent): void {
+    const value = (intent as { nextWake?: unknown }).nextWake;
+    if (value === undefined) return;
+    if (typeof value !== "string" || (value !== "" && !Number.isFinite(Date.parse(value)))) {
+      throw new AvError(
+        "NEXT_WAKE_INVALID",
+        "Adapter nextWake must be an ISO time or empty; refusing to persist",
+      );
+    }
+  }
+
+  /** Kernel write of a validated adapter nextWake. Field never reaches here. */
+  private writeAdapterNextWake(run: RunRecord, intent: CognitiveIntent): RunRecord {
+    if (intent.nextWake === undefined) return this.runs.get(run.tenantId) ?? run;
+    const current = this.runs.get(run.tenantId) ?? run;
+    if (current.nextWake === intent.nextWake) return current;
+    return this.putRun({
+      ...current,
+      nextWake: intent.nextWake,
+      updatedAt: nowIso(),
+    });
   }
 
   /**
@@ -1869,6 +1940,15 @@ export class HabitatKernel {
 
 function isTerminal(status: RunRecord["status"]): boolean {
   return status === "completed" || status === "denied" || status === "killed";
+}
+
+/** Empty nextWake is not due. Unparseable is not due — do not invent a wake. */
+function isNextWakeDue(nextWake: string, now: string): boolean {
+  if (!nextWake) return false;
+  const due = Date.parse(nextWake);
+  const at = Date.parse(now);
+  if (!Number.isFinite(due) || !Number.isFinite(at) || due > at) return false;
+  return true;
 }
 
 function nonempty(value: string | undefined): boolean {

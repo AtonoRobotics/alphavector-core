@@ -121,9 +121,10 @@ describe("HK-020 durable run control record", () => {
 
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(kernelSrc).toMatch(/ADAPTER_UNBOUND/);
-    expect(kernelSrc).not.toMatch(/fireNextWake|nextWakeFire|nextWakeTicker/);
-    expect(kernelSrc).not.toMatch(/event\.nextWake|intent\.nextWake|bind\.nextWake/);
-    expect(kernelSrc).not.toMatch(/adapter.*nextWake|nextWake.*adapter/);
+    expect(kernelSrc).not.toMatch(/nextWakeTicker|nextWakeFire/);
+    expect(kernelSrc).not.toMatch(/bind\.nextWake/);
+    expect(kernelSrc).toMatch(/event\.nextWake !== undefined/);
+    expect(kernelSrc).toMatch(/intent\.nextWake/);
 
     expect(WAKE_KINDS).not.toContain("card_decided");
     expect(WAKE_KINDS).not.toContain("connector_event");
@@ -361,15 +362,15 @@ describe("HK-020 durable run control record", () => {
     expect(run?.budget).not.toBe(99);
   });
 
-  it("does not add a nextWake fire loop, ticker, or adapter-set path", () => {
+  it("keeps nextWake on the run record; HK-024 owns set and fire", () => {
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     const adapterSrc = readFileSync(path.join(process.cwd(), "src/habitat/adapter.ts"), "utf8");
     const typesSrc = readFileSync(path.join(process.cwd(), "src/habitat/types.ts"), "utf8");
     expect(kernelSrc).toMatch(/nextWake: typeof run\.nextWake === "string" \? run\.nextWake : ""/);
-    expect(kernelSrc).not.toMatch(/fireDue\(.*nextWake|nextWake.*fireDue/);
+    expect(kernelSrc).toMatch(/fireDueNextWake\(/);
     expect(kernelSrc).not.toMatch(/setInterval\([^)]*nextWake|nextWake[^;]*setInterval/);
     expect(adapterSrc).not.toMatch(/nextWake/);
-    expect(typesSrc).toMatch(/Empty until HK-024/);
+    expect(typesSrc).toMatch(/Empty means nothing to fire/);
     expect(WAKE_KINDS).toEqual([
       "field_start",
       "field_ask",

@@ -101,7 +101,7 @@ function parseRun(raw: unknown): RunRecord {
     typeof raw.orchestratorId !== "string" ||
     !raw.orchestratorId ||
     !isWorkerIdSet(raw.workers) ||
-    (raw.nextWake !== undefined && typeof raw.nextWake !== "string") ||
+    (raw.nextWake !== undefined && !isPersistedNextWake(raw.nextWake)) ||
     !isKernelBudget(raw.budget) ||
     raw.talkingDidHeavyWork !== false ||
     typeof raw.createdAt !== "string" ||
@@ -158,6 +158,13 @@ function isWorkerIdSet(value: unknown): value is string[] {
 
 function isKernelBudget(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value === KERNEL_RUN_BUDGET;
+}
+
+/** Empty or a parseable ISO time. Garbage on disk is fail-closed. */
+function isPersistedNextWake(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value === "") return true;
+  return Number.isFinite(Date.parse(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
