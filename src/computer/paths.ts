@@ -26,6 +26,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     // Habitat control state. Same reason as cards: not a business fact, not on agent disk/.
     runsFile: path.join(root, "runs.json"),
     workersFile: path.join(root, "workers.json"),
+    // Kernel-written worker briefs. Same class as workers.json: not on agent disk/.
+    briefsDir: path.join(root, "briefs"),
     wakeLogFile: path.join(root, "wake-log.json"),
     memoryDir: path.join(root, "memory"),
     // Architect-written skill files. Same class as memory / cards: not on agent disk/.

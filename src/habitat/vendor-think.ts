@@ -42,7 +42,7 @@ export const VENDOR_THINK_PATH = "/v1/chat/completions";
 export const VENDOR_BASE_URL_ENV = "AV_VENDOR_BASE_URL";
 
 const INTENT_SYSTEM =
-  "Return only a JSON object with keys pass, act, and optional workerType, actionClass, channel, purpose, subject, nextWake.";
+  "Return only a JSON object with keys pass, act, and optional workerType, actionClass, channel, purpose, subject, nextWake, brief, body.";
 
 export function vendorThinkHandles(input: AdapterInput): VendorThinkHandles {
   const skills = input.skills
@@ -193,7 +193,10 @@ function asCognitiveIntent(raw: unknown): CognitiveIntent {
     raw.act !== "launch_worker" &&
     raw.act !== "propose_effect" &&
     raw.act !== "done" &&
-    raw.act !== "follow_up"
+    raw.act !== "follow_up" &&
+    raw.act !== "write_brief" &&
+    raw.act !== "steer" &&
+    raw.act !== "report"
   ) {
     throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
   }
@@ -211,6 +214,12 @@ function asCognitiveIntent(raw: unknown): CognitiveIntent {
       throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
     }
     intent.nextWake = raw.nextWake;
+  }
+  if (raw.brief !== undefined) {
+    if (typeof raw.brief !== "string") {
+      throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
+    }
+    intent.brief = raw.brief;
   }
   return intent;
 }

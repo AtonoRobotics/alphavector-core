@@ -5,6 +5,7 @@ export * from "./wake-log.js";
 export * from "./memory-store.js";
 export * from "./skills.js";
 export * from "./proposals.js";
+export * from "./brief-store.js";
 export * from "./worker.js";
 export * from "./adapter.js";
 export * from "./adapter-bind.js";

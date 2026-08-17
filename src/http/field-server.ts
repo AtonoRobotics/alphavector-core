@@ -163,6 +163,7 @@ export class FieldHttpServer {
     if (method === "POST" && path === "/field/journeys") {
       const body = (await readJson(req)) as FieldStartBody;
       assertFieldCannotSetNextWake(body as unknown as Record<string, unknown>);
+      assertFieldCannotWriteBriefOrSteer(body as unknown as Record<string, unknown>);
       const journey = core.field.start({
         actor,
         pack,
@@ -285,6 +286,7 @@ export class FieldHttpServer {
 
     if (method === "POST" && path === "/field/ask") {
       const body = (await readJson(req)) as FieldAskBody;
+      assertFieldCannotWriteBriefOrSteer(body as unknown as Record<string, unknown>);
       core.field.ask({
         actor,
         pack,
@@ -663,6 +665,7 @@ export class FieldHttpServer {
  */
 function assertFieldContinueIsWakeOnly(body: Record<string, unknown>): void {
   assertFieldCannotSetNextWake(body);
+  assertFieldCannotWriteBriefOrSteer(body);
   const named = new Set(["agentId", "agent", "workerType", "assigneeAgentId", "assignee", "who"]);
   for (const [key, value] of Object.entries(body)) {
     const lower = key.toLowerCase();
@@ -677,6 +680,13 @@ function assertFieldContinueIsWakeOnly(body: Record<string, unknown>): void {
 function assertFieldCannotSetNextWake(body: Record<string, unknown>): void {
   if (body.nextWake !== undefined) {
     throw new SurfaceViolationError("Field SHALL NOT set nextWake");
+  }
+}
+
+/** Field SHALL NOT write a brief, steer a worker, or report. Talking issues those verbs. */
+function assertFieldCannotWriteBriefOrSteer(body: Record<string, unknown>): void {
+  if (body.brief !== undefined || body.steer !== undefined || body.report !== undefined) {
+    throw new SurfaceViolationError("Field SHALL NOT write a brief, steer a worker, or report");
   }
 }
 
