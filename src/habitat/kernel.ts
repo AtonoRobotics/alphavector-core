@@ -1553,11 +1553,12 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
     const brief = this.readBookedBrief(event.tenantId, worker);
+    const thinkRun = this.requireRun(event.tenantId);
     const intent = await this.thinkAdapter(
       {
         pass: "worker",
         event,
-        run: this.requireRun(event.tenantId),
+        run: thinkRun,
         memory,
         skills,
         ...(brief ? { brief } : {}),
@@ -1566,11 +1567,11 @@ export class HabitatKernel {
       },
       event,
       stem(event),
-      this.requireRun(event.tenantId),
+      thinkRun,
     );
     this.validateWorker(intent, event, stem(event), this.requireRun(event.tenantId));
     this.assertAdapterNextWake(intent);
-    this.writeAdapterNextWake(this.requireRun(event.tenantId), intent);
+    this.writeAdapterNextWake(thinkRun, intent);
     const stoppedAfterThink = this.ifKilled(event.tenantId);
     if (stoppedAfterThink) return stoppedAfterThink;
     const proposed = await this.admit(pack, worker.agent, intent);
@@ -2263,11 +2264,12 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
     const brief = this.readBookedBrief(event.tenantId, worker);
+    const thinkRun = this.requireRun(event.tenantId);
     const intent = await this.thinkAdapter(
       {
         pass: "worker",
         event,
-        run: this.requireRun(event.tenantId),
+        run: thinkRun,
         memory,
         skills,
         ...(brief ? { brief } : {}),
@@ -2276,11 +2278,11 @@ export class HabitatKernel {
       },
       event,
       stem(event),
-      this.requireRun(event.tenantId),
+      thinkRun,
     );
     this.validateWorker(intent, event, stem(event), this.requireRun(event.tenantId));
     this.assertAdapterNextWake(intent);
-    this.writeAdapterNextWake(this.requireRun(event.tenantId), intent);
+    this.writeAdapterNextWake(thinkRun, intent);
     const stoppedAfterThink = this.ifKilled(event.tenantId);
     if (stoppedAfterThink) return stoppedAfterThink;
     const proposed = await this.admit(pack, worker.agent, intent);
@@ -2441,11 +2443,15 @@ export class HabitatKernel {
     }
   }
 
-  /** Kernel write of a validated adapter nextWake. Field never reaches here. */
+  /**
+   * Kernel write of a validated adapter nextWake. Field never reaches here.
+   * Echoing the think-time snapshot is not a new decision — do not clobber a
+   * later kernel clear or write.
+   */
   private writeAdapterNextWake(run: RunRecord, intent: CognitiveIntent): RunRecord {
     if (intent.nextWake === undefined) return this.runs.get(run.tenantId) ?? run;
+    if (run.nextWake === intent.nextWake) return this.runs.get(run.tenantId) ?? run;
     const current = this.runs.get(run.tenantId) ?? run;
-    if (current.nextWake === intent.nextWake) return current;
     return this.putRun({
       ...current,
       nextWake: intent.nextWake,

@@ -16,11 +16,14 @@ export type FixtureDecisionInput = Omit<CognitiveIntent, "assumptions" | "risks"
  * Fixture helper for DryStem / adapterThink / CI doubles.
  * Product think and kernel validate do not fill omitted fields.
  */
-export function fixtureTypedDecision(intent: FixtureDecisionInput): CognitiveIntent {
+export function fixtureTypedDecision(
+  intent: FixtureDecisionInput,
+  from?: { nextWake?: string },
+): CognitiveIntent {
   return {
     assumptions: [],
     risks: [],
-    ...(intent.act === "done" ? {} : { nextWake: "" }),
+    ...(intent.act === "done" ? {} : { nextWake: from?.nextWake ?? "" }),
     ...intent,
     act: intent.act as CognitiveIntent["act"],
   };

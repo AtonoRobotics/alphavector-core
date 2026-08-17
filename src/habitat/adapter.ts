@@ -29,17 +29,23 @@ export function dryThink(input: AdapterInput): CognitiveIntent {
       input.event.kind === "architect_message" ||
       input.event.kind === "worker_failed"
     ) {
-      return fixtureTypedDecision({ pass: "talking", act: "follow_up" });
+      return fixtureTypedDecision({ pass: "talking", act: "follow_up" }, input.run);
     }
-    return fixtureTypedDecision({ pass: "talking", act: "launch_worker", workerType: "coder" });
+    return fixtureTypedDecision(
+      { pass: "talking", act: "launch_worker", workerType: "coder" },
+      input.run,
+    );
   }
-  return fixtureTypedDecision({
-    pass: "worker",
-    act: "propose_effect",
-    actionClass: "communicate",
-    channel: "email",
-    purpose: "follow-up",
-    subject: input.run.recordId ?? input.event.recordId ?? "unspecified",
-    ...RECORDED_EMAIL_SEND,
-  });
+  return fixtureTypedDecision(
+    {
+      pass: "worker",
+      act: "propose_effect",
+      actionClass: "communicate",
+      channel: "email",
+      purpose: "follow-up",
+      subject: input.run.recordId ?? input.event.recordId ?? "unspecified",
+      ...RECORDED_EMAIL_SEND,
+    },
+    input.run,
+  );
 }
