@@ -73,7 +73,7 @@ export function sdkThinkPassFromInput(input: AdapterInput): DeepAgentsSdkPass {
   return {
     modelId: input.bind?.modelId?.trim() ?? "",
     systemPrompt: [
-      "Return only a JSON object with keys pass, act, and optional workerType, actionClass, channel, purpose, subject.",
+      "Return only a JSON object with keys pass, act, and optional workerType, actionClass, channel, purpose, subject, nextWake.",
       "This pass receives Architect-loaded skill bodies and labeled memory.",
       "It does not own wake, run, worker, admit, persist, or sleep.",
       JSON.stringify({ skills, memory: handles.memory }),

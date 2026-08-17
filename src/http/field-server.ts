@@ -162,6 +162,7 @@ export class FieldHttpServer {
 
     if (method === "POST" && path === "/field/journeys") {
       const body = (await readJson(req)) as FieldStartBody;
+      assertFieldCannotSetNextWake(body as Record<string, unknown>);
       const journey = core.field.start({
         actor,
         pack,
@@ -661,6 +662,7 @@ export class FieldHttpServer {
  * Any agent / worker-type / assignee selector fails closed.
  */
 function assertFieldContinueIsWakeOnly(body: Record<string, unknown>): void {
+  assertFieldCannotSetNextWake(body);
   const named = new Set(["agentId", "agent", "workerType", "assigneeAgentId", "assignee", "who"]);
   for (const [key, value] of Object.entries(body)) {
     const lower = key.toLowerCase();
@@ -668,6 +670,13 @@ function assertFieldContinueIsWakeOnly(body: Record<string, unknown>): void {
     if (selector && value !== undefined && value !== null && String(value).trim() !== "") {
       throw new AvError("FIELD_CANNOT_PICK_AGENT", "Continue is a wake; field SHALL NOT pick who works");
     }
+  }
+}
+
+/** Field SHALL NOT set run.nextWake. Kernel writes it from a validated adapter decision. */
+function assertFieldCannotSetNextWake(body: Record<string, unknown>): void {
+  if (body.nextWake !== undefined) {
+    throw new SurfaceViolationError("Field SHALL NOT set nextWake");
   }
 }
 
