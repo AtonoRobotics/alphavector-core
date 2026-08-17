@@ -75,6 +75,7 @@ import { talkingShallNotReject } from "./talking-shall-not.js";
 import {
   CODER_TYPE,
   HABITAT_OWNED,
+  isAdmittedWorkerType,
   type AdapterBind,
   type AdapterCredentials,
   type AdapterInput,
@@ -92,6 +93,7 @@ import {
   type WakeResult,
   type WorkerBrief,
   type WorkerRecord,
+  type WorkerTypeId,
 } from "./types.js";
 import { WakeBus } from "./wake-bus.js";
 import { recordWake, replayWakeLog, replayWakeLogFromDisk, WakeLog, wakeTarget } from "./wake-log.js";
@@ -1329,7 +1331,9 @@ export class HabitatKernel {
       // Book live + pid missing/dead (typical after process restart; leftover trailer
       // is not live): launch() recreates the process for the same workerId.
       // A live pid returns existing. Do not no-op because the directory exists.
-      if (this.workers.get(event.tenantId) && !this.workers.isLive(event.tenantId)) {
+      // Non-coder bookings are typed records, not a computer relaunch.
+      const booked = this.workers.get(event.tenantId);
+      if (booked?.type === CODER_TYPE.id && !this.workers.isLive(event.tenantId)) {
         await this.ensureComputer(event.tenantId);
         const stoppedLaunch = this.ifKilled(event.tenantId);
         if (stoppedLaunch) return stoppedLaunch;
@@ -1442,6 +1446,30 @@ export class HabitatKernel {
     return this.workers.launch({ tenantId, runId, skills, hold });
   }
 
+  /** Admit and book a v1 type. coder keeps the trailer launch. Others book without a computer spawn. */
+  private async bookWorker(
+    tenantId: string,
+    runId: string,
+    type: WorkerTypeId,
+    skills: SkillFile[],
+    hold: boolean,
+  ): Promise<WorkerRecord> {
+    if (type === CODER_TYPE.id) {
+      await this.ensureComputer(tenantId);
+    }
+    return this.workers.book({ tenantId, runId, type, skills, hold });
+  }
+
+  /** Talking request → admitted type. Absent defaults to coder. Invented types never reach here. */
+  private resolveBookedType(talking?: CognitiveIntent): WorkerTypeId {
+    const requested = talking?.workerType;
+    if (requested === undefined) return CODER_TYPE.id;
+    if (!isAdmittedWorkerType(requested)) {
+      throw new AvError("TALKING_PASS", "Talking pass must not invent a worker type");
+    }
+    return requested;
+  }
+
   private async actLaunchAndWork(
     event: WakeEvent,
     pack: LoadedPack,
@@ -1455,11 +1483,16 @@ export class HabitatKernel {
     if (stoppedAtStart) return stoppedAtStart;
     const run = this.requireRun(event.tenantId);
     const resolved = this.requireThinkBind(event.tenantId, pack);
-    const followUp = Boolean(run.workerId && this.workers.getById(event.tenantId, run.workerId));
-    const worker =
-      followUp && this.workers.isLive(event.tenantId)
-        ? this.workers.get(event.tenantId)!
-        : await this.launchOnComputer(event.tenantId, run.runId, skills, holdWorker);
+    const workerType = this.resolveBookedType(talking);
+    const booked = run.workerId ? this.workers.getById(event.tenantId, run.workerId) : undefined;
+    const followUp = Boolean(
+      booked &&
+        booked.type === workerType &&
+        (workerType !== CODER_TYPE.id || this.workers.isLive(event.tenantId)),
+    );
+    const worker = followUp
+      ? booked!
+      : await this.bookWorker(event.tenantId, run.runId, workerType, skills, holdWorker);
     const stoppedAfterLaunch = this.ifKilled(event.tenantId);
     if (stoppedAfterLaunch) return stoppedAfterLaunch;
     if (!followUp) {
@@ -1473,7 +1506,7 @@ export class HabitatKernel {
       ...run,
       status: "working",
       workerId: worker.workerId,
-      workerType: CODER_TYPE.id,
+      workerType,
       pendingIntent: undefined,
       updatedAt: nowIso(),
     });
@@ -1676,7 +1709,7 @@ export class HabitatKernel {
 
   /**
    * Continue / worker_done are wakes. Field SHALL NOT pick an agent,
-   * worker type, or assignee. Kernel owns who works (the thin coder).
+   * worker type, or assignee. Kernel admits the v1 set. Field cannot pick.
    */
   private assertFieldCannotPickAgent(event: WakeEvent): void {
     const picked =
@@ -1981,7 +2014,7 @@ export class HabitatKernel {
     if (!isLegalTalkingVerb(intent.act)) {
       fail(ILLEGAL_ADAPTER_VERB, "Talking pass issued an illegal adapter verb");
     }
-    if (intent.workerType !== undefined && intent.workerType !== "coder") {
+    if (intent.workerType !== undefined && !isAdmittedWorkerType(intent.workerType)) {
       fail("TALKING_PASS", "Talking pass must not invent a worker type");
     }
     this.assertAdapterNextWake(intent);
@@ -2106,7 +2139,7 @@ export class HabitatKernel {
   }
 
   /**
-   * Steer the booked workers[] id. Not a second booking. Not a new worker type.
+   * Steer the booked workers[] id. Not a second booking.
    * Field SHALL NOT pickAgent.
    */
   private async actSteer(
@@ -2132,15 +2165,16 @@ export class HabitatKernel {
     const pack = opts?.pack ?? event.pack ?? this.packs.get(event.tenantId);
     const orch = opts?.orch ?? this.requireOrchestrator(event.tenantId);
     const skills = opts?.skills ?? this.injectSkills(event.tenantId);
-    const worker = this.workers.isLive(event.tenantId)
-      ? booked
-      : await this.launchOnComputer(event.tenantId, run.runId, skills, opts?.holdWorker === true);
-    if (worker.workerId !== bookedId || worker.type !== "coder") {
-      throw new AvError("STEER_NO_WORKER", "Steer must address the same booked coder");
+    const worker =
+      booked.type === CODER_TYPE.id && !this.workers.isLive(event.tenantId)
+        ? await this.launchOnComputer(event.tenantId, run.runId, skills, opts?.holdWorker === true)
+        : booked;
+    if (worker.workerId !== bookedId) {
+      throw new AvError("STEER_NO_WORKER", "Steer must address the same booked worker");
     }
     this.writeWorkerBrief(event.tenantId, this.requireRun(event.tenantId), talking, worker);
     if (!opts?.skipAppend) {
-      this.appendWake(event, decision, run.runId, { steer: bookedId, workerType: "coder" });
+      this.appendWake(event, decision, run.runId, { steer: bookedId, workerType: worker.type });
     }
     if (!pack) {
       return {
@@ -2168,7 +2202,7 @@ export class HabitatKernel {
       ...this.requireRun(event.tenantId),
       status: "working",
       workerId: worker.workerId,
-      workerType: CODER_TYPE.id,
+      workerType: worker.type,
       pendingIntent: undefined,
       updatedAt: nowIso(),
     });

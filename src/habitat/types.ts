@@ -33,9 +33,20 @@ export type RunStatus =
   | "denied"
   | "killed";
 
-export type WorkerTypeId = "coder";
+/**
+ * Closed v1 worker types (HK-041). A fifth id is not admitted.
+ * coder is the existing computer/trailer type (executor + branch capabilities).
+ * executor / retriever / browser are typed bookings, not a second computer primitive.
+ */
+export const WORKER_TYPE_IDS = ["executor", "coder", "retriever", "browser"] as const;
 
-/** Habitat owns the coder type. Not the Deep Agents SDK. */
+export type WorkerTypeId = (typeof WORKER_TYPE_IDS)[number];
+
+export function isAdmittedWorkerType(id: unknown): id is WorkerTypeId {
+  return typeof id === "string" && (WORKER_TYPE_IDS as readonly string[]).includes(id);
+}
+
+/** Habitat owns the coder type. Not the Deep Agents SDK. Not a separate executor type. */
 export const CODER_TYPE = {
   id: "coder" as const,
   executor: true,
@@ -79,7 +90,7 @@ export interface WakeEvent {
   agentId?: string;
   /**
    * Rejected on field_continue / worker_done. Field SHALL NOT pick a worker type.
-   * Habitat owns the coder type.
+   * Talking may request a v1 type. Kernel admits. Habitat owns the coder computer type.
    */
   workerType?: string;
   /** Rejected on field_continue / worker_done. Field SHALL NOT pick an assignee. */
@@ -139,7 +150,7 @@ export interface RunRecord {
   status: RunStatus;
   /** Loaded orchestrator for this run. Kernel sets this. Field SHALL NOT. */
   orchestratorId: string;
-  /** Booked worker ids on this run. Empty or one today. Not a new worker type. */
+  /** Booked worker ids on this run. Empty or one today. */
   workers: string[];
   /**
    * Next wake due time (ISO). Empty means nothing to fire.
@@ -316,7 +327,8 @@ export type TalkingAct = "launch_worker" | "propose_effect" | "done" | "follow_u
 export interface CognitiveIntent {
   pass: AdapterPass;
   act: TalkingAct;
-  workerType?: WorkerTypeId;
+  /** Talking request. Kernel admits into WorkerTypeId. A type outside the set fails closed. */
+  workerType?: string;
   actionClass?: string;
   channel?: string;
   purpose?: string;
@@ -356,9 +368,10 @@ export interface WorkerRecord {
   tenantId: string;
   runId: string;
   type: WorkerTypeId;
-  isolation: "trailer";
-  trailerPath: string;
-  branch: string;
+  /** Present only on coder. Trailer isolation is the computer primitive, not a new runtime per type. */
+  isolation?: "trailer";
+  trailerPath?: string;
+  branch?: string;
   pid?: number;
   agent: AgentRecord;
   createdAt: string;
