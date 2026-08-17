@@ -582,7 +582,12 @@ describe("HK-082 Architect sits in the habitat", () => {
     expect(record.modelId).toBe("ci-double");
     expect(record.vendorBaseUrl).toBeUndefined();
     expect(record.boundBy).toBe("architect");
-    expect(() => resolveVendorBaseUrl(undefined, record.vendorBaseUrl)).toThrow(/ADAPTER_VENDOR_URL_MISSING/);
+    try {
+      resolveVendorBaseUrl(undefined, record.vendorBaseUrl);
+      throw new Error("expected ADAPTER_VENDOR_URL_MISSING");
+    } catch (err) {
+      expect(err).toMatchObject({ code: "ADAPTER_VENDOR_URL_MISSING", closed: true });
+    }
 
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(kernelSrc).toMatch(/ADAPTER_UNBOUND/);
