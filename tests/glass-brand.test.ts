@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { architectViewerHtml } from "../src/computer/desktop.js";
+import { architectHabitatPageHtml } from "../src/http/architect-habitat-page.js";
 import { GLASS, PRODUCT } from "../src/identity.js";
 import { ALPHAVECTOR_RE_PIN_SHA, REPO_ROOT } from "./helpers.js";
 
@@ -170,6 +171,45 @@ describe("glass brand boards", () => {
     expect(architectViewerHtml({ tenantId: "a&b", agentId: "<x>", display: 1, vncPort: 2 })).toContain(
       "&lt;x&gt;",
     );
+  });
+
+  it("habitat wizard glass uses board hues and is not a named desktop", () => {
+    const src = read(path.join(REPO_ROOT, "src/http/architect-habitat-page.ts"));
+    expect(src).toMatch(/export function architectHabitatPageHtml/);
+    expect(src).not.toMatch(LOCKUP);
+    expect(src).not.toMatch(DISPLAY_FACE);
+    expect(src).not.toMatch(GLOW);
+    expect(src).not.toMatch(/\bT0\b|\bT1\b|\bT2\b|\bT3\b/);
+    expect(src).not.toMatch(/Architect Desktop|Architect IDE|Architect Studio|Architect App/i);
+    expect(src).not.toMatch(/api\.openai\.com|api\.anthropic\.com|gpt-|claude-|OPENAI_API_KEY|AV_NO_VENDOR/);
+    assertOnlyBoardHues(src, "architect-habitat-page.ts");
+
+    const html = architectHabitatPageHtml();
+    assertOnlyBoardHues(html, "architectHabitatPageHtml");
+    expect(hexes(html).sort()).toEqual(["#0B0B0C", "#2A2A2D", "#F4F1EA"].sort());
+    expect(html).toContain("<title>AV Dev habitat</title>");
+    expect(html).toContain("<h1>AV Dev habitat</h1>");
+    expect(html).toContain("Architect sits in the habitat.");
+    expect(html).toContain("<footer>Alpha Vector LLC</footer>");
+    expect(html).toMatch(/id="model-id"/);
+    expect(html).toMatch(/id="vendor-base-url"/);
+    expect(html).toMatch(/id="api-key"/);
+    expect(html).toMatch(/id="connector-id"/);
+    expect(html).toMatch(/\/architect\/bind-adapter/);
+    expect(html).toMatch(/\/architect\/set-adapter-credentials/);
+    expect(html).toMatch(/\/architect\/bind-connector/);
+    expect(html).toMatch(/\/architect\/set-connector-credentials/);
+    expect(html).not.toContain("#C4A574");
+    expect(html).not.toMatch(/--hold/);
+    expect(html).not.toMatch(LOCKUP);
+    expect(html).not.toMatch(GLOW);
+    expect(html).not.toMatch(/<svg|monogram|lockup|bird/i);
+    expect(html).not.toMatch(/Architect Desktop|pick a model|edit prompt|inspect temporal|configure tool/i);
+    const families = [...html.matchAll(/font-family:\s*([^;]+);/g)].map((m) => m[1].trim());
+    expect(new Set(families).size).toBe(1);
+    expect(families[0]).toBe("ui-sans-serif, system-ui, sans-serif");
+    const weights = [...html.matchAll(/font-weight:\s*([^;]+);/g)].map((m) => m[1].trim());
+    expect(weights.every((w) => w === "400" || w === "500")).toBe(true);
   });
 
   it("field-ios color sources lock the same four tokens and hold amber only on Cards", () => {

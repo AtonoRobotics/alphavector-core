@@ -4,11 +4,16 @@ import type { AddressInfo } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentRecord } from "../agents/types.js";
 import type { PendingProgressRecord } from "../auth/types.js";
+import { architectBindAdapter } from "../auth/architect-adapter-bind.js";
+import { architectWriteAdapterCredentials } from "../auth/architect-adapter-credentials.js";
+import { architectBindConnector, architectWriteConnectorCredentials } from "../auth/architect-connectors.js";
 import { architectDeploy, fieldDeploy } from "../auth/architect-deploy.js";
+import { architectSit } from "../auth/architect-habitat.js";
 import { architectDeliverMessage } from "../auth/architect-message.js";
 import { AuthorizationRequiredError, AvError, DeployIncompleteError, SurfaceViolationError } from "../errors.js";
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
+import { architectHabitatPageHtml, wantsArchitectHabitatHtml } from "./architect-habitat-page.js";
 import { fieldLinuxPagePath } from "./field-boot.js";
 import type {
   FieldAskBody,
@@ -28,7 +33,7 @@ const CORS = {
 } as const;
 
 const CONFIG_PATH =
-  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message/i;
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|bind-adapter|set-adapter-credentials|bind-connector|set-connector-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -42,6 +47,7 @@ export interface FieldHttpServerOptions {
 /**
  * Field HTTP surface. `/field` is field-only. Architect/admin is not callable on `/field`.
  * GET `/architect/habitat` is the credential-gated habitat seat (off the field home).
+ * HTML sit is the habitat wizard; POST `/architect/bind-*` calls the same writers as CLI.
  * Field users cannot configure models, prompts, Temporal, tools, trust anchors, memory stores, or the machine.
  */
 export class FieldHttpServer {
@@ -95,6 +101,22 @@ export class FieldHttpServer {
 
       if (req.method === "GET" && path === "/architect/habitat") {
         this.routeArchitectHabitat(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/bind-adapter") {
+        await this.routeArchitectBindAdapter(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/set-adapter-credentials") {
+        await this.routeArchitectSetAdapterCredentials(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/bind-connector") {
+        await this.routeArchitectBindConnector(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/set-connector-credentials") {
+        await this.routeArchitectSetConnectorCredentials(req, res);
         return;
       }
       if (req.method === "POST" && path === "/architect/deploy") {
@@ -469,28 +491,8 @@ export class FieldHttpServer {
    * Listen on the declared host:port is the deploy; deploy.json is the ledger.
    */
   private async routeArchitectDeploy(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const header = req.headers.authorization;
-    if (!header?.startsWith("Bearer ")) {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
-      return;
-    }
-    const token = header.slice("Bearer ".length).trim();
-    if (!token) {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
-      return;
-    }
-    const principal = this.opts.core.fieldTokens.lookup(token, this.opts.tenantId);
-    if (principal === "field") {
-      this.json(res, 403, {
-        error: "SURFACE_VIOLATION",
-        message: "Field cannot deploy; Architect is the only deployer",
-      });
-      return;
-    }
-    if (principal !== "architect") {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
-      return;
-    }
+    const token = this.architectBearer(req, res, "Field cannot deploy; Architect is the only deployer");
+    if (!token) return;
     const body = (await readJson(req)) as { host?: string; port?: number };
     const computerBaseDir = this.opts.core.fieldTokens.baseDir();
     if (!computerBaseDir) {
@@ -512,33 +514,10 @@ export class FieldHttpServer {
    * Field token is 403 SURFACE_VIOLATION. Not sit().
    */
   private async routeArchitectMessage(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const header = req.headers.authorization;
-    if (!header?.startsWith("Bearer ")) {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
-      return;
-    }
-    const token = header.slice("Bearer ".length).trim();
-    if (!token) {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
-      return;
-    }
-    const principal = this.opts.core.fieldTokens.lookup(token, this.opts.tenantId);
-    if (principal === "field") {
-      this.json(res, 403, {
-        error: "SURFACE_VIOLATION",
-        message: "Field cannot issue architect_message",
-      });
-      return;
-    }
-    if (principal !== "architect") {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
-      return;
-    }
+    const token = this.architectBearer(req, res, "Field cannot issue architect_message");
+    if (!token) return;
     const body = (await readJson(req)) as { body?: string; addresseeId?: string };
-    const computerBaseDir = this.opts.core.fieldTokens.baseDir();
-    if (!computerBaseDir) {
-      throw new AvError("ARCHITECT_SEAT_UNBOUND", "Architect message requires a live habitat");
-    }
+    const computerBaseDir = this.architectComputerDir();
     const woke = await architectDeliverMessage({
       tenantId: this.opts.tenantId,
       body: String(body.body ?? ""),
@@ -560,31 +539,174 @@ export class FieldHttpServer {
   /**
    * Architect habitat seat. Off `/field` and off the field HTML page.
    * Field token is 403 SURFACE_VIOLATION. Not a named desktop or IDE.
+   * text/html is the habitat wizard; JSON remains the sit records.
    */
   private routeArchitectHabitat(req: IncomingMessage, res: ServerResponse): void {
+    const token = this.architectBearer(req, res, "A field token cannot sit in the habitat");
+    if (!token) return;
+    if (wantsArchitectHabitatHtml(req.headers.accept)) {
+      this.write(res, 200, architectHabitatPageHtml(), {
+        "content-type": "text/html; charset=utf-8",
+        ...CORS,
+      });
+      return;
+    }
+    const computerBaseDir = this.opts.core.fieldTokens.baseDir();
+    if (!computerBaseDir) {
+      this.json(res, 200, this.opts.core.architect.sit(this.opts.tenantId));
+      return;
+    }
+    this.json(
+      res,
+      200,
+      architectSit({
+        tenantId: this.opts.tenantId,
+        computerBaseDir,
+        surface: this.opts.core.architect,
+        architectToken: token,
+      }),
+    );
+  }
+
+  /**
+   * Architect adapter bind. Calls architectBindAdapter. Same file as CLI.
+   * Field token is 403 SURFACE_VIOLATION. Not a /field route.
+   */
+  private async routeArchitectBindAdapter(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { modelId?: string; vendorBaseUrl?: string };
+    const bound = architectBindAdapter({
+      tenantId: this.opts.tenantId,
+      modelId: String(body.modelId ?? ""),
+      vendorBaseUrl: typeof body.vendorBaseUrl === "string" ? body.vendorBaseUrl : undefined,
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+    });
+    this.json(res, 201, bound);
+  }
+
+  /**
+   * Architect adapter credentials. Calls architectWriteAdapterCredentials.
+   * Same file as CLI. Field token is 403 SURFACE_VIOLATION.
+   */
+  private async routeArchitectSetAdapterCredentials(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { apiKey?: string };
+    const written = architectWriteAdapterCredentials({
+      tenantId: this.opts.tenantId,
+      apiKey: String(body.apiKey ?? ""),
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+    });
+    this.json(res, 201, { ok: true, tenantId: written.tenantId, writtenBy: written.writtenBy });
+  }
+
+  /**
+   * Architect connector bind. Calls architectBindConnector. Same file as CLI.
+   * Field token is 403 SURFACE_VIOLATION. Not a /field route.
+   */
+  private async routeArchitectBindConnector(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as {
+      connectorId?: string;
+      baseUrl?: string;
+      requiresCredentials?: boolean;
+    };
+    const bound = architectBindConnector({
+      tenantId: this.opts.tenantId,
+      connectorId: String(body.connectorId ?? ""),
+      requiresCredentials: body.requiresCredentials === true,
+      baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : undefined,
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+    });
+    this.json(res, 201, {
+      ok: true,
+      tenantId: bound.tenantId,
+      connectorId: bound.connectorId,
+      boundBy: bound.boundBy,
+      ...(bound.baseUrl ? { baseUrl: bound.baseUrl } : {}),
+    });
+  }
+
+  /**
+   * Architect connector credentials. Calls architectWriteConnectorCredentials.
+   * Same file as CLI. Field token is 403 SURFACE_VIOLATION.
+   */
+  private async routeArchitectSetConnectorCredentials(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { connectorId?: string; secret?: string };
+    const written = architectWriteConnectorCredentials({
+      tenantId: this.opts.tenantId,
+      connectorId: String(body.connectorId ?? ""),
+      secret: String(body.secret ?? ""),
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+    });
+    this.json(res, 201, {
+      ok: true,
+      tenantId: written.tenantId,
+      connectorId: written.connectorId,
+      writtenBy: written.writtenBy,
+    });
+  }
+
+  /** Architect HTTP gate. Field is 403. Missing or unknown is 401. */
+  private architectBearer(req: IncomingMessage, res: ServerResponse, fieldMessage: string): string | undefined {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) {
       this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
-      return;
+      return undefined;
     }
     const token = header.slice("Bearer ".length).trim();
     if (!token) {
       this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
-      return;
+      return undefined;
     }
     const principal = this.opts.core.fieldTokens.lookup(token, this.opts.tenantId);
-    if (principal === "architect") {
-      this.json(res, 200, this.opts.core.architect.sit(this.opts.tenantId));
-      return;
-    }
     if (principal === "field") {
-      this.json(res, 403, {
-        error: "SURFACE_VIOLATION",
-        message: "A field token cannot sit in the habitat",
-      });
-      return;
+      this.json(res, 403, { error: "SURFACE_VIOLATION", message: fieldMessage });
+      return undefined;
     }
-    this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
+    if (principal !== "architect") {
+      this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
+      return undefined;
+    }
+    return token;
+  }
+
+  private architectComputerDir(): string {
+    const computerBaseDir = this.opts.core.fieldTokens.baseDir();
+    if (!computerBaseDir) {
+      throw new AvError("ARCHITECT_SEAT_UNBOUND", "Architect seat requires a live habitat");
+    }
+    return computerBaseDir;
   }
 
   private principalOf(req: IncomingMessage): PrincipalKind | undefined {
