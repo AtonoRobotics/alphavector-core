@@ -1,8 +1,10 @@
 import { GLASS, PRODUCT } from "../identity.js";
 
 /**
- * Architect-gated habitat page (HK-082). Off `/field`. Not a named desktop.
- * Collects adapter and connector bind fields; posts to `/architect/*` writers.
+ * Habitat wizard page (HK-082). Off `/field`. Not a named desktop.
+ * Unauthenticated GET may serve this inert shell when Accept is text/html.
+ * The page collects an already-issued Architect credential in the browser;
+ * subsequent `/architect/*` calls send it as Authorization. The GET does not.
  */
 export function wantsArchitectHabitatHtml(accept: string | undefined): boolean {
   const header = accept ?? "";

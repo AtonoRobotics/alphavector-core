@@ -561,6 +561,87 @@ describe("HK-082 Architect sits in the habitat", () => {
     expect(inProcess.modelId).toBe(httpBind.modelId);
   });
 
+  it("unauthenticated Accept: text/html serves the inert wizard shell; JSON and writes stay gated", async () => {
+    const live = await liveHttp("shell");
+    const browserAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+    const browser = await fetch(`${live.url}/architect/habitat`, {
+      headers: { accept: browserAccept },
+    });
+    expect(browser.status).toBe(200);
+    expect(browser.headers.get("content-type")).toMatch(/text\/html/);
+    expect(browser.headers.get("set-cookie")).toBeNull();
+    const shell = await browser.text();
+    expect(shell).toMatch(/<!DOCTYPE html>/i);
+    expect(shell).toMatch(/Architect sits in the habitat/);
+    expect(shell).toMatch(/id="token"/);
+    expect(shell).toMatch(/Issued Architect credential/);
+    expect(shell).toMatch(/authorization:\s*"Bearer " \+ token\(\)/);
+    expect(shell).not.toMatch(/document\.cookie|localStorage|sessionStorage/i);
+    expect(shell).not.toMatch(/[?&]token=/);
+    expect(shell).not.toContain(live.architectToken);
+    expect(shell).not.toContain(live.fieldToken);
+    expect(shell).not.toMatch(/value="[^"]+"/);
+
+    const jsonMissing = await fetch(`${live.url}/architect/habitat`, {
+      headers: { accept: "application/json" },
+    });
+    expect(jsonMissing.status).toBe(401);
+    expect(jsonMissing.headers.get("content-type")).toMatch(/application\/json/);
+    expect(((await jsonMissing.json()) as { error: string }).error).toBe("UNAUTHORIZED");
+
+    const queryToken = await fetch(`${live.url}/architect/habitat?token=${encodeURIComponent(live.architectToken)}`, {
+      headers: { accept: "application/json" },
+    });
+    expect(queryToken.status).toBe(401);
+    expect(((await queryToken.json()) as { error: string }).error).toBe("UNAUTHORIZED");
+
+    const cookieToken = await fetch(`${live.url}/architect/habitat`, {
+      headers: { accept: "application/json", cookie: `token=${live.architectToken}` },
+    });
+    expect(cookieToken.status).toBe(401);
+    expect(((await cookieToken.json()) as { error: string }).error).toBe("UNAUTHORIZED");
+
+    const queryHtml = await fetch(`${live.url}/architect/habitat?token=${encodeURIComponent(live.architectToken)}`, {
+      headers: { accept: "text/html" },
+    });
+    expect(queryHtml.status).toBe(200);
+    const queryHtmlBody = await queryHtml.text();
+    expect(queryHtmlBody).toMatch(/text\/html|Architect sits in the habitat/);
+    expect(queryHtmlBody).not.toContain(live.architectToken);
+    expect(queryHtml.headers.get("set-cookie")).toBeNull();
+
+    const fieldJson = await fetch(`${live.url}/architect/habitat`, {
+      headers: { authorization: `Bearer ${live.fieldToken}`, accept: "application/json" },
+    });
+    expect(fieldJson.status).toBe(403);
+    expect(((await fieldJson.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+
+    const fieldWrite = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${live.fieldToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "ci-double" }),
+    });
+    expect(fieldWrite.status).toBe(403);
+    expect(((await fieldWrite.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+
+    const writeMissing = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "ci-double" }),
+    });
+    expect(writeMissing.status).toBe(401);
+    expect(((await writeMissing.json()) as { error: string }).error).toBe("UNAUTHORIZED");
+
+    const writeOk = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "ci-double" }),
+    });
+    expect(writeOk.status).toBe(201);
+    expect(((await writeOk.json()) as { boundBy: string }).boundBy).toBe("architect");
+  });
+
   it("HTTP bind without a model or vendor URL stays fail-closed; no hardcoded vendor", async () => {
     const live = await liveHttp("unbound");
     const missing = await fetch(`${live.url}/architect/bind-adapter`, {
