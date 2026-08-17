@@ -464,6 +464,7 @@ export class FieldHttpServer {
     this.restored = true;
     const { core, tenantId } = this.opts;
     core.cards.hydrateTenant(tenantId);
+    core.grants.hydrateTenant(tenantId);
     for (const { cardId, record } of core.cards.listPending(tenantId)) {
       this.pending.set(cardId, record);
       core.store.restoreJourney(record.journey);
@@ -749,6 +750,7 @@ export class FieldHttpServer {
               err.code === "PREDICATE_CLOSED"
             ? 403
             :             err.code === "CARD_STORE_CORRUPT" ||
+                err.code === "GRANT_STORE_CORRUPT" ||
                 err.code === "TOKEN_STORE_CORRUPT" ||
                 err.code === "FACT_STORE_CORRUPT" ||
                 err.code === "RECORD_STORE_CORRUPT" ||
