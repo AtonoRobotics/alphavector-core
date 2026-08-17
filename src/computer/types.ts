@@ -19,6 +19,12 @@ export interface ComputerPaths {
   runsFile: string;
   /** Habitat worker book. Control state, beside runs.json, never a business fact. */
   workersFile: string;
+  /**
+   * Kernel-written worker briefs (HK-030). Control artifacts beside workers.json,
+   * never inside the bind-mounted /home, never a field file.
+   * A string on CognitiveIntent is not a brief.
+   */
+  briefsDir: string;
   /** Replayable wake log. Beside runs.json, never inside disk/. */
   wakeLogFile: string;
   /** CS-012 disk memory (profile, dated logs, scoped recall). Not the in-process MemoryTiers array. */

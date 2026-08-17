@@ -99,6 +99,21 @@ export interface WakeEvent {
    * validated adapter decision. Stem fires it on the habitat clock.
    */
   nextWake?: string;
+  /**
+   * Rejected. Field SHALL NOT write a worker brief. Kernel writes the
+   * artifact from a validated talking decision.
+   */
+  brief?: string;
+  /**
+   * Rejected. Field SHALL NOT steer a worker. Talking may steer the
+   * booked workers[] id. Not a field picker.
+   */
+  steer?: string;
+  /**
+   * Rejected. Field SHALL NOT report. Talking may report without an
+   * external effect. Not a field write.
+   */
+  report?: string;
 }
 
 export interface PendingEffect {
@@ -250,12 +265,37 @@ export interface AdapterCredentials {
   apiKey: string;
 }
 
+/**
+ * Kernel-written worker brief (HK-030). The booked worker reads this artifact.
+ * A string on CognitiveIntent is not a brief.
+ */
+export interface WorkerBrief {
+  workerId: string;
+  runId: string;
+  body: string;
+  path: string;
+  writtenAt: string;
+  writtenBy: "kernel";
+}
+
+/** Talking report. Not an external effect. Not a card. */
+export interface TalkingReport {
+  body: string;
+  executedEffect: false;
+  cardRequired: false;
+}
+
 export interface AdapterInput {
   pass: AdapterPass;
   event: WakeEvent;
   run: RunRecord;
   memory: LabeledMemory;
   skills: SkillFile[];
+  /**
+   * Kernel-written brief loaded from disk for the worker pass.
+   * Absent when no brief artifact exists. Not the talking intent string.
+   */
+  brief?: WorkerBrief;
   /** Present only after Architect bind. Never a field or createDeepAgent option. */
   bind?: AdapterBind;
   /**
@@ -265,9 +305,11 @@ export interface AdapterInput {
   credentials?: AdapterCredentials;
 }
 
+export type TalkingAct = "launch_worker" | "propose_effect" | "done" | "follow_up" | "write_brief" | "steer" | "report";
+
 export interface CognitiveIntent {
   pass: AdapterPass;
-  act: "launch_worker" | "propose_effect" | "done" | "follow_up";
+  act: TalkingAct;
   workerType?: WorkerTypeId;
   actionClass?: string;
   channel?: string;
@@ -283,6 +325,11 @@ export interface CognitiveIntent {
    * Invalid or unvalidated is fail-closed — do not persist.
    */
   nextWake?: string;
+  /**
+   * Brief text the kernel must persist as an artifact. Not itself a brief.
+   * Unvalidated values fail closed and are not written.
+   */
+  brief?: string;
 }
 
 export interface CognitiveAdapter {
@@ -331,5 +378,7 @@ export interface WakeResult {
   talkingDidHeavyWork: false;
   effect?: { actionId: string; executed: boolean; policyDecision: string };
   cardId?: string;
+  /** Present when talking reported. Not an executed effect. Not a card. */
+  report?: TalkingReport;
   memory: LabeledMemory;
 }

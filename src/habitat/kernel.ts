@@ -55,6 +55,13 @@ import {
 } from "./connector-credentials.js";
 import { connectorSendFields, invokeConnectorWorld } from "./connector-world.js";
 import { RunStore } from "./run-store.js";
+import {
+  loadWorkerBrief,
+  peekPendingBrief,
+  persistPendingBrief,
+  persistWorkerBrief,
+  takePendingBrief,
+} from "./brief-store.js";
 import { writeProposalFile } from "./proposals.js";
 import { loadSkillFiles } from "./skills.js";
 import { stem } from "./stem.js";
@@ -72,8 +79,10 @@ import {
   KERNEL_RUN_BUDGET,
   type RunRecord,
   type SkillFile,
+  type TalkingReport,
   type WakeEvent,
   type WakeResult,
+  type WorkerBrief,
   type WorkerRecord,
 } from "./types.js";
 import { WakeBus } from "./wake-bus.js";
@@ -251,6 +260,21 @@ export class HabitatKernel {
 
   activeWorker(tenantId: string): WorkerRecord | undefined {
     return this.workers.get(tenantId);
+  }
+
+  /**
+   * Kernel-written brief the booked worker reads. Missing is undefined.
+   * A string on CognitiveIntent is not this artifact.
+   */
+  workerBrief(tenantId: string): WorkerBrief | undefined {
+    const worker = this.workers.get(tenantId);
+    if (!worker) return this.readPendingBrief(tenantId);
+    return loadWorkerBrief({
+      computerBaseDir: this.opts.computerBaseDir,
+      tenantId,
+      workerId: worker.workerId,
+      trailerPath: worker.trailerPath,
+    });
   }
 
   /** Booked workers on this tenant. 0 or 1. Leftover trailer without a book is not a worker. */
@@ -640,10 +664,11 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const next = this.writeAdapterNextWake(run, talking);
-    this.appendWake(event, decision, next.runId, { routineId: stored.routineId, attached: true });
+    const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
+    if (applied.handled) return applied.handled;
+    this.appendWake(event, decision, applied.run.runId, { routineId: stored.routineId, attached: true });
     return {
-      run: next,
+      run: applied.run,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -749,15 +774,16 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const next = this.writeAdapterNextWake(run, talking);
-    this.appendWake(event, decision, next.runId, {
+    const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
+    if (applied.handled) return applied.handled;
+    this.appendWake(event, decision, applied.run.runId, {
       mailId: stored.mailId,
       addresseeId,
       attached: true,
       confersAuthority: false,
     });
     return {
-      run: next,
+      run: applied.run,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -828,10 +854,11 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const next = this.writeAdapterNextWake(run, talking);
-    this.appendWake(event, decision, next.runId, { deadlineId: stored.deadlineId, attached: true });
+    const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
+    if (applied.handled) return applied.handled;
+    this.appendWake(event, decision, applied.run.runId, { deadlineId: stored.deadlineId, attached: true });
     return {
-      run: next,
+      run: applied.run,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -904,14 +931,15 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const next = this.writeAdapterNextWake(run, talking);
-    this.appendWake(event, decision, next.runId, {
+    const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
+    if (applied.handled) return applied.handled;
+    this.appendWake(event, decision, applied.run.runId, {
       connectorId: stored.connectorId,
       attached: true,
       confersAuthority: false,
     });
     return {
-      run: next,
+      run: applied.run,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1001,18 +1029,24 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const next = this.writeAdapterNextWake(run, talking);
-    this.appendWake(event, decision, next.runId, { wakeOnly: true });
+    const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory, {
+      pack,
+      orch: creature,
+      skills,
+      holdWorker,
+    });
+    if (applied.handled) return applied.handled;
+    this.appendWake(event, decision, applied.run.runId, { wakeOnly: true });
     if (talking.act === "launch_worker" && pack && !this.workers.isLive(event.tenantId)) {
       this.putRun({
-        ...next,
+        ...applied.run,
         pendingIntent: "launch_worker",
         updatedAt: nowIso(),
       });
-      return this.actLaunchAndWork(event, pack, creature, skills, holdWorker, "card");
+      return this.actLaunchAndWork(event, pack, creature, skills, holdWorker, "card", talking);
     }
     return {
-      run: next,
+      run: applied.run,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1109,14 +1143,15 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const next = this.writeAdapterNextWake(run, talking);
-    this.appendWake(event, decision, next.runId, {
+    const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
+    if (applied.handled) return applied.handled;
+    this.appendWake(event, decision, applied.run.runId, {
       fromAgentId: "architect",
       loadedAgentId: loaded.agentId,
       ...(addresseeId ? { addresseeId } : {}),
     });
     return {
-      run: next,
+      run: applied.run,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1179,9 +1214,10 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const next = this.writeAdapterNextWake(open, talking);
+    const applied = await this.applyTalkingVerbs(event, decision, open, talking, memory, { skipAppend: true });
+    if (applied.handled) return applied.handled;
     return {
-      run: next,
+      run: applied.run,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1214,10 +1250,11 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const next = this.writeAdapterNextWake(run, talking);
-    this.appendWake(event, decision, next.runId);
+    const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory);
+    if (applied.handled) return applied.handled;
+    this.appendWake(event, decision, applied.run.runId);
     return {
-      run: next,
+      run: applied.run,
       wokeOrchestrator: decision.wakeOrchestrator,
       wokeOps: decision.wakeOps,
       launchedWorker: false,
@@ -1307,15 +1344,29 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const withWake = this.writeAdapterNextWake(run, talking);
+    const applied = await this.applyTalkingVerbs(event, decision, run, talking, memory, {
+      pack,
+      orch,
+      skills,
+      holdWorker,
+      skipAppend: true,
+    });
     const stopped = this.ifKilled(event.tenantId);
     if (stopped) return stopped;
+    const withWake = applied.handled?.run ?? applied.run ?? run;
     this.putRun({
       ...withWake,
       status: "talking",
       pendingIntent: talking.act === "launch_worker" ? "launch_worker" : undefined,
       updatedAt: nowIso(),
     });
+    if (applied.handled) {
+      return {
+        ...applied.handled,
+        run: this.runs.get(event.tenantId),
+        talkingDidHeavyWork: false,
+      };
+    }
     const result: WakeResult = {
       run: this.runs.get(event.tenantId),
       wokeOrchestrator: decision.wakeOrchestrator,
@@ -1325,7 +1376,7 @@ export class HabitatKernel {
       memory,
     };
     if (until === "talking") return result;
-    return this.actLaunchAndWork(event, pack, orch, skills, holdWorker, until);
+    return this.actLaunchAndWork(event, pack, orch, skills, holdWorker, until, talking);
   }
 
   private async launchOnComputer(
@@ -1345,6 +1396,7 @@ export class HabitatKernel {
     skills: SkillFile[],
     holdWorker: boolean,
     until: "talking" | "card" | "done",
+    talking?: CognitiveIntent,
   ): Promise<WakeResult> {
     const stoppedAtStart = this.ifKilled(event.tenantId);
     if (stoppedAtStart) return stoppedAtStart;
@@ -1372,14 +1424,17 @@ export class HabitatKernel {
       pendingIntent: undefined,
       updatedAt: nowIso(),
     });
+    this.bindBriefToWorker(event.tenantId, this.requireRun(event.tenantId), worker, talking);
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
+    const brief = this.readBookedBrief(event.tenantId, worker);
     const intent = await this.adapter.think({
       pass: "worker",
       event,
       run: this.requireRun(event.tenantId),
       memory,
       skills,
+      ...(brief ? { brief } : {}),
       bind: resolved.bind,
       credentials: resolved.credentials,
     });
@@ -1521,7 +1576,15 @@ export class HabitatKernel {
       credentials: resolved.credentials,
     });
     this.validateTalking(talking);
-    const decided = this.writeAdapterNextWake(open, talking);
+    const applied = await this.applyTalkingVerbs(event, decision, open, talking, memory, {
+      pack,
+      orch,
+      skills,
+      holdWorker,
+      skipAppend: true,
+    });
+    if (applied.handled) return applied.handled;
+    const decided = applied.run;
 
     if (talking.act === "follow_up" || talking.act === "launch_worker") {
       if (!pack) throw new AvError("NO_ACTIVE_PACK", "Follow-up launch requires a loaded pack");
@@ -1530,7 +1593,7 @@ export class HabitatKernel {
         pendingIntent: "launch_worker",
         updatedAt: nowIso(),
       });
-      return this.actLaunchAndWork(event, pack, orch, skills, holdWorker, "card");
+      return this.actLaunchAndWork(event, pack, orch, skills, holdWorker, "card", talking);
     }
 
     this.opts.orchestrator.completeGoal(event.tenantId);
@@ -1572,6 +1635,9 @@ export class HabitatKernel {
   private assertFieldCannotSetRunKernel(event: WakeEvent): void {
     if (nonempty(event.orchestratorId) || event.budget !== undefined || event.nextWake !== undefined) {
       throw new SurfaceViolationError("Field SHALL NOT set orchestratorId, budget, or nextWake");
+    }
+    if (event.brief !== undefined || event.steer !== undefined || event.report !== undefined) {
+      throw new SurfaceViolationError("Field SHALL NOT write a brief, steer a worker, or report");
     }
   }
 
@@ -1818,7 +1884,305 @@ export class HabitatKernel {
     if (intent.act === "propose_effect") {
       throw new AvError("TALKING_PASS", "Talking pass must not do heavy work");
     }
+    if (
+      intent.act !== "launch_worker" &&
+      intent.act !== "done" &&
+      intent.act !== "follow_up" &&
+      intent.act !== "write_brief" &&
+      intent.act !== "steer" &&
+      intent.act !== "report"
+    ) {
+      throw new AvError("TALKING_PASS", "Talking pass issued an unknown verb");
+    }
+    if (intent.workerType !== undefined && intent.workerType !== "coder") {
+      throw new AvError("TALKING_PASS", "Talking pass must not invent a worker type");
+    }
     this.assertAdapterNextWake(intent);
+    this.assertAdapterBrief(intent);
+  }
+
+  /**
+   * Talking kernel verbs that do not launch: write_brief, steer, report.
+   * launch_worker / follow_up / done stay with the caller.
+   */
+  private async applyTalkingVerbs(
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+    run: RunRecord,
+    talking: CognitiveIntent,
+    memory: LabeledMemory,
+    opts?: {
+      pack?: LoadedPack;
+      orch?: AgentRecord;
+      skills?: SkillFile[];
+      holdWorker?: boolean;
+      skipAppend?: boolean;
+    },
+  ): Promise<{ run: RunRecord; handled?: WakeResult }> {
+    const next = this.writeAdapterNextWake(run, talking);
+    if (talking.act === "report") {
+      return { run: next, handled: this.actReport(event, decision, next, talking, memory, opts?.skipAppend) };
+    }
+    if (talking.act === "write_brief") {
+      this.writeWorkerBrief(event.tenantId, next, talking);
+      if (!opts?.skipAppend) {
+        this.appendWake(event, decision, next.runId, { briefWritten: true });
+      }
+      return {
+        run: this.runs.get(event.tenantId) ?? next,
+        handled: {
+          run: this.runs.get(event.tenantId) ?? next,
+          wokeOrchestrator: decision.wakeOrchestrator,
+          wokeOps: decision.wakeOps,
+          launchedWorker: false,
+          talkingDidHeavyWork: false,
+          memory,
+        },
+      };
+    }
+    if (talking.act === "steer") {
+      return {
+        run: next,
+        handled: await this.actSteer(event, talking, memory, decision, opts),
+      };
+    }
+    if (talking.brief !== undefined) {
+      this.writeWorkerBrief(event.tenantId, next, talking);
+    }
+    return { run: this.runs.get(event.tenantId) ?? next };
+  }
+
+  private actReport(
+    event: WakeEvent,
+    decision: ReturnType<typeof stem>,
+    run: RunRecord,
+    talking: CognitiveIntent,
+    memory: LabeledMemory,
+    skipAppend?: boolean,
+  ): WakeResult {
+    const report: TalkingReport = {
+      body: talking.body ?? "",
+      executedEffect: false,
+      cardRequired: false,
+    };
+    if (!skipAppend) {
+      this.appendWake(event, decision, run.runId, { report: report.body, executedEffect: false });
+    }
+    return {
+      run,
+      wokeOrchestrator: decision.wakeOrchestrator,
+      wokeOps: decision.wakeOps,
+      launchedWorker: false,
+      talkingDidHeavyWork: false,
+      report,
+      memory,
+    };
+  }
+
+  /**
+   * Steer the booked workers[] id. Not a second booking. Not a new worker type.
+   * Field SHALL NOT pickAgent.
+   */
+  private async actSteer(
+    event: WakeEvent,
+    talking: CognitiveIntent,
+    memory: LabeledMemory,
+    decision: ReturnType<typeof stem>,
+    opts?: {
+      pack?: LoadedPack;
+      orch?: AgentRecord;
+      skills?: SkillFile[];
+      holdWorker?: boolean;
+      skipAppend?: boolean;
+    },
+  ): Promise<WakeResult> {
+    this.assertFieldCannotPickAgent(event);
+    const run = this.runs.get(event.tenantId) ?? this.requireRun(event.tenantId);
+    const bookedId = run.workers[0] ?? run.workerId;
+    const booked = bookedId ? this.workers.getById(event.tenantId, bookedId) : undefined;
+    if (!bookedId || !booked) {
+      throw new AvError("STEER_NO_WORKER", "Steer addresses the booked worker; none is booked");
+    }
+    const pack = opts?.pack ?? event.pack ?? this.packs.get(event.tenantId);
+    const orch = opts?.orch ?? this.requireOrchestrator(event.tenantId);
+    const skills = opts?.skills ?? this.injectSkills(event.tenantId);
+    const worker = this.workers.isLive(event.tenantId)
+      ? booked
+      : await this.launchOnComputer(event.tenantId, run.runId, skills, opts?.holdWorker === true);
+    if (worker.workerId !== bookedId || worker.type !== "coder") {
+      throw new AvError("STEER_NO_WORKER", "Steer must address the same booked coder");
+    }
+    this.writeWorkerBrief(event.tenantId, this.requireRun(event.tenantId), talking, worker);
+    if (!opts?.skipAppend) {
+      this.appendWake(event, decision, run.runId, { steer: bookedId, workerType: "coder" });
+    }
+    if (!pack) {
+      return {
+        run: this.requireRun(event.tenantId),
+        wokeOrchestrator: decision.wakeOrchestrator,
+        wokeOps: decision.wakeOps,
+        launchedWorker: false,
+        talkingDidHeavyWork: false,
+        memory,
+      };
+    }
+    return this.runWorkerPass(event, pack, orch, skills, worker, false);
+  }
+
+  private async runWorkerPass(
+    event: WakeEvent,
+    pack: LoadedPack,
+    orch: AgentRecord,
+    skills: SkillFile[],
+    worker: WorkerRecord,
+    launchedWorker: boolean,
+  ): Promise<WakeResult> {
+    const resolved = this.requireThinkBind(event.tenantId, pack);
+    this.putRun({
+      ...this.requireRun(event.tenantId),
+      status: "working",
+      workerId: worker.workerId,
+      workerType: CODER_TYPE.id,
+      pendingIntent: undefined,
+      updatedAt: nowIso(),
+    });
+    const memory = this.injectMemory(event.tenantId, orch.agentId);
+    this.assertLabeled(memory);
+    const brief = this.readBookedBrief(event.tenantId, worker);
+    const intent = await this.adapter.think({
+      pass: "worker",
+      event,
+      run: this.requireRun(event.tenantId),
+      memory,
+      skills,
+      ...(brief ? { brief } : {}),
+      bind: resolved.bind,
+      credentials: resolved.credentials,
+    });
+    if (intent.act !== "propose_effect") {
+      throw new AvError("WORKER_INTENT", "Worker pass must propose the one external effect");
+    }
+    this.assertAdapterNextWake(intent);
+    this.writeAdapterNextWake(this.requireRun(event.tenantId), intent);
+    const stoppedAfterThink = this.ifKilled(event.tenantId);
+    if (stoppedAfterThink) return stoppedAfterThink;
+    const proposed = await this.admit(pack, worker.agent, intent);
+    return {
+      run: this.requireRun(event.tenantId),
+      wokeOrchestrator: true,
+      wokeOps: false,
+      launchedWorker,
+      talkingDidHeavyWork: false,
+      effect: proposed.effect,
+      cardId: proposed.cardId,
+      memory,
+    };
+  }
+
+  /**
+   * Persist a kernel-written brief next to the booked worker.
+   * Pending if no worker is booked yet. A string on the intent is not the artifact.
+   */
+  private writeWorkerBrief(
+    tenantId: string,
+    run: RunRecord,
+    talking: CognitiveIntent,
+    worker?: WorkerRecord,
+  ): WorkerBrief | undefined {
+    const raw = (talking as { brief?: unknown }).brief;
+    if (talking.act === "write_brief" || talking.act === "steer") {
+      if (typeof raw !== "string" || !raw.trim()) {
+        throw new AvError("BRIEF_INVALID", "Talking brief must be a non-empty string; refusing to persist");
+      }
+    } else if (raw === undefined) {
+      return undefined;
+    } else if (typeof raw !== "string" || !raw.trim()) {
+      throw new AvError("BRIEF_INVALID", "Talking brief must be a non-empty string; refusing to persist");
+    }
+    const body = (raw as string).trim();
+    if (!this.opts.computerBaseDir) {
+      throw new AvError("BRIEF_STORE_MISSING", "Brief store is missing; refusing to invent a brief");
+    }
+    const booked = worker ?? this.workers.get(tenantId);
+    const writtenAt = nowIso();
+    if (!booked) {
+      persistPendingBrief({
+        computerBaseDir: this.opts.computerBaseDir,
+        tenantId,
+        runId: run.runId,
+        body,
+        writtenAt,
+      });
+      return undefined;
+    }
+    return persistWorkerBrief({
+      computerBaseDir: this.opts.computerBaseDir,
+      tenantId,
+      workerId: booked.workerId,
+      runId: run.runId,
+      body,
+      writtenAt,
+      trailerPath: booked.trailerPath,
+    });
+  }
+
+  private bindBriefToWorker(
+    tenantId: string,
+    run: RunRecord,
+    worker: WorkerRecord,
+    talking?: CognitiveIntent,
+  ): void {
+    if (talking?.brief !== undefined) {
+      this.writeWorkerBrief(tenantId, run, talking, worker);
+      return;
+    }
+    const pending = takePendingBrief(this.opts.computerBaseDir, tenantId);
+    if (!pending || !this.opts.computerBaseDir) return;
+    persistWorkerBrief({
+      computerBaseDir: this.opts.computerBaseDir,
+      tenantId,
+      workerId: worker.workerId,
+      runId: run.runId,
+      body: pending.body,
+      writtenAt: pending.writtenAt,
+      trailerPath: worker.trailerPath,
+    });
+  }
+
+  private readBookedBrief(tenantId: string, worker: WorkerRecord): WorkerBrief | undefined {
+    return loadWorkerBrief({
+      computerBaseDir: this.opts.computerBaseDir,
+      tenantId,
+      workerId: worker.workerId,
+      trailerPath: worker.trailerPath,
+    });
+  }
+
+  private readPendingBrief(tenantId: string): WorkerBrief | undefined {
+    const pending = peekPendingBrief(this.opts.computerBaseDir, tenantId);
+    if (!pending || !this.opts.computerBaseDir) return undefined;
+    return {
+      ...pending,
+      workerId: pending.workerId,
+      path: `${this.opts.computerBaseDir}/tenants/${tenantId}/briefs/pending.json`,
+    };
+  }
+
+  /**
+   * brief on an adapter decision is optional except write_brief / steer.
+   * Unvalidated values fail closed and are not persisted.
+   */
+  private assertAdapterBrief(intent: CognitiveIntent): void {
+    const value = (intent as { brief?: unknown }).brief;
+    if (value === undefined) {
+      if (intent.act === "write_brief" || intent.act === "steer") {
+        throw new AvError("BRIEF_INVALID", "Talking brief must be a non-empty string; refusing to persist");
+      }
+      return;
+    }
+    if (typeof value !== "string" || !value.trim()) {
+      throw new AvError("BRIEF_INVALID", "Adapter brief must be a non-empty string; refusing to persist");
+    }
   }
 
   /**
