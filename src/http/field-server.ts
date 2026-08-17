@@ -46,8 +46,9 @@ export interface FieldHttpServerOptions {
 
 /**
  * Field HTTP surface. `/field` is field-only. Architect/admin is not callable on `/field`.
- * GET `/architect/habitat` is the credential-gated habitat seat (off the field home).
- * HTML sit is the habitat wizard; POST `/architect/bind-*` calls the same writers as CLI.
+ * GET `/architect/habitat` JSON is the credential-gated habitat seat (off the field home).
+ * Unauthenticated Accept: text/html is the inert wizard shell only — no credential read.
+ * POST `/architect/bind-*` calls the same writers as CLI.
  * Field users cannot configure models, prompts, Temporal, tools, trust anchors, memory stores, or the machine.
  */
 export class FieldHttpServer {
@@ -539,17 +540,19 @@ export class FieldHttpServer {
 
   /**
    * Architect habitat seat. Off `/field` and off the field HTML page.
+   * Unauthenticated Accept: text/html is the inert wizard shell (no credential read).
+   * JSON and every other Architect route stay Architect-token gated.
    * Field token is 403 SURFACE_VIOLATION. Not a named desktop or IDE.
-   * text/html is the habitat wizard; JSON remains the sit records.
    */
   private routeArchitectHabitat(req: IncomingMessage, res: ServerResponse): void {
+    if (wantsArchitectHabitatHtml(req.headers.accept) && !req.headers.authorization) {
+      this.writeArchitectHabitatHtmlShell(res);
+      return;
+    }
     const token = this.architectBearer(req, res, "A field token cannot sit in the habitat");
     if (!token) return;
     if (wantsArchitectHabitatHtml(req.headers.accept)) {
-      this.write(res, 200, architectHabitatPageHtml(), {
-        "content-type": "text/html; charset=utf-8",
-        ...CORS,
-      });
+      this.writeArchitectHabitatHtmlShell(res);
       return;
     }
     const computerBaseDir = this.opts.core.fieldTokens.baseDir();
@@ -675,6 +678,14 @@ export class FieldHttpServer {
       tenantId: written.tenantId,
       connectorId: written.connectorId,
       writtenBy: written.writtenBy,
+    });
+  }
+
+  /** Static inert wizard shell. Does not read, mint, or write any credential. */
+  private writeArchitectHabitatHtmlShell(res: ServerResponse): void {
+    this.write(res, 200, architectHabitatPageHtml(), {
+      "content-type": "text/html; charset=utf-8",
+      ...CORS,
     });
   }
 
