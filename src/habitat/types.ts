@@ -158,8 +158,9 @@ export interface RunRecord {
   recordId?: string;
   talkingDidHeavyWork: false;
   /**
-   * Last talking SHALL NOT reject (HK-031). Evidence that an unvalidated
-   * talking decision did not succeed. Absent means no talking reject.
+   * Last talking SHALL NOT (HK-031) or illegal adapter verb (HK-032) reject.
+   * Evidence that an unvalidated adapter decision did not succeed.
+   * Same spine for talking and worker. Absent means no such reject.
    */
   talkingReject?: { code: string; closed: true };
   createdAt: string;
