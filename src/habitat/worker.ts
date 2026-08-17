@@ -11,6 +11,7 @@ import { copySkillsToTrailer } from "./skills.js";
 import {
   CODER_TYPE,
   isAdmittedWorkerType,
+  kernelTrailerExpiresAt,
   type SkillFile,
   type WorkerRecord,
   type WorkerTypeId,
@@ -26,7 +27,8 @@ ${hold ? "while true; do sleep 2147483647; done\n" : ""}`;
 /**
  * Thin worker book. coder is executor + branch on the tenant computer.
  * Other v1 types are admitted bookings without a second computer primitive.
- * Trailer isolation is torn down on worker_done / kill.
+ * Trailer isolation is torn down on worker_done / kill / kernel TTL.
+ * Desk (role-agent Xvfb) is a different lifetime — teardown does not stop it.
  * The coder process runs inside the tenant machine (computer.execInMachine / spawnHeld).
  * Not in the kernel process. Not a host Node child of the kernel.
  */
@@ -118,11 +120,16 @@ export class WorkerBook {
       } else if (isPidAlive(existing.pid)) {
         return existing;
       } else {
-        return this.spawnTrailer(existing, input.skills, input.hold);
+        return this.spawnTrailer(
+          { ...existing, expiresAt: kernelTrailerExpiresAt(nowIso()) },
+          input.skills,
+          input.hold,
+        );
       }
     }
     const workerId = newId("worker");
     const paths = computerRoot(this.computerBaseDir, input.tenantId);
+    const createdAt = nowIso();
     return this.spawnTrailer(
       {
         workerId,
@@ -133,7 +140,8 @@ export class WorkerBook {
         trailerPath: path.join(paths.trailersDir, workerId),
         branch: `coder/${workerId}`,
         agent: coderAgent(input.tenantId, workerId),
-        createdAt: nowIso(),
+        createdAt,
+        expiresAt: kernelTrailerExpiresAt(createdAt),
       },
       input.skills,
       input.hold,
@@ -372,13 +380,20 @@ function parseWorker(raw: unknown): WorkerRecord {
       branch: raw.branch,
       agent: parseAgent(raw.agent, raw.tenantId),
       createdAt: raw.createdAt,
+      expiresAt: parseCoderExpiresAt(raw.expiresAt, raw.createdAt),
     };
     if (typeof raw.pid === "number" && Number.isInteger(raw.pid) && raw.pid > 0) {
       record.pid = raw.pid;
     }
     return record;
   }
-  if (raw.isolation !== undefined || raw.trailerPath !== undefined || raw.branch !== undefined || raw.pid !== undefined) {
+  if (
+    raw.isolation !== undefined ||
+    raw.trailerPath !== undefined ||
+    raw.branch !== undefined ||
+    raw.pid !== undefined ||
+    raw.expiresAt !== undefined
+  ) {
     throw new AvError("WORKER_STORE_CORRUPT", "Worker store is corrupt; refusing to invent a worker");
   }
   return {
@@ -389,6 +404,15 @@ function parseWorker(raw: unknown): WorkerRecord {
     agent: parseAgent(raw.agent, raw.tenantId),
     createdAt: raw.createdAt,
   };
+}
+
+/** Coder expiry is kernel-owned. Absent on disk derives from createdAt + TTL so leftovers still lease. */
+function parseCoderExpiresAt(raw: unknown, createdAt: string): string {
+  if (raw === undefined) return kernelTrailerExpiresAt(createdAt);
+  if (typeof raw !== "string" || !raw || !Number.isFinite(Date.parse(raw))) {
+    throw new AvError("WORKER_STORE_CORRUPT", "Worker store is corrupt; refusing to invent a worker");
+  }
+  return raw;
 }
 
 function parseAgent(raw: unknown, tenantId: string): AgentRecord {
