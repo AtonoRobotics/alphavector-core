@@ -1,7 +1,7 @@
 import { computerRoot } from "../computer/paths.js";
 import { AvError } from "../errors.js";
 import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
-import type { RunRecord } from "./types.js";
+import { KERNEL_RUN_BUDGET, type RunRecord } from "./types.js";
 
 const STATUSES = new Set([
   "open",
@@ -98,6 +98,11 @@ function parseRun(raw: unknown): RunRecord {
     typeof raw.goal !== "string" ||
     typeof raw.status !== "string" ||
     !STATUSES.has(raw.status) ||
+    typeof raw.orchestratorId !== "string" ||
+    !raw.orchestratorId ||
+    !isWorkerIdSet(raw.workers) ||
+    (raw.nextWake !== undefined && typeof raw.nextWake !== "string") ||
+    !isKernelBudget(raw.budget) ||
     raw.talkingDidHeavyWork !== false ||
     typeof raw.createdAt !== "string" ||
     typeof raw.updatedAt !== "string"
@@ -109,6 +114,10 @@ function parseRun(raw: unknown): RunRecord {
     tenantId: raw.tenantId,
     goal: raw.goal,
     status: raw.status as RunRecord["status"],
+    orchestratorId: raw.orchestratorId,
+    workers: [...raw.workers],
+    nextWake: typeof raw.nextWake === "string" ? raw.nextWake : "",
+    budget: raw.budget,
     talkingDidHeavyWork: false,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
@@ -141,6 +150,14 @@ function parseRun(raw: unknown): RunRecord {
     }
   }
   return run;
+}
+
+function isWorkerIdSet(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((id) => typeof id === "string");
+}
+
+function isKernelBudget(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value === KERNEL_RUN_BUDGET;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
