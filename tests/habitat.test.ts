@@ -6529,7 +6529,10 @@ describe("HK-072 durable memory injected on every wake", () => {
   it("a kernel think call without injectMemory fails the source scan", () => {
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-think.ts"), "utf8");
-    const parts = kernelSrc.split("this.adapter.think(");
+    const wrapped = kernelSrc.split("this.adapter.think(");
+    expect(wrapped.length).toBe(2);
+    expect(wrapped[0]).toMatch(/thinkAdapter/);
+    const parts = kernelSrc.split("this.thinkAdapter(");
     expect(parts.length).toBeGreaterThan(6);
     for (let i = 1; i < parts.length; i++) {
       const before = parts[i - 1]!.slice(-500);
