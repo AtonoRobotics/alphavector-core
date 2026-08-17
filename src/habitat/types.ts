@@ -111,6 +111,12 @@ export interface WakeEvent {
    */
   nextWake?: string;
   /**
+   * Rejected. Field SHALL NOT set or extend trailer TTL. Kernel stamps
+   * WorkerRecord.expiresAt from KERNEL_TRAILER_TTL_MS. Same class as
+   * KERNEL_RUN_BUDGET / field cannot set nextWake.
+   */
+  trailerTtl?: string;
+  /**
    * Rejected. Field SHALL NOT write a worker brief. Kernel writes the
    * artifact from a validated talking decision.
    */
@@ -141,6 +147,19 @@ export interface PendingEffect {
 
 /** Kernel-owned empty run budget. Not a trust-ladder number. Field SHALL NOT set this. */
 export const KERNEL_RUN_BUDGET = 0;
+
+/**
+ * Kernel-owned coder trailer isolation lease. Not a field, pack, or adapter
+ * control. The role-agent body is a different lifetime and is not this.
+ */
+export const KERNEL_TRAILER_TTL_MS = 4 * 60 * 60 * 1000;
+
+/** Kernel stamp for a coder trailer expiry. Field never calls this. */
+export function kernelTrailerExpiresAt(now: string): string {
+  const at = Date.parse(now);
+  const start = Number.isFinite(at) ? at : Date.now();
+  return new Date(start + KERNEL_TRAILER_TTL_MS).toISOString();
+}
 
 export interface RunRecord {
   runId: string;
@@ -373,6 +392,11 @@ export interface WorkerRecord {
   trailerPath?: string;
   branch?: string;
   pid?: number;
+  /**
+   * Kernel-owned trailer isolation expiry (ISO). Present only on coder.
+   * The habitat clock tears the trailer when due. Field SHALL NOT set this.
+   */
+  expiresAt?: string;
   agent: AgentRecord;
   createdAt: string;
 }

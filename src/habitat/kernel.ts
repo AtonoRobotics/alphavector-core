@@ -139,7 +139,7 @@ export class HabitatKernel {
   private frozenNow?: string;
   private timer?: ReturnType<typeof setInterval>;
   private computer?: ComputerHost;
-  /** Tenants whose worker teardown is expected (done / fail / kill). Not a crash. */
+  /** Tenants whose worker teardown is expected (done / fail / kill / TTL). Not a crash. */
   private readonly expectedTeardown = new Set<string>();
   /**
    * In-flight pass context. Nested wake() from the same pass (worker_done after
@@ -496,11 +496,12 @@ export class HabitatKernel {
 
   /**
    * Product ticker body. Habitat owns this clock. Calls fireDue (routines),
-   * fireDueDeadlines, fireDueNextWake, and reapCrashedWorkers per tenant.
-   * Same clock — not a second Temporal-like bus. isolation() is a read and
-   * does not reap. Typed fail (ONE_GOAL, ADAPTER_UNBOUND, NO_OPEN_RUN,
-   * *_STORE_CORRUPT, ...) is swallowed so the interval keeps ticking.
-   * Does not invent routines, deadlines, or an empty nextWake.
+   * fireDueDeadlines, fireDueTrailerTtl, fireDueNextWake, and
+   * reapCrashedWorkers per tenant. Same clock — not a second Temporal-like
+   * bus. isolation() is a read and does not reap. Typed fail (ONE_GOAL,
+   * ADAPTER_UNBOUND, NO_OPEN_RUN, *_STORE_CORRUPT, ...) is swallowed so the
+   * interval keeps ticking. Does not invent routines, deadlines, an empty
+   * nextWake, or a trailer.
    */
   private tickDue(): void {
     void this.tickDueAsync();
@@ -521,6 +522,11 @@ export class HabitatKernel {
         // keep ticking
       }
       try {
+        await this.fireDueTrailerTtl(tenantId, now);
+      } catch {
+        // keep ticking
+      }
+      try {
         await this.fireDueNextWake(tenantId, now);
       } catch {
         // keep ticking
@@ -531,6 +537,32 @@ export class HabitatKernel {
         // keep ticking
       }
     }
+  }
+
+  /**
+   * Tear a due coder trailer the same way worker_done / kill do (WorkerBook.teardown).
+   * Isolation lifetime only — does not complete or kill the run. The
+   * role-agent body is not this.
+   * Non-coder bookings have no trailer and no expiry; this does not invent one.
+   * Same habitat clock as routines / deadlines / nextWake. Not a second ticker.
+   */
+  private fireDueTrailerTtl(tenantId: string, now: string): void {
+    const worker = this.workers.get(tenantId);
+    if (!worker || worker.type !== CODER_TYPE.id || !worker.expiresAt) return;
+    if (!isTrailerTtlDue(worker.expiresAt, now)) return;
+    this.expectedTeardown.add(tenantId);
+    try {
+      this.workers.teardown(tenantId);
+    } finally {
+      this.expectedTeardown.delete(tenantId);
+    }
+    const run = this.runs.get(tenantId);
+    if (!run || isTerminal(run.status)) return;
+    this.putRun({
+      ...run,
+      workerId: undefined,
+      updatedAt: nowIso(),
+    });
   }
 
   /**
@@ -1723,12 +1755,22 @@ export class HabitatKernel {
   }
 
   /**
-   * Field SHALL NOT set orchestratorId, budget, or nextWake. Kernel owns all
-   * three. Fail closed — do not persist a field-supplied nextWake.
+   * Field SHALL NOT set orchestratorId, budget, nextWake, or trailer TTL.
+   * Kernel owns all four. Fail closed — do not persist a field-supplied
+   * nextWake or extend a trailer lease.
    */
   private assertFieldCannotSetRunKernel(event: WakeEvent): void {
-    if (nonempty(event.orchestratorId) || event.budget !== undefined || event.nextWake !== undefined) {
-      throw new SurfaceViolationError("Field SHALL NOT set orchestratorId, budget, or nextWake");
+    if (
+      nonempty(event.orchestratorId) ||
+      event.budget !== undefined ||
+      event.nextWake !== undefined ||
+      event.trailerTtl !== undefined
+    ) {
+      throw new SurfaceViolationError("Field SHALL NOT set orchestratorId, budget, nextWake, or trailerTtl");
+    }
+    const extra = event as WakeEvent & { expiresAt?: unknown; ttl?: unknown; trailerExpiresAt?: unknown };
+    if (extra.expiresAt !== undefined || extra.ttl !== undefined || extra.trailerExpiresAt !== undefined) {
+      throw new SurfaceViolationError("Field SHALL NOT set trailer TTL");
     }
     if (event.brief !== undefined || event.steer !== undefined || event.report !== undefined) {
       throw new SurfaceViolationError("Field SHALL NOT write a brief, steer a worker, or report");
@@ -2476,6 +2518,11 @@ function isNextWakeDue(nextWake: string, now: string): boolean {
   const at = Date.parse(now);
   if (!Number.isFinite(due) || !Number.isFinite(at) || due > at) return false;
   return true;
+}
+
+/** Empty or unparseable trailer expiry is not due — do not invent a teardown. */
+function isTrailerTtlDue(expiresAt: string, now: string): boolean {
+  return isNextWakeDue(expiresAt, now);
 }
 
 function nonempty(value: string | undefined): boolean {

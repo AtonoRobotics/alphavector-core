@@ -163,6 +163,7 @@ export class FieldHttpServer {
     if (method === "POST" && path === "/field/journeys") {
       const body = (await readJson(req)) as FieldStartBody;
       assertFieldCannotSetNextWake(body as unknown as Record<string, unknown>);
+      assertFieldCannotSetTrailerTtl(body as unknown as Record<string, unknown>);
       assertFieldCannotWriteBriefOrSteer(body as unknown as Record<string, unknown>);
       const journey = core.field.start({
         actor,
@@ -286,6 +287,7 @@ export class FieldHttpServer {
 
     if (method === "POST" && path === "/field/ask") {
       const body = (await readJson(req)) as FieldAskBody;
+      assertFieldCannotSetTrailerTtl(body as unknown as Record<string, unknown>);
       assertFieldCannotWriteBriefOrSteer(body as unknown as Record<string, unknown>);
       core.field.ask({
         actor,
@@ -318,6 +320,7 @@ export class FieldHttpServer {
 
     if (method === "POST" && path === "/field/kill") {
       const body = (await readJson(req)) as { reason?: string };
+      assertFieldCannotSetTrailerTtl(body as unknown as Record<string, unknown>);
       const reason = String(body.reason ?? "field kill");
       core.field.kill(tenantId, reason);
       await core.habitat.wake({ kind: "kill", tenantId, reason, pack });
@@ -665,6 +668,7 @@ export class FieldHttpServer {
  */
 function assertFieldContinueIsWakeOnly(body: Record<string, unknown>): void {
   assertFieldCannotSetNextWake(body);
+  assertFieldCannotSetTrailerTtl(body);
   assertFieldCannotWriteBriefOrSteer(body);
   const named = new Set(["agentId", "agent", "workerType", "assigneeAgentId", "assignee", "who"]);
   for (const [key, value] of Object.entries(body)) {
@@ -680,6 +684,18 @@ function assertFieldContinueIsWakeOnly(body: Record<string, unknown>): void {
 function assertFieldCannotSetNextWake(body: Record<string, unknown>): void {
   if (body.nextWake !== undefined) {
     throw new SurfaceViolationError("Field SHALL NOT set nextWake");
+  }
+}
+
+/** Field SHALL NOT set or extend trailer TTL. Kernel stamps coder expiresAt. */
+function assertFieldCannotSetTrailerTtl(body: Record<string, unknown>): void {
+  if (
+    body.trailerTtl !== undefined ||
+    body.expiresAt !== undefined ||
+    body.ttl !== undefined ||
+    body.trailerExpiresAt !== undefined
+  ) {
+    throw new SurfaceViolationError("Field SHALL NOT set trailer TTL");
   }
 }
 
