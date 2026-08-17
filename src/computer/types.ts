@@ -9,6 +9,8 @@ export interface ComputerPaths {
   egressFile: string;
   /** Authorization cards. Beside the disk, never inside the bind-mounted /home. */
   cardsFile: string;
+  /** Architect-written grants. Same class as cards: beside the disk, never inside /home. */
+  grantsFile: string;
   /** Tenant-issued field and Architect credentials. Beside secrets and cards, never inside disk/. */
   fieldTokensFile: string;
   /** Generic tenant facts for pack predicates. Beside cards and tokens, never inside disk/. */

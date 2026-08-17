@@ -38,7 +38,7 @@ export class AlphaVectorCore {
   readonly memory = new MemoryTiers();
   readonly orchestrator = new Orchestrator();
   readonly habitat: HabitatKernel;
-  readonly grants = new GrantBook();
+  readonly grants: GrantBook;
   readonly cards: CardBook;
   readonly fieldTokens: FieldTokenBook;
   readonly facts: FactBook;
@@ -65,6 +65,7 @@ export class AlphaVectorCore {
       anchors,
     );
     this.agents = new AgentRuntime(stateDir);
+    this.grants = new GrantBook(computerBaseDir);
     this.cards = new CardBook(computerBaseDir);
     this.fieldTokens = new FieldTokenBook(computerBaseDir);
     this.facts = new FactBook(computerBaseDir);

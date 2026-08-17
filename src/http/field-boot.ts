@@ -14,7 +14,7 @@ import { resolveProductTrustAnchors } from "../packs/trust-anchors.js";
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 export interface BootFieldCoreOptions {
-  /** Tenant computer root core owns. Cards, facts, and records persist beside disk/, not in a pack. */
+  /** Tenant computer root core owns. Cards, grants, facts, and records persist beside disk/, not in a pack. */
   computerBaseDir?: string;
   /**
    * Cognitive adapter. Omit for the product default DeepAgentsAdapter

@@ -17,6 +17,8 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     egressFile: path.join(root, "egress.json"),
     // Cards are authorization state. Same reason as secrets: agents share disk/.
     cardsFile: path.join(root, "cards.json"),
+    // Architect-written grants. Same class as cards: not a business fact, not on agent disk/.
+    grantsFile: path.join(root, "grants.json"),
     // Field and Architect credentials. Same reason as secrets and cards.
     fieldTokensFile: path.join(root, "field-tokens.json"),
     // Predicate facts. Same reason as secrets, cards, and tokens.
