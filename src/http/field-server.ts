@@ -466,6 +466,7 @@ export class FieldHttpServer {
    * Architect production deploy. Off `/field` and off the field HTML page.
    * Field token is 403 SURFACE_VIOLATION. Not a vendor cloud.
    * Field-serve theater (loopback / port 0 / t1) is not a deploy.
+   * Listen on the declared host:port is the deploy; deploy.json is the ledger.
    */
   private async routeArchitectDeploy(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const header = req.headers.authorization;
@@ -495,7 +496,7 @@ export class FieldHttpServer {
     if (!computerBaseDir) {
       throw new DeployIncompleteError("Hull computer is not started; deploy is incomplete");
     }
-    const record = await architectDeploy({
+    const { record } = await architectDeploy({
       tenantId: this.opts.tenantId,
       computerBaseDir,
       core: this.opts.core,

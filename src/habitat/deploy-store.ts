@@ -5,6 +5,8 @@ import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 
 /**
  * Architect-written production deploy record (DEC-020).
+ * Written only after the declared host:port is listening. A file without
+ * listen is not a deploy.
  * Same class as brokerage / adapter-bind: core-owned, beside disk/,
  * never inside the bind-mounted /home, never a field file, never a vendor cloud.
  * Field-serve theater (127.0.0.1 / port 0 / t1) does not write this file.
