@@ -8,6 +8,7 @@ export * from "./proposals.js";
 export * from "./brief-store.js";
 export * from "./worker.js";
 export * from "./adapter.js";
+export * from "./typed-decision.js";
 export * from "./adapter-bind.js";
 export * from "./adapter-credentials.js";
 export * from "./routine-store.js";

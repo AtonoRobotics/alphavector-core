@@ -73,6 +73,13 @@ import {
 } from "./illegal-adapter-verb.js";
 import { talkingShallNotReject } from "./talking-shall-not.js";
 import {
+  DECISION_ASSUMPTIONS,
+  DECISION_NEXT_WAKE_OR_STOP,
+  DECISION_RISKS,
+  hasNextWakeOrStop,
+  isStringArray,
+} from "./typed-decision.js";
+import {
   CODER_TYPE,
   HABITAT_OWNED,
   isAdmittedWorkerType,
@@ -1546,11 +1553,12 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
     const brief = this.readBookedBrief(event.tenantId, worker);
+    const thinkRun = this.requireRun(event.tenantId);
     const intent = await this.thinkAdapter(
       {
         pass: "worker",
         event,
-        run: this.requireRun(event.tenantId),
+        run: thinkRun,
         memory,
         skills,
         ...(brief ? { brief } : {}),
@@ -1559,11 +1567,11 @@ export class HabitatKernel {
       },
       event,
       stem(event),
-      this.requireRun(event.tenantId),
+      thinkRun,
     );
     this.validateWorker(intent, event, stem(event), this.requireRun(event.tenantId));
     this.assertAdapterNextWake(intent);
-    this.writeAdapterNextWake(this.requireRun(event.tenantId), intent);
+    this.writeAdapterNextWake(thinkRun, intent);
     const stoppedAfterThink = this.ifKilled(event.tenantId);
     if (stoppedAfterThink) return stoppedAfterThink;
     const proposed = await this.admit(pack, worker.agent, intent);
@@ -1755,18 +1763,22 @@ export class HabitatKernel {
   }
 
   /**
-   * Field SHALL NOT set orchestratorId, budget, nextWake, or trailer TTL.
-   * Kernel owns all four. Fail closed — do not persist a field-supplied
-   * nextWake or extend a trailer lease.
+   * Field SHALL NOT set orchestratorId, budget, nextWake, assumptions, risks,
+   * or trailer TTL. Kernel owns the typed decision. Fail closed — do not
+   * persist a field-supplied nextWake or extend a trailer lease.
    */
   private assertFieldCannotSetRunKernel(event: WakeEvent): void {
     if (
       nonempty(event.orchestratorId) ||
       event.budget !== undefined ||
       event.nextWake !== undefined ||
+      event.assumptions !== undefined ||
+      event.risks !== undefined ||
       event.trailerTtl !== undefined
     ) {
-      throw new SurfaceViolationError("Field SHALL NOT set orchestratorId, budget, nextWake, or trailerTtl");
+      throw new SurfaceViolationError(
+        "Field SHALL NOT set orchestratorId, budget, nextWake, assumptions, risks, or trailerTtl",
+      );
     }
     const extra = event as WakeEvent & { expiresAt?: unknown; ttl?: unknown; trailerExpiresAt?: unknown };
     if (extra.expiresAt !== undefined || extra.ttl !== undefined || extra.trailerExpiresAt !== undefined) {
@@ -2059,7 +2071,7 @@ export class HabitatKernel {
     if (intent.workerType !== undefined && !isAdmittedWorkerType(intent.workerType)) {
       fail("TALKING_PASS", "Talking pass must not invent a worker type");
     }
-    this.assertAdapterNextWake(intent);
+    this.assertTypedDecision(intent, fail);
     this.assertAdapterBrief(intent);
   }
 
@@ -2080,6 +2092,7 @@ export class HabitatKernel {
     if (intent.pass !== "worker" || !isLegalWorkerVerb(intent.act)) {
       fail(ILLEGAL_ADAPTER_VERB, "Worker pass must propose the one external effect");
     }
+    this.assertTypedDecision(intent, fail);
   }
 
   /**
@@ -2251,11 +2264,12 @@ export class HabitatKernel {
     const memory = this.injectMemory(event.tenantId, orch.agentId);
     this.assertLabeled(memory);
     const brief = this.readBookedBrief(event.tenantId, worker);
+    const thinkRun = this.requireRun(event.tenantId);
     const intent = await this.thinkAdapter(
       {
         pass: "worker",
         event,
-        run: this.requireRun(event.tenantId),
+        run: thinkRun,
         memory,
         skills,
         ...(brief ? { brief } : {}),
@@ -2264,11 +2278,11 @@ export class HabitatKernel {
       },
       event,
       stem(event),
-      this.requireRun(event.tenantId),
+      thinkRun,
     );
     this.validateWorker(intent, event, stem(event), this.requireRun(event.tenantId));
     this.assertAdapterNextWake(intent);
-    this.writeAdapterNextWake(this.requireRun(event.tenantId), intent);
+    this.writeAdapterNextWake(thinkRun, intent);
     const stoppedAfterThink = this.ifKilled(event.tenantId);
     if (stoppedAfterThink) return stoppedAfterThink;
     const proposed = await this.admit(pack, worker.agent, intent);
@@ -2391,9 +2405,32 @@ export class HabitatKernel {
   }
 
   /**
-   * nextWake on an adapter decision is optional. Absent is no-op. Empty is
-   * valid (clear). Anything else must be a parseable ISO time. Unvalidated
-   * values fail closed and are not persisted.
+   * Typed decision: assumptions, risks, and nextWake-or-stop. Missing fields
+   * fail closed on the talkingReject spine. nextWake format is checked after.
+   */
+  private assertTypedDecision(
+    intent: CognitiveIntent,
+    fail: (code: string, message: string) => never,
+  ): void {
+    if (!isStringArray((intent as { assumptions?: unknown }).assumptions)) {
+      fail(DECISION_ASSUMPTIONS, "Typed decision must include assumptions; omitting is fail-closed");
+    }
+    if (!isStringArray((intent as { risks?: unknown }).risks)) {
+      fail(DECISION_RISKS, "Typed decision must include risks; omitting is fail-closed");
+    }
+    if (!hasNextWakeOrStop(intent)) {
+      fail(
+        DECISION_NEXT_WAKE_OR_STOP,
+        "Typed decision must set nextWake or act done; omitting both is fail-closed",
+      );
+    }
+    this.assertAdapterNextWake(intent);
+  }
+
+  /**
+   * nextWake is required unless act is done. Absent is only legal on stop.
+   * Empty is valid (clear). Anything else must be a parseable ISO time.
+   * Unvalidated values fail closed and are not persisted.
    */
   private assertAdapterNextWake(intent: CognitiveIntent): void {
     const value = (intent as { nextWake?: unknown }).nextWake;
@@ -2406,11 +2443,15 @@ export class HabitatKernel {
     }
   }
 
-  /** Kernel write of a validated adapter nextWake. Field never reaches here. */
+  /**
+   * Kernel write of a validated adapter nextWake. Field never reaches here.
+   * Echoing the think-time snapshot is not a new decision — do not clobber a
+   * later kernel clear or write.
+   */
   private writeAdapterNextWake(run: RunRecord, intent: CognitiveIntent): RunRecord {
     if (intent.nextWake === undefined) return this.runs.get(run.tenantId) ?? run;
+    if (run.nextWake === intent.nextWake) return this.runs.get(run.tenantId) ?? run;
     const current = this.runs.get(run.tenantId) ?? run;
-    if (current.nextWake === intent.nextWake) return current;
     return this.putRun({
       ...current,
       nextWake: intent.nextWake,

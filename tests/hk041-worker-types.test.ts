@@ -11,6 +11,7 @@ import {
   CODER_TYPE,
   cognitiveIntentFromUnknown,
   DeepAgentsAdapter,
+  fixtureTypedDecision,
   isAdmittedWorkerType,
   reapHeldCoders,
   WAKE_KINDS,
@@ -79,7 +80,7 @@ function talkingLaunch(workerType: string): CognitiveAdapter {
     requiresBind: false,
     think(input) {
       if (input.pass === "worker") return dryThink(input);
-      return { pass: "talking", act: "launch_worker", workerType };
+      return fixtureTypedDecision({ pass: "talking", act: "launch_worker", workerType });
     },
   };
 }
@@ -342,6 +343,9 @@ describe("HK-041 v1 worker types", () => {
       pass: "talking",
       act: "launch_worker",
       workerType: "analyst",
+      assumptions: [],
+      risks: [],
+      nextWake: "",
     });
     expect(mapped.workerType).toBe("analyst");
     expect(isAdmittedWorkerType(mapped.workerType)).toBe(false);

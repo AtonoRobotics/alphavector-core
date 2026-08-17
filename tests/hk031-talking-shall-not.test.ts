@@ -9,11 +9,13 @@ import { dryThink, DryStemAdapter } from "../src/habitat/adapter.js";
 import {
   cognitiveIntentFromUnknown,
   DeepAgentsAdapter,
+  fixtureTypedDecision,
   reapHeldCoders,
   TALKING_SHALL_NOT,
   WAKE_KINDS,
 } from "../src/habitat/index.js";
 import type { CognitiveAdapter, CognitiveIntent } from "../src/habitat/types.js";
+import type { FixtureDecisionInput } from "../src/habitat/typed-decision.js";
 import { AlphaVectorCore } from "../src/kernel.js";
 import {
   ALPHAVECTOR_RE_PIN_SHA,
@@ -79,14 +81,15 @@ afterEach(async () => {
   await closeWorldHttp();
 });
 
-function talkingIntent(intent: CognitiveIntent): CognitiveAdapter {
+function talkingIntent(intent: FixtureDecisionInput): CognitiveAdapter {
+  const complete = fixtureTypedDecision(intent);
   return {
     name: "hk031-script",
     owns: ["think"],
     requiresBind: false,
     think(input) {
       if (input.pass === "worker") return dryThink(input);
-      return intent;
+      return complete;
     },
   };
 }
@@ -177,12 +180,12 @@ describe("HK-031 talking SHALL NOT", () => {
       owns: ["think"],
       requiresBind: false,
       think() {
-        return {
+        return fixtureTypedDecision({
           pass: "talking",
           act: "propose_effect",
           actionClass: "communicate",
           channel: "email",
-        };
+        });
       },
     });
     await expect(
@@ -208,7 +211,7 @@ describe("HK-031 talking SHALL NOT", () => {
     const world = await useWorldHttp();
     const fixtures: Array<{
       code: (typeof NAMED_CODES)[number];
-      intent: CognitiveIntent;
+      intent: FixtureDecisionInput;
     }> = [
       { code: "TALKING_WORLD_CALL", intent: { pass: "talking", act: "world_call" as CognitiveIntent["act"] } },
       { code: "TALKING_GRANT_TRUST", intent: { pass: "talking", act: "grant_trust" as CognitiveIntent["act"] } },
@@ -345,12 +348,12 @@ describe("HK-031 talking SHALL NOT", () => {
       think(input) {
         if (input.pass === "worker") return dryThink(input);
         if (input.event.kind === "field_continue") {
-          return {
+          return fixtureTypedDecision({
             pass: "talking",
             act: "launch_worker",
             workerType: "coder",
             ...({ skipCard: true } as object),
-          } as CognitiveIntent;
+          });
         }
         return dryThink(input);
       },
@@ -553,12 +556,21 @@ describe("HK-031 talking SHALL NOT", () => {
       pass: "talking",
       act: "launch_worker",
       workerType: "coder",
+      assumptions: [],
+      risks: [],
+      nextWake: "",
       grantTrust: true,
     });
     expect(mapped.act).toBe("launch_worker");
     expect((mapped as CognitiveIntent & { grantTrust?: unknown }).grantTrust).toBe(true);
 
-    const actMapped = cognitiveIntentFromUnknown({ pass: "talking", act: "world_call" });
+    const actMapped = cognitiveIntentFromUnknown({
+      pass: "talking",
+      act: "world_call",
+      assumptions: [],
+      risks: [],
+      nextWake: "",
+    });
     expect(actMapped.act).toBe("world_call");
 
     try {

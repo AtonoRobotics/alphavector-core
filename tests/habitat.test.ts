@@ -25,6 +25,7 @@ import {
   DeepAgentsAdapter,
   dryThink,
   DryStemAdapter,
+  fixtureTypedDecision,
   HABITAT_OWNED,
   HABITAT_ROUTINE_TICK_MS,
   isPidAlive,
@@ -113,7 +114,7 @@ function chatCompletionsEnvelope(intent: CognitiveIntent): string {
 async function startVendorThinkDouble(opts?: {
   apiKey?: string;
   rejectAuth?: boolean;
-  talking?: CognitiveIntent;
+  talking?: CognitiveIntent | { pass: "talking"; act: CognitiveIntent["act"] };
   unusable?: boolean;
 }): Promise<{ url: string; requests: VendorHttpCapture[]; close: () => Promise<void> }> {
   const requests: VendorHttpCapture[] = [];
@@ -155,9 +156,9 @@ async function startVendorThinkDouble(opts?: {
       const rec = thinkHandlesFromChatBody(body);
       const intent: CognitiveIntent =
         opts?.talking && rec.pass === "talking"
-          ? opts.talking
+          ? fixtureTypedDecision(opts.talking)
           : rec.pass === "worker"
-            ? {
+            ? fixtureTypedDecision({
                 pass: "worker",
                 act: "propose_effect",
                 actionClass: "communicate",
@@ -165,17 +166,17 @@ async function startVendorThinkDouble(opts?: {
                 purpose: "follow-up",
                 subject: rec.recordId ?? "unspecified",
                 ...WORLD_FIXTURE_SEND,
-              }
+              })
             : rec.kind === "worker_done"
-              ? { pass: "talking", act: "done" }
+              ? fixtureTypedDecision({ pass: "talking", act: "done" })
               : rec.kind === "field_ask" ||
                   rec.kind === "field_continue" ||
                   rec.kind === "mail" ||
                   rec.kind === "deadline" ||
                   rec.kind === "architect_message" ||
                   rec.kind === "worker_failed"
-                ? { pass: "talking", act: "follow_up" }
-                : { pass: "talking", act: "launch_worker", workerType: "coder" };
+                ? fixtureTypedDecision({ pass: "talking", act: "follow_up" })
+                : fixtureTypedDecision({ pass: "talking", act: "launch_worker", workerType: "coder" });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(chatCompletionsEnvelope(intent));
     });
@@ -196,7 +197,7 @@ async function startVendorThinkDouble(opts?: {
 async function useVendorHttp(opts?: {
   apiKey?: string;
   rejectAuth?: boolean;
-  talking?: CognitiveIntent;
+  talking?: CognitiveIntent | { pass: "talking"; act: CognitiveIntent["act"] };
   unusable?: boolean;
 }): Promise<{ url: string; requests: VendorHttpCapture[]; close: () => Promise<void> }> {
   const double = await startVendorThinkDouble(opts);
@@ -1946,7 +1947,7 @@ describe("D10 §8 #8 follow-up kernel verb", () => {
         owns: ["think"],
         think(input) {
           if (input.pass === "talking" && input.event.kind === "worker_done") {
-            return { pass: "talking", act: "follow_up" };
+            return fixtureTypedDecision({ pass: "talking", act: "follow_up" });
           }
           return dryThink(input);
         },
@@ -2114,7 +2115,7 @@ describe("D10 §8 #8 follow-up kernel verb", () => {
       owns: ["think"],
       think(input) {
         if (input.pass === "talking" && input.event.kind === "worker_done") {
-          return { pass: "talking", act: "follow_up" };
+          return fixtureTypedDecision({ pass: "talking", act: "follow_up" });
         }
         return dryThink(input);
       },
@@ -5516,9 +5517,9 @@ describe("HK-073 approved external effect calls the world", () => {
       owns: ["think"],
       think(input) {
         if (input.pass === "talking") {
-          return { pass: "talking", act: "launch_worker", workerType: "coder" };
+          return fixtureTypedDecision({ pass: "talking", act: "launch_worker", workerType: "coder" });
         }
-        return {
+        return fixtureTypedDecision({
           pass: "worker",
           act: "propose_effect",
           actionClass: "communicate",
@@ -5526,7 +5527,7 @@ describe("HK-073 approved external effect calls the world", () => {
           purpose: "follow-up",
           subject: input.run.recordId ?? "unspecified",
           ...WORLD_FIXTURE_SMS_SEND,
-        };
+        });
       },
     };
     const core = new AlphaVectorCore(anchors, path.join(computerBaseDir, "state"), computerBaseDir, {

@@ -9,11 +9,13 @@ import { SurfaceViolationError } from "../src/errors.js";
 import { dryThink, DryStemAdapter } from "../src/habitat/adapter.js";
 import {
   DeepAgentsAdapter,
+  fixtureTypedDecision,
   reapHeldCoders,
   trailerBriefPath,
   WAKE_KINDS,
 } from "../src/habitat/index.js";
 import type { AdapterInput, CognitiveAdapter, CognitiveIntent, WorkerBrief } from "../src/habitat/types.js";
+import type { FixtureDecisionInput } from "../src/habitat/typed-decision.js";
 import { FieldClient } from "../src/http/field-client.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { AlphaVectorCore } from "../src/kernel.js";
@@ -93,7 +95,7 @@ function scheduleOnStart(due: string): CognitiveAdapter {
 }
 
 function talkingScript(script: {
-  onTalking?: (input: AdapterInput) => CognitiveIntent | undefined;
+  onTalking?: (input: AdapterInput) => FixtureDecisionInput | undefined;
   captureWorker?: WorkerBrief[];
 }): CognitiveAdapter {
   return {
@@ -105,7 +107,8 @@ function talkingScript(script: {
         if (input.brief) script.captureWorker?.push(input.brief);
         return dryThink(input);
       }
-      return script.onTalking?.(input) ?? dryThink(input);
+      const talking = script.onTalking?.(input);
+      return talking ? fixtureTypedDecision(talking) : dryThink(input);
     },
   };
 }
@@ -223,7 +226,7 @@ describe("HK-030 talking kernel verbs", () => {
       requiresBind: false,
       think(input) {
         if (input.pass === "talking" && input.event.kind === "worker_done") {
-          return { pass: "talking", act: "follow_up" };
+          return fixtureTypedDecision({ pass: "talking", act: "follow_up" });
         }
         return dryThink(input);
       },
@@ -575,12 +578,12 @@ describe("HK-030 talking kernel verbs", () => {
       owns: ["think"],
       requiresBind: false,
       think() {
-        return {
+        return fixtureTypedDecision({
           pass: "talking",
           act: "propose_effect",
           actionClass: "communicate",
           channel: "email",
-        };
+        });
       },
     });
     await expect(
