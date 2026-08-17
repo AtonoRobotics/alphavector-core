@@ -48,7 +48,7 @@ One persistent Linux computer per tenant. Agents share the disk. Desktops are pe
 
 ## Field surface
 
-Required field path over HTTP. Architect/admin is not callable on `/field`. Architect sits in the habitat off the field home (`architect habitat` / GET `/architect/habitat`): org, open runs, workers, grants, eval, isolation as live records. Field users cannot configure models, prompts, Temporal, tools, or the machine. Workers run on the tenant computer, not as a host kernel child.
+Required field path over HTTP. Architect/admin is not callable on `/field`. Architect sits in the habitat off the field home (`architect habitat` / GET `/architect/habitat`): org, open runs, workers, grants, eval, isolation as live records. The habitat wizard writes the same adapter and connector bind files as CLI. Field users cannot configure models, prompts, Temporal, tools, or the machine. Workers run on the tenant computer, not as a host kernel child.
 
 ```bash
 npm run build

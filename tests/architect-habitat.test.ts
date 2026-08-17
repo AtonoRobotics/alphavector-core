@@ -1,13 +1,20 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { architectBindAdapter } from "../src/auth/architect-adapter-bind.js";
 import { architectSit } from "../src/auth/architect-habitat.js";
+import { computerRoot } from "../src/computer/paths.js";
 import { SurfaceViolationError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
+import { loadAdapterBind } from "../src/habitat/adapter-bind.js";
+import { loadAdapterCredentials } from "../src/habitat/adapter-credentials.js";
+import { loadConnectorBindStore } from "../src/habitat/connector-bind.js";
+import { loadConnectorCredentialsStore } from "../src/habitat/connector-credentials.js";
 import { reapHeldCoders } from "../src/habitat/index.js";
+import { resolveVendorBaseUrl } from "../src/habitat/vendor-think.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { AlphaVectorCore } from "../src/kernel.js";
 import {
@@ -118,6 +125,7 @@ describe("HK-082 Architect sits in the habitat", () => {
       "src/auth/architect-habitat.ts",
       "src/cli.ts",
       "src/http/field-server.ts",
+      "src/http/architect-habitat-page.ts",
       "clients/field-linux/index.html",
       "clients/field-ios/Field/HomeView.swift",
       "clients/field-ios/Field/FieldAPI.swift",
@@ -332,6 +340,254 @@ describe("HK-082 Architect sits in the habitat", () => {
     const fieldSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
     expect(fieldSrc).toMatch(/\/architect\/habitat/);
     expect(fieldSrc).toMatch(/A field token cannot sit in the habitat/);
+    expect(fieldSrc).toMatch(/architectBindAdapter\(/);
+    expect(fieldSrc).toMatch(/architectWriteAdapterCredentials\(/);
+    expect(fieldSrc).toMatch(/architectBindConnector\(/);
+    expect(fieldSrc).toMatch(/architectWriteConnectorCredentials\(/);
     expect(fieldSrc).not.toMatch(/app\.post\(["']\/field\/architect/);
+    expect(fieldSrc).not.toMatch(/gpt-|claude-|api\.openai\.com|api\.anthropic\.com|OPENAI_API_KEY|AV_NO_VENDOR/);
+  });
+
+  it("Architect token binds via habitat HTTP; field token is SURFACE_VIOLATION; disk matches CLI", async () => {
+    const live = await liveHttp("wizard");
+    const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
+    const modelId = "ci-double";
+    const vendorBaseUrl = "http://127.0.0.1:9";
+    const apiKey = "av-wizard-key";
+    const connectorId = "world";
+    const baseUrl = "http://127.0.0.1:8";
+    const secret = "av-wizard-secret";
+
+    const htmlRes = await fetch(`${live.url}/architect/habitat`, {
+      headers: { authorization: `Bearer ${live.architectToken}`, accept: "text/html" },
+    });
+    expect(htmlRes.status).toBe(200);
+    expect(htmlRes.headers.get("content-type")).toMatch(/text\/html/);
+    const html = await htmlRes.text();
+    expect(html).toMatch(/Architect sits in the habitat/);
+    expect(html).toMatch(/id="model-id"/);
+    expect(html).toMatch(/\/architect\/bind-adapter/);
+    expect(html).not.toMatch(/Architect Desktop|Architect IDE|Architect Studio|Architect App/i);
+    expect(html).not.toMatch(/gpt-|claude-|api\.openai\.com|api\.anthropic\.com|OPENAI_API_KEY/);
+
+    const bindAdapter = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId, vendorBaseUrl }),
+    });
+    expect(bindAdapter.status).toBe(201);
+    const boundAdapter = (await bindAdapter.json()) as { modelId: string; boundBy: string };
+    expect(boundAdapter.modelId).toBe(modelId);
+    expect(boundAdapter.boundBy).toBe("architect");
+
+    const setKey = await fetch(`${live.url}/architect/set-adapter-credentials`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ apiKey }),
+    });
+    expect(setKey.status).toBe(201);
+    expect(((await setKey.json()) as { writtenBy: string }).writtenBy).toBe("architect");
+
+    const bindConnector = await fetch(`${live.url}/architect/bind-connector`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ connectorId, baseUrl, requiresCredentials: true }),
+    });
+    expect(bindConnector.status).toBe(201);
+    const boundConnector = (await bindConnector.json()) as { connectorId: string; boundBy: string };
+    expect(boundConnector.connectorId).toBe(connectorId);
+    expect(boundConnector.boundBy).toBe("architect");
+
+    const setSecret = await fetch(`${live.url}/architect/set-connector-credentials`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ connectorId, secret }),
+    });
+    expect(setSecret.status).toBe(201);
+    expect(((await setSecret.json()) as { writtenBy: string }).writtenBy).toBe("architect");
+
+    const fieldAuth = { authorization: `Bearer ${live.fieldToken}`, "content-type": "application/json" };
+    for (const route of [
+      "/architect/bind-adapter",
+      "/architect/set-adapter-credentials",
+      "/architect/bind-connector",
+      "/architect/set-connector-credentials",
+    ]) {
+      const denied = await fetch(`${live.url}${route}`, {
+        method: "POST",
+        headers: fieldAuth,
+        body: JSON.stringify({ modelId, apiKey, connectorId, secret }),
+      });
+      expect(denied.status).toBe(403);
+      expect(((await denied.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+    }
+    const fieldHtml = await fetch(`${live.url}/architect/habitat`, {
+      headers: { authorization: `Bearer ${live.fieldToken}`, accept: "text/html" },
+    });
+    expect(fieldHtml.status).toBe(403);
+    expect(((await fieldHtml.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+
+    const fieldHome = await fetch(`${live.url}/field/home`, {
+      headers: { authorization: `Bearer ${live.fieldToken}` },
+    });
+    const home = (await fieldHome.json()) as { architectControls: unknown[] };
+    expect(home.architectControls).toEqual([]);
+    expect(JSON.stringify(home)).not.toMatch(/\/architect\/bind-adapter|model-id|vendor-base-url/i);
+
+    const fieldPage = await (await fetch(live.url)).text();
+    expect(fieldPage).not.toMatch(/\/architect\/bind-adapter|id="model-id"|Write adapter/i);
+    expect(fieldPage).toMatch(/Architect is not on this surface/);
+
+    const cliDir = await mkdtemp(path.join(os.tmpdir(), "av-hk082-cli-"));
+    const { core: cliCore } = await bootTestFieldCore("wizard", {
+      computerBaseDir: cliDir,
+      adapter: new DryStemAdapter(),
+    });
+    const cliArchitect = cliCore.fieldTokens.issue({ tenantId: "wizard", principal: "architect" });
+    const cli = runArchitectCli(
+      [
+        "architect",
+        "bind-adapter",
+        "--tenant",
+        "wizard",
+        "--model",
+        modelId,
+        "--vendor-base-url",
+        vendorBaseUrl,
+        "--architect-token",
+        cliArchitect.token,
+      ],
+      { computerBaseDir: cliDir },
+    );
+    expect(cli.status).toBe(0);
+    runArchitectCli(
+      [
+        "architect",
+        "set-adapter-credentials",
+        "--tenant",
+        "wizard",
+        "--api-key",
+        apiKey,
+        "--architect-token",
+        cliArchitect.token,
+      ],
+      { computerBaseDir: cliDir },
+    );
+    runArchitectCli(
+      [
+        "architect",
+        "bind-connector",
+        "--tenant",
+        "wizard",
+        "--connector-id",
+        connectorId,
+        "--base-url",
+        baseUrl,
+        "--requires-credentials",
+        "--architect-token",
+        cliArchitect.token,
+      ],
+      { computerBaseDir: cliDir },
+    );
+    runArchitectCli(
+      [
+        "architect",
+        "set-connector-credentials",
+        "--tenant",
+        "wizard",
+        "--connector-id",
+        connectorId,
+        "--secret",
+        secret,
+        "--architect-token",
+        cliArchitect.token,
+      ],
+      { computerBaseDir: cliDir },
+    );
+
+    const httpPaths = computerRoot(live.computerBaseDir, live.tenantId);
+    const cliPaths = computerRoot(cliDir, "wizard");
+    for (const file of [
+      httpPaths.adapterBindFile,
+      httpPaths.adapterCredentialsFile,
+      httpPaths.connectorBindFile,
+      httpPaths.connectorCredentialsFile,
+    ]) {
+      expect(existsSync(file)).toBe(true);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
+    expect(existsSync(path.join(httpPaths.disk, "adapter-bind.json"))).toBe(false);
+    expect(existsSync(path.join(httpPaths.disk, "adapter-credentials.json"))).toBe(false);
+    expect(existsSync(path.join(httpPaths.disk, "connector-bind.json"))).toBe(false);
+    expect(existsSync(path.join(httpPaths.disk, "connector-credentials.json"))).toBe(false);
+
+    const httpBind = loadAdapterBind(httpPaths.adapterBindFile)!;
+    const cliBind = loadAdapterBind(cliPaths.adapterBindFile)!;
+    expect(httpBind.boundBy).toBe("architect");
+    expect(cliBind.boundBy).toBe("architect");
+    expect(httpBind.modelId).toBe(cliBind.modelId);
+    expect(httpBind.vendorBaseUrl).toBe(cliBind.vendorBaseUrl);
+    expect(httpBind).not.toHaveProperty("apiKey");
+
+    const httpCreds = loadAdapterCredentials(httpPaths.adapterCredentialsFile)!;
+    const cliCreds = loadAdapterCredentials(cliPaths.adapterCredentialsFile)!;
+    expect(httpCreds.writtenBy).toBe("architect");
+    expect(cliCreds.writtenBy).toBe("architect");
+    expect(httpCreds.apiKey).toBe(cliCreds.apiKey);
+
+    const httpConn = loadConnectorBindStore(httpPaths.connectorBindFile).connectors[0]!;
+    const cliConn = loadConnectorBindStore(cliPaths.connectorBindFile).connectors[0]!;
+    expect(httpConn.boundBy).toBe("architect");
+    expect(cliConn.boundBy).toBe("architect");
+    expect(httpConn.connectorId).toBe(cliConn.connectorId);
+    expect(httpConn.baseUrl).toBe(cliConn.baseUrl);
+    expect(httpConn.requiresCredentials).toBe(true);
+    expect(httpConn).not.toHaveProperty("secret");
+
+    const httpSecret = loadConnectorCredentialsStore(httpPaths.connectorCredentialsFile).credentials[0]!;
+    const cliSecret = loadConnectorCredentialsStore(cliPaths.connectorCredentialsFile).credentials[0]!;
+    expect(httpSecret.writtenBy).toBe("architect");
+    expect(cliSecret.writtenBy).toBe("architect");
+    expect(httpSecret.secret).toBe(cliSecret.secret);
+
+    const inProcess = architectBindAdapter({
+      tenantId: "in-process",
+      modelId,
+      vendorBaseUrl,
+      computerBaseDir: cliDir,
+      architectToken: cliCore.fieldTokens.issue({ tenantId: "in-process", principal: "architect" }).token,
+    });
+    expect(inProcess.boundBy).toBe("architect");
+    expect(inProcess.modelId).toBe(httpBind.modelId);
+  });
+
+  it("HTTP bind without a model or vendor URL stays fail-closed; no hardcoded vendor", async () => {
+    const live = await liveHttp("unbound");
+    const missing = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "" }),
+    });
+    expect(missing.status).toBe(400);
+    expect(((await missing.json()) as { error: string }).error).toBe("ADAPTER_BIND_REQUIRED");
+    expect(loadAdapterBind(computerRoot(live.computerBaseDir, live.tenantId).adapterBindFile)).toBeUndefined();
+
+    const bound = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "ci-double" }),
+    });
+    expect(bound.status).toBe(201);
+    const record = loadAdapterBind(computerRoot(live.computerBaseDir, live.tenantId).adapterBindFile)!;
+    expect(record.modelId).toBe("ci-double");
+    expect(record.vendorBaseUrl).toBeUndefined();
+    expect(record.boundBy).toBe("architect");
+    expect(() => resolveVendorBaseUrl(undefined, record.vendorBaseUrl)).toThrow(/ADAPTER_VENDOR_URL_MISSING/);
+
+    const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
+    expect(kernelSrc).toMatch(/ADAPTER_UNBOUND/);
+    const pageSrc = readFileSync(path.join(process.cwd(), "src/http/architect-habitat-page.ts"), "utf8");
+    expect(pageSrc).not.toMatch(/gpt-|claude-|api\.openai\.com|api\.anthropic\.com|OPENAI_API_KEY|AV_NO_VENDOR/);
+    expect(pageSrc).toMatch(/Architect sits in the habitat/);
   });
 });

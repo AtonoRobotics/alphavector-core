@@ -110,3 +110,27 @@ export interface FieldHttpErrorBody {
 export type FieldHomeResponse = FieldHome;
 export type FieldCardListResponse = { cards: FieldCardView[] };
 export type ArchitectHabitatResponse = ArchitectHabitatSeat;
+
+/** Architect habitat wizard → architectBindAdapter. Same JSON as CLI. */
+export interface ArchitectBindAdapterBody {
+  modelId: string;
+  vendorBaseUrl?: string;
+}
+
+/** Architect habitat wizard → architectWriteAdapterCredentials. Same JSON as CLI. */
+export interface ArchitectSetAdapterCredentialsBody {
+  apiKey: string;
+}
+
+/** Architect habitat wizard → architectBindConnector. Same JSON as CLI. */
+export interface ArchitectBindConnectorBody {
+  connectorId: string;
+  baseUrl?: string;
+  requiresCredentials?: boolean;
+}
+
+/** Architect habitat wizard → architectWriteConnectorCredentials. Same JSON as CLI. */
+export interface ArchitectSetConnectorCredentialsBody {
+  connectorId: string;
+  secret: string;
+}

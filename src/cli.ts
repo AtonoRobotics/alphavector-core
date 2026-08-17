@@ -134,6 +134,9 @@ async function main(): Promise<void> {
         "habitat reads live org, open runs, workers, grants, eval, isolation. Not five booleans. Not a write. Field cannot sit.",
       );
       console.log(
+        "GET /architect/habitat text/html is the habitat wizard. POST /architect/bind-adapter, set-adapter-credentials, bind-connector, and set-connector-credentials call the same writers as these CLI commands.",
+      );
+      console.log(
         "deploy listens on the recorded host:port for a live tenant (signed L1 pack, started Hull computer, DATABASE_URL) on a non-loopback host and non-ephemeral port. Writing deploy.json without listen is not a deploy. Field-serve on 127.0.0.1 / port 0 / t1 is not a deploy. DryStem and fixture packs are not a deploy. Field cannot deploy. Not a vendor cloud.",
       );
       return;
