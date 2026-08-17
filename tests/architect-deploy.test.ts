@@ -138,7 +138,7 @@ async function liveCore(opts?: {
 
 /** Live tenant that can serve field start/card/kill after architectDeploy listens. Not DryStem. */
 async function liveFieldReady() {
-  const stack = await liveCore({ adapter: new DeepAgentsAdapter(fieldReadyThink) });
+  const stack = await liveCore({ adapter: { adapter: new DeepAgentsAdapter(fieldReadyThink) } });
   const pack = stack.core.packs.active(stack.tenantId);
   if (stack.core.agents.list(stack.tenantId).length === 0) {
     stack.core.agents.instantiateFromPack(pack, "architect");
