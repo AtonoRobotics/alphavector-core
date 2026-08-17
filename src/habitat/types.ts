@@ -150,7 +150,7 @@ export const KERNEL_RUN_BUDGET = 0;
 
 /**
  * Kernel-owned coder trailer isolation lease. Not a field, pack, or adapter
- * control. Desk (role-agent body) is a different lifetime and is not this.
+ * control. The role-agent body is a different lifetime and is not this.
  */
 export const KERNEL_TRAILER_TTL_MS = 4 * 60 * 60 * 1000;
 

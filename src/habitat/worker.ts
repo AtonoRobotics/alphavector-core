@@ -28,7 +28,7 @@ ${hold ? "while true; do sleep 2147483647; done\n" : ""}`;
  * Thin worker book. coder is executor + branch on the tenant computer.
  * Other v1 types are admitted bookings without a second computer primitive.
  * Trailer isolation is torn down on worker_done / kill / kernel TTL.
- * Desk (role-agent Xvfb) is a different lifetime — teardown does not stop it.
+ * The role-agent Xvfb session is a different lifetime — teardown does not stop it.
  * The coder process runs inside the tenant machine (computer.execInMachine / spawnHeld).
  * Not in the kernel process. Not a host Node child of the kernel.
  */

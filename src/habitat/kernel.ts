@@ -541,7 +541,8 @@ export class HabitatKernel {
 
   /**
    * Tear a due coder trailer the same way worker_done / kill do (WorkerBook.teardown).
-   * Isolation lifetime only — does not complete or kill the run. Desk is not this.
+   * Isolation lifetime only — does not complete or kill the run. The
+   * role-agent body is not this.
    * Non-coder bookings have no trailer and no expiry; this does not invent one.
    * Same habitat clock as routines / deadlines / nextWake. Not a second ticker.
    */
