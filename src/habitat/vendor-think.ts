@@ -206,7 +206,7 @@ function asCognitiveIntent(raw: unknown): CognitiveIntent {
     throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
   }
   const intent: CognitiveIntent = { pass: raw.pass, act: raw.act as CognitiveIntent["act"] };
-  if (raw.workerType === "coder") intent.workerType = "coder";
+  if (typeof raw.workerType === "string" && raw.workerType) intent.workerType = raw.workerType;
   if (typeof raw.actionClass === "string") intent.actionClass = raw.actionClass;
   if (typeof raw.channel === "string") intent.channel = raw.channel;
   if (typeof raw.purpose === "string") intent.purpose = raw.purpose;

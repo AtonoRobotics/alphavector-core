@@ -8,7 +8,13 @@ import { AvError } from "../errors.js";
 import { newId, nowIso } from "../ids.js";
 import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 import { copySkillsToTrailer } from "./skills.js";
-import { CODER_TYPE, type SkillFile, type WorkerRecord } from "./types.js";
+import {
+  CODER_TYPE,
+  isAdmittedWorkerType,
+  type SkillFile,
+  type WorkerRecord,
+  type WorkerTypeId,
+} from "./types.js";
 
 /** Busybox/ash on the tenant computer. Alpine has no Node. */
 function coderExecSource(hold?: boolean): string {
@@ -18,9 +24,10 @@ ${hold ? "while true; do sleep 2147483647; done\n" : ""}`;
 }
 
 /**
- * Thin coder worker: executor + branch on the tenant computer.
- * Habitat owns the coder type. Trailer isolation is torn down on worker_done / kill.
- * The process runs inside the tenant machine (computer.execInMachine / spawnHeld).
+ * Thin worker book. coder is executor + branch on the tenant computer.
+ * Other v1 types are admitted bookings without a second computer primitive.
+ * Trailer isolation is torn down on worker_done / kill.
+ * The coder process runs inside the tenant machine (computer.execInMachine / spawnHeld).
  * Not in the kernel process. Not a host Node child of the kernel.
  */
 export interface TenantWorkerStore {
@@ -28,9 +35,10 @@ export interface TenantWorkerStore {
 }
 
 /**
- * Thin coder book. One live worker per tenant, persisted beside runs.json.
+ * Thin worker book. One booked worker per tenant, persisted beside runs.json.
  * Control state, not a business fact. Hydrate from disk; do not invent a worker id.
  * Liveness is pid, not the trailer directory. A leftover trailer is not a live worker.
+ * coder launches on the tenant computer. Other admitted types book without a runtime.
  */
 export class WorkerBook {
   private readonly workers = new Map<string, WorkerRecord>();
@@ -72,6 +80,28 @@ export class WorkerBook {
     return typeof pid === "number" && this.heldHere.has(pid);
   }
 
+  /**
+   * Admit and book a v1 worker type. coder keeps today's trailer launch.
+   * executor / retriever / browser persist as typed workers without a computer spawn.
+   */
+  async book(input: {
+    tenantId: string;
+    runId: string;
+    type: WorkerTypeId;
+    skills?: SkillFile[];
+    hold?: boolean;
+  }): Promise<WorkerRecord> {
+    if (input.type === CODER_TYPE.id) {
+      return this.launch({
+        tenantId: input.tenantId,
+        runId: input.runId,
+        skills: input.skills,
+        hold: input.hold,
+      });
+    }
+    return this.bookTyped(input);
+  }
+
   async launch(input: {
     tenantId: string;
     runId: string;
@@ -83,8 +113,13 @@ export class WorkerBook {
     }
     const existing = this.get(input.tenantId);
     if (existing) {
-      if (isPidAlive(existing.pid)) return existing;
-      return this.spawnTrailer(existing, input.skills, input.hold);
+      if (existing.type !== CODER_TYPE.id) {
+        this.teardown(input.tenantId);
+      } else if (isPidAlive(existing.pid)) {
+        return existing;
+      } else {
+        return this.spawnTrailer(existing, input.skills, input.hold);
+      }
     }
     const workerId = newId("worker");
     const paths = computerRoot(this.computerBaseDir, input.tenantId);
@@ -107,12 +142,12 @@ export class WorkerBook {
 
   trailerExists(tenantId: string): boolean {
     const worker = this.get(tenantId);
-    return Boolean(worker && existsSync(worker.trailerPath));
+    return Boolean(worker?.trailerPath && existsSync(worker.trailerPath));
   }
 
   executorOutput(tenantId: string): string | undefined {
     const worker = this.get(tenantId);
-    if (!worker) return undefined;
+    if (!worker?.trailerPath) return undefined;
     const file = path.join(worker.trailerPath, "executor-output.txt");
     if (!existsSync(file)) return undefined;
     return file;
@@ -135,7 +170,7 @@ export class WorkerBook {
       forgetHeldCoder(worker.pid);
       terminatePid(worker.pid);
     }
-    removeTrailer(worker.trailerPath);
+    if (worker.trailerPath) removeTrailer(worker.trailerPath);
     this.workers.delete(tenantId);
     this.persist(tenantId);
   }
@@ -159,10 +194,32 @@ export class WorkerBook {
     }
   }
 
+  /** Book an admitted non-coder type. No trailer. No computer spawn. No invented runtime. */
+  private bookTyped(input: { tenantId: string; runId: string; type: WorkerTypeId }): WorkerRecord {
+    const existing = this.get(input.tenantId);
+    if (existing?.type === input.type) return existing;
+    if (existing) this.teardown(input.tenantId);
+    const workerId = newId("worker");
+    const record: WorkerRecord = {
+      workerId,
+      tenantId: input.tenantId,
+      runId: input.runId,
+      type: input.type,
+      agent: typedAgent(input.tenantId, workerId, input.type),
+      createdAt: nowIso(),
+    };
+    this.workers.set(input.tenantId, record);
+    this.persist(input.tenantId);
+    return record;
+  }
+
   /** Recreate the trailer/process for this workerId. Does not mint a different id. */
   private async spawnTrailer(record: WorkerRecord, skills?: SkillFile[], hold?: boolean): Promise<WorkerRecord> {
     if (!this.computer) {
       throw new AvError("WORKER_COMPUTER_REQUIRED", "Workers run on the tenant computer");
+    }
+    if (record.type !== CODER_TYPE.id || !record.trailerPath || !record.branch) {
+      throw new AvError("WORKER_COMPUTER_REQUIRED", "Only coder launches on the tenant computer");
     }
     mkdirSync(record.trailerPath, { recursive: true });
     this.initBranch(record.trailerPath, record.branch);
@@ -245,6 +302,19 @@ function coderAgent(tenantId: string, workerId: string): AgentRecord {
   };
 }
 
+function typedAgent(tenantId: string, workerId: string, type: WorkerTypeId): AgentRecord {
+  return {
+    agentId: workerId,
+    tenantId,
+    name: type,
+    persona: `Booked ${type} worker. Not a computer trailer.`,
+    skills: [],
+    specialties: [type],
+    isOrchestrator: false,
+    createdAt: nowIso(),
+  };
+}
+
 export function loadWorkerStore(file: string): TenantWorkerStore {
   let raw: unknown;
   try {
@@ -276,32 +346,49 @@ function parseWorker(raw: unknown): WorkerRecord {
     !raw.tenantId ||
     typeof raw.runId !== "string" ||
     !raw.runId ||
-    raw.type !== CODER_TYPE.id ||
-    raw.isolation !== "trailer" ||
-    typeof raw.trailerPath !== "string" ||
-    !raw.trailerPath ||
-    typeof raw.branch !== "string" ||
-    !raw.branch ||
+    !isAdmittedWorkerType(raw.type) ||
     typeof raw.createdAt !== "string" ||
     !raw.createdAt
   ) {
     throw new AvError("WORKER_STORE_CORRUPT", "Worker store is corrupt; refusing to invent a worker");
   }
-  const record: WorkerRecord = {
+  if (raw.type === CODER_TYPE.id) {
+    if (
+      raw.isolation !== "trailer" ||
+      typeof raw.trailerPath !== "string" ||
+      !raw.trailerPath ||
+      typeof raw.branch !== "string" ||
+      !raw.branch
+    ) {
+      throw new AvError("WORKER_STORE_CORRUPT", "Worker store is corrupt; refusing to invent a worker");
+    }
+    const record: WorkerRecord = {
+      workerId: raw.workerId,
+      tenantId: raw.tenantId,
+      runId: raw.runId,
+      type: CODER_TYPE.id,
+      isolation: "trailer",
+      trailerPath: raw.trailerPath,
+      branch: raw.branch,
+      agent: parseAgent(raw.agent, raw.tenantId),
+      createdAt: raw.createdAt,
+    };
+    if (typeof raw.pid === "number" && Number.isInteger(raw.pid) && raw.pid > 0) {
+      record.pid = raw.pid;
+    }
+    return record;
+  }
+  if (raw.isolation !== undefined || raw.trailerPath !== undefined || raw.branch !== undefined || raw.pid !== undefined) {
+    throw new AvError("WORKER_STORE_CORRUPT", "Worker store is corrupt; refusing to invent a worker");
+  }
+  return {
     workerId: raw.workerId,
     tenantId: raw.tenantId,
     runId: raw.runId,
-    type: CODER_TYPE.id,
-    isolation: "trailer",
-    trailerPath: raw.trailerPath,
-    branch: raw.branch,
+    type: raw.type,
     agent: parseAgent(raw.agent, raw.tenantId),
     createdAt: raw.createdAt,
   };
-  if (typeof raw.pid === "number" && Number.isInteger(raw.pid) && raw.pid > 0) {
-    record.pid = raw.pid;
-  }
-  return record;
 }
 
 function parseAgent(raw: unknown, tenantId: string): AgentRecord {

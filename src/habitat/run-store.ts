@@ -1,7 +1,7 @@
 import { computerRoot } from "../computer/paths.js";
 import { AvError } from "../errors.js";
 import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
-import { KERNEL_RUN_BUDGET, type RunRecord } from "./types.js";
+import { isAdmittedWorkerType, KERNEL_RUN_BUDGET, type RunRecord } from "./types.js";
 
 const STATUSES = new Set([
   "open",
@@ -123,7 +123,12 @@ function parseRun(raw: unknown): RunRecord {
     updatedAt: raw.updatedAt,
   };
   if (typeof raw.workerId === "string") run.workerId = raw.workerId;
-  if (raw.workerType === "coder") run.workerType = "coder";
+  if (raw.workerType !== undefined) {
+    if (!isAdmittedWorkerType(raw.workerType)) {
+      throw new AvError("RUN_STORE_CORRUPT", "Run store is corrupt; refusing to invent a run");
+    }
+    run.workerType = raw.workerType;
+  }
   if (typeof raw.pendingCardId === "string") run.pendingCardId = raw.pendingCardId;
   if (typeof raw.journeyId === "string") run.journeyId = raw.journeyId;
   if (typeof raw.recordId === "string") run.recordId = raw.recordId;

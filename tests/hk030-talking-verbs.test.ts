@@ -153,9 +153,9 @@ describe("HK-030 talking kernel verbs", () => {
     expect(identity).not.toMatch(/T0|T1|T2|T3/);
 
     const typesSrc = readFileSync(path.join(process.cwd(), "src/habitat/types.ts"), "utf8");
-    expect(typesSrc).toMatch(/export type WorkerTypeId = "coder"/);
-    expect(typesSrc).not.toMatch(/WorkerTypeId = "[^"]+" \| "/);
-    expect(typesSrc).not.toMatch(/"retriever"|"browser"|"executor"/);
+    expect(typesSrc).toMatch(/WORKER_TYPE_IDS = \["executor", "coder", "retriever", "browser"\]/);
+    expect(typesSrc).toMatch(/export type WorkerTypeId = \(typeof WORKER_TYPE_IDS\)\[number\]/);
+    expect(typesSrc).not.toMatch(/"analyst"|"researcher"|"planner"/);
 
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");
     expect(kernelSrc).toMatch(/ADAPTER_UNBOUND/);

@@ -183,15 +183,15 @@ export interface ArchitectEvalStatus {
   fixtures: ArchitectEvalFixtureView[];
 }
 
-/** Worker as a habitat record. Isolation is trailer, not a boolean. */
+/** Worker as a habitat record. Trailer isolation is the coder computer primitive. */
 export interface ArchitectWorkerView {
   workerId: string;
   tenantId: string;
   runId: string;
   type: WorkerTypeId;
-  isolation: "trailer";
-  trailerPath: string;
-  branch: string;
+  isolation?: "trailer";
+  trailerPath?: string;
+  branch?: string;
   agentId: string;
   createdAt: string;
 }
