@@ -6,9 +6,11 @@ import {
   saveDeployRecord,
   type DeployRecord,
 } from "../habitat/deploy-store.js";
+import type { FieldHttpServer } from "../http/field-server.js";
 import type { AlphaVectorCore } from "../kernel.js";
 import { FilePackRegistry } from "../packs/file-registry.js";
 import type { TrustAnchors } from "../packs/signing.js";
+import type { LoadedPack } from "../packs/types.js";
 import { requireArchitect } from "./require-architect.js";
 
 const THEATER_TENANT = "t1";
@@ -27,15 +29,24 @@ export interface ArchitectDeployInput {
   anchors?: TrustAnchors;
 }
 
+export interface ArchitectDeployResult {
+  record: DeployRecord;
+  /** In-process field HTTP listen on the recorded host:port. Not persisted. */
+  server: FieldHttpServer;
+}
+
 /**
  * Architect-only production deploy (DEC-020).
  * Field-serve on 127.0.0.1 / port 0 / t1 is not a deploy.
  * DryStem, unsigned fixture, and test boot are not a deploy.
  * A live tenant needs a signed pack (L1 registry, re-verified), a started
  * Hull computer, and configured DATABASE_URL. Missing any is DEPLOY_INCOMPLETE.
+ * Listen on the declared host:port is the deploy. Writing deploy.json
+ * without listen is not a deploy. Listen failure is fail-closed and
+ * leaves no record that claims live.
  * Does not stand up a vendor cloud. Parent House is not on the field glass.
  */
-export async function architectDeploy(input: ArchitectDeployInput): Promise<DeployRecord> {
+export async function architectDeploy(input: ArchitectDeployInput): Promise<ArchitectDeployResult> {
   const tenantId = input.tenantId.trim();
   const host = input.host.trim();
   const port = input.port;
@@ -62,6 +73,7 @@ export async function architectDeploy(input: ArchitectDeployInput): Promise<Depl
     throw new DeployIncompleteError("Hull computer is not started; deploy is incomplete");
   }
 
+  const server = await listenDeclaredField(input.core, pack, tenantId, host, port);
   const record: DeployRecord = {
     tenantId,
     host,
@@ -73,8 +85,40 @@ export async function architectDeploy(input: ArchitectDeployInput): Promise<Depl
     deployedBy: "architect",
     deployedAt: nowIso(),
   };
-  saveDeployRecord(deployFile(input.computerBaseDir, tenantId), record);
-  return record;
+  try {
+    saveDeployRecord(deployFile(input.computerBaseDir, tenantId), record);
+  } catch (err) {
+    await server.close().catch(() => undefined);
+    throw err;
+  }
+  return { record, server };
+}
+
+/**
+ * Bind the existing field HTTP surface on the declared host:port.
+ * Reuses FieldHttpServer start / card / kill. Not startFieldServe.
+ * Not a vendor cloud. Theater refusals already ran.
+ */
+async function listenDeclaredField(
+  core: AlphaVectorCore,
+  pack: LoadedPack,
+  tenantId: string,
+  host: string,
+  port: number,
+): Promise<FieldHttpServer> {
+  const { FieldHttpServer } = await import("../http/field-server.js");
+  const server = new FieldHttpServer({ core, pack, tenantId });
+  try {
+    const listened = await server.listen(port, host);
+    if (listened.port !== port) {
+      throw new DeployIncompleteError("Field listen did not bind the declared port; deploy is incomplete");
+    }
+    return server;
+  } catch (err) {
+    await server.close().catch(() => undefined);
+    if (err instanceof DeployIncompleteError) throw err;
+    throw new DeployIncompleteError("Field listen failed; deploy is incomplete");
+  }
 }
 
 /**

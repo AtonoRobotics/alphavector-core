@@ -1,9 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
+import net from "node:net";
+import type { AddressInfo } from "node:net";
 import os from "os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { architectBindAdapter } from "../src/auth/architect-adapter-bind.js";
 import { architectDeploy, fieldDeploy, isFieldServeTheater } from "../src/auth/architect-deploy.js";
 import { architectIssueFieldToken } from "../src/auth/architect-field-token.js";
 import { ComputerHost } from "../src/computer/host.js";
@@ -11,8 +14,12 @@ import { computerRoot } from "../src/computer/paths.js";
 import type { TenantComputer } from "../src/computer/types.js";
 import { DeployIncompleteError, SurfaceViolationError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
-import { readTenantDeploy } from "../src/habitat/deploy-store.js";
+import { adapterThink, DeepAgentsAdapter } from "../src/habitat/deep-agents.js";
+import { deployFile, readTenantDeploy, saveDeployRecord } from "../src/habitat/deploy-store.js";
+import { nowIso } from "../src/ids.js";
+import type { AdapterInput, CognitiveIntent } from "../src/habitat/types.js";
 import { bootFieldCore } from "../src/http/field-boot.js";
+import { FieldClient } from "../src/http/field-client.js";
 import { startFieldServe } from "../src/http/field-listen.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
 import { AlphaVectorCore } from "../src/kernel.js";
@@ -20,6 +27,7 @@ import {
   ALPHAVECTOR_RE_PIN_SHA,
   REPO_ROOT,
   bootTestFieldCore,
+  createOpenStart,
   signedGenericPack,
   withProductTrustEnv,
 } from "./helpers.js";
@@ -36,6 +44,38 @@ afterEach(async () => {
     await servers.pop()?.close();
   }
 });
+
+/** CI thinkFn that books retriever (no Hull spawn) so start/card/kill can hit the listen. */
+function fieldReadyThink(input: AdapterInput): CognitiveIntent {
+  const intent = adapterThink(input);
+  if (intent.pass === "talking" && intent.act === "launch_worker") {
+    return { ...intent, workerType: "retriever" };
+  }
+  return intent;
+}
+
+function occupyPort(host: string): Promise<{ port: number; close: () => Promise<void> }> {
+  return new Promise((resolve, reject) => {
+    const held = net.createServer();
+    held.once("error", reject);
+    held.listen(0, host, () => {
+      const addr = held.address() as AddressInfo;
+      resolve({
+        port: addr.port,
+        close: () =>
+          new Promise((res, rej) => {
+            held.close((err) => (err ? rej(err) : res()));
+          }),
+      });
+    });
+  });
+}
+
+async function freePort(host: string): Promise<number> {
+  const held = await occupyPort(host);
+  await held.close();
+  return held.port;
+}
 
 function runningStatus(tenantId: string, status: TenantComputer["status"] = "running"): TenantComputer {
   return {
@@ -94,6 +134,23 @@ async function liveCore(opts?: {
     architectToken: architect.token,
     fieldToken: field.token,
   };
+}
+
+/** Live tenant that can serve field start/card/kill after architectDeploy listens. Not DryStem. */
+async function liveFieldReady() {
+  const stack = await liveCore({ adapter: new DeepAgentsAdapter(fieldReadyThink) });
+  const pack = stack.core.packs.active(stack.tenantId);
+  if (stack.core.agents.list(stack.tenantId).length === 0) {
+    stack.core.agents.instantiateFromPack(pack, "architect");
+  }
+  stack.core.habitat.setPack(stack.tenantId, pack);
+  architectBindAdapter({
+    tenantId: stack.tenantId,
+    modelId: "ci-double",
+    computerBaseDir: stack.computerBaseDir,
+    architectToken: stack.architectToken,
+  });
+  return stack;
 }
 
 function runArchitectCli(
@@ -239,20 +296,23 @@ describe("production deploy is Architect-only", () => {
     expect(readTenantDeploy(noDb.computerBaseDir, noDb.tenantId)).toBeUndefined();
   });
 
-  it("Architect can deploy a live tenant that has signed pack + computer + DATABASE_URL", async () => {
-    const stack = await liveCore();
-    const record = await architectDeploy({
+  it("Architect deploy listens on the recorded host:port; a ledger write is not a deploy", async () => {
+    const stack = await liveFieldReady();
+    const port = await freePort("0.0.0.0");
+    const { record, server } = await architectDeploy({
       tenantId: stack.tenantId,
       computerBaseDir: stack.computerBaseDir,
       core: stack.core,
       host: "0.0.0.0",
-      port: 8443,
+      port,
       architectToken: stack.architectToken,
+      env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL || "postgres://av:av@127.0.0.1:5432/av" },
     });
+    servers.push(server);
     expect(record.deployedBy).toBe("architect");
     expect(record.tenantId).toBe("live-1");
     expect(record.host).toBe("0.0.0.0");
-    expect(record.port).toBe(8443);
+    expect(record.port).toBe(port);
     expect(record.computerStatus).toBe("running");
     expect(record.databaseConfigured).toBe(true);
     expect(record.packId).toBeTruthy();
@@ -262,6 +322,61 @@ describe("production deploy is Architect-only", () => {
     expect(isFieldServeTheater({ tenantId: record.tenantId, host: record.host, port: record.port })).toBe(
       false,
     );
+
+    const field = new FieldClient(`http://${record.host}:${record.port}`, stack.fieldToken);
+    const { journey } = await createOpenStart(field, "inquiry", "Work this inquiry");
+    expect(journey.journeyKind).toBe("inquiry");
+    const cards = await field.cards();
+    expect(cards.length).toBeGreaterThan(0);
+    await expect(field.kill("stop")).resolves.toEqual({ ok: true });
+
+    const ghostPort = await freePort("0.0.0.0");
+    const ghostDir = await mkdtemp(path.join(os.tmpdir(), "av-deploy-ghost-"));
+    const ghost = {
+      tenantId: "ghost-1",
+      host: "0.0.0.0",
+      port: ghostPort,
+      packId: record.packId,
+      packVersion: record.packVersion,
+      computerStatus: "running" as const,
+      databaseConfigured: true as const,
+      deployedBy: "architect" as const,
+      deployedAt: nowIso(),
+    };
+    saveDeployRecord(deployFile(ghostDir, ghost.tenantId), ghost);
+    expect(readTenantDeploy(ghostDir, ghost.tenantId)).toEqual(ghost);
+    await expect(
+      fetch(`http://${ghost.host}:${ghost.port}/field/kill`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${stack.fieldToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ reason: "ledger write is not a listen" }),
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("listen failure is DEPLOY_INCOMPLETE and does not write deploy.json", async () => {
+    const stack = await liveFieldReady();
+    const held = await occupyPort("0.0.0.0");
+    try {
+      await expect(
+        architectDeploy({
+          tenantId: stack.tenantId,
+          computerBaseDir: stack.computerBaseDir,
+          core: stack.core,
+          host: "0.0.0.0",
+          port: held.port,
+          architectToken: stack.architectToken,
+          env: { ...process.env, DATABASE_URL: process.env.DATABASE_URL || "postgres://av:av@127.0.0.1:5432/av" },
+        }),
+      ).rejects.toMatchObject({
+        code: "DEPLOY_INCOMPLETE",
+        closed: true,
+        message: expect.stringMatching(/listen/i),
+      });
+      expect(readTenantDeploy(stack.computerBaseDir, stack.tenantId)).toBeUndefined();
+    } finally {
+      await held.close();
+    }
   });
 
   it("Field cannot deploy (SURFACE_VIOLATION / 403)", async () => {
