@@ -162,7 +162,7 @@ export class FieldHttpServer {
 
     if (method === "POST" && path === "/field/journeys") {
       const body = (await readJson(req)) as FieldStartBody;
-      assertFieldCannotSetNextWake(body as Record<string, unknown>);
+      assertFieldCannotSetNextWake(body as unknown as Record<string, unknown>);
       const journey = core.field.start({
         actor,
         pack,
