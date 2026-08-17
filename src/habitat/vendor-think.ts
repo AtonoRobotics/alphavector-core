@@ -3,6 +3,13 @@ import {
   copyTalkingShallNotMarkers,
   isTalkingShallNotAct,
 } from "./talking-shall-not.js";
+import {
+  decisionAssumptionsError,
+  decisionNextWakeOrStopError,
+  decisionRisksError,
+  hasNextWakeOrStop,
+  isStringArray,
+} from "./typed-decision.js";
 import type { AdapterCredentials, AdapterInput, CognitiveIntent, LabeledMemory } from "./types.js";
 
 /**
@@ -45,8 +52,8 @@ export interface VendorThinkRequest {
 export const VENDOR_THINK_PATH = "/v1/chat/completions";
 export const VENDOR_BASE_URL_ENV = "AV_VENDOR_BASE_URL";
 
-const INTENT_SYSTEM =
-  "Return only a JSON object with keys pass, act, and optional workerType, actionClass, channel, purpose, subject, nextWake, brief, body.";
+export const INTENT_SYSTEM =
+  "Return only a JSON object with keys pass, act, assumptions, risks. Include nextWake unless act is done. Optional keys: workerType, actionClass, channel, purpose, subject, brief, body.";
 
 export function vendorThinkHandles(input: AdapterInput): VendorThinkHandles {
   const skills = input.skills
@@ -205,7 +212,21 @@ function asCognitiveIntent(raw: unknown): CognitiveIntent {
   ) {
     throw new AvError("ADAPTER_VENDOR_REJECTED", "Hosted model returned an unusable think body");
   }
-  const intent: CognitiveIntent = { pass: raw.pass, act: raw.act as CognitiveIntent["act"] };
+  if (!isStringArray(raw.assumptions)) {
+    throw decisionAssumptionsError();
+  }
+  if (!isStringArray(raw.risks)) {
+    throw decisionRisksError();
+  }
+  if (!hasNextWakeOrStop({ act: String(raw.act), nextWake: raw.nextWake })) {
+    throw decisionNextWakeOrStopError();
+  }
+  const intent: CognitiveIntent = {
+    pass: raw.pass,
+    act: raw.act as CognitiveIntent["act"],
+    assumptions: raw.assumptions,
+    risks: raw.risks,
+  };
   if (typeof raw.workerType === "string" && raw.workerType) intent.workerType = raw.workerType;
   if (typeof raw.actionClass === "string") intent.actionClass = raw.actionClass;
   if (typeof raw.channel === "string") intent.channel = raw.channel;

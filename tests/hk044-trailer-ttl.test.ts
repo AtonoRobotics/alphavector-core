@@ -11,6 +11,7 @@ import type { DesktopSession } from "../src/computer/types.js";
 import { SurfaceViolationError } from "../src/errors.js";
 import { dryThink, DryStemAdapter } from "../src/habitat/adapter.js";
 import {
+  fixtureTypedDecision,
   isPidAlive,
   KERNEL_TRAILER_TTL_MS,
   reapHeldCoders,
@@ -78,7 +79,7 @@ function talkingLaunch(workerType: WorkerTypeId): CognitiveAdapter {
     requiresBind: false,
     think(input) {
       if (input.pass === "worker") return dryThink(input);
-      return { pass: "talking", act: "launch_worker", workerType };
+      return fixtureTypedDecision({ pass: "talking", act: "launch_worker", workerType });
     },
   };
 }

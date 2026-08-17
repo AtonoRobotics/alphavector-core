@@ -287,6 +287,7 @@ export class FieldHttpServer {
 
     if (method === "POST" && path === "/field/ask") {
       const body = (await readJson(req)) as FieldAskBody;
+      assertFieldCannotSetNextWake(body as unknown as Record<string, unknown>);
       assertFieldCannotSetTrailerTtl(body as unknown as Record<string, unknown>);
       assertFieldCannotWriteBriefOrSteer(body as unknown as Record<string, unknown>);
       core.field.ask({
@@ -680,10 +681,16 @@ function assertFieldContinueIsWakeOnly(body: Record<string, unknown>): void {
   }
 }
 
-/** Field SHALL NOT set run.nextWake. Kernel writes it from a validated adapter decision. */
+/** Field SHALL NOT set run.nextWake, assumptions, or risks. Kernel-owned typed decision. */
 function assertFieldCannotSetNextWake(body: Record<string, unknown>): void {
   if (body.nextWake !== undefined) {
     throw new SurfaceViolationError("Field SHALL NOT set nextWake");
+  }
+  if (body.assumptions !== undefined) {
+    throw new SurfaceViolationError("Field SHALL NOT set assumptions");
+  }
+  if (body.risks !== undefined) {
+    throw new SurfaceViolationError("Field SHALL NOT set risks");
   }
 }
 

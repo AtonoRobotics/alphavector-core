@@ -111,6 +111,16 @@ export interface WakeEvent {
    */
   nextWake?: string;
   /**
+   * Rejected. Field SHALL NOT set adapter assumptions. Kernel-owned typed
+   * decision. Field never writes this.
+   */
+  assumptions?: string[];
+  /**
+   * Rejected. Field SHALL NOT set adapter risks. Kernel-owned typed
+   * decision. Field never writes this.
+   */
+  risks?: string[];
+  /**
    * Rejected. Field SHALL NOT set or extend trailer TTL. Kernel stamps
    * WorkerRecord.expiresAt from KERNEL_TRAILER_TTL_MS. Same class as
    * KERNEL_RUN_BUDGET / field cannot set nextWake.
@@ -346,6 +356,16 @@ export type TalkingAct = "launch_worker" | "propose_effect" | "done" | "follow_u
 export interface CognitiveIntent {
   pass: AdapterPass;
   act: TalkingAct;
+  /**
+   * Required typed decision. Empty array is a decision that there are none.
+   * Omitting the field is fail-closed.
+   */
+  assumptions: string[];
+  /**
+   * Required typed decision. Empty array is a decision that there are none.
+   * Omitting the field is fail-closed.
+   */
+  risks: string[];
   /** Talking request. Kernel admits into WorkerTypeId. A type outside the set fails closed. */
   workerType?: string;
   actionClass?: string;
@@ -357,9 +377,9 @@ export interface CognitiveIntent {
   body?: string;
   from?: string;
   /**
-   * Optional ISO due time. Kernel persists this onto run.nextWake after
-   * validation. Absent means the adapter did not decide. Empty clears.
-   * Invalid or unvalidated is fail-closed — do not persist.
+   * ISO due time or empty (clear). Required unless act is done (stop).
+   * Kernel persists this onto run.nextWake only after validation.
+   * Absent and not done is fail-closed — do not persist.
    */
   nextWake?: string;
   /**
