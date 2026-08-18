@@ -18,12 +18,15 @@ export function architectWriteAdapterAggregator(input: {
   combine: string;
   computerBaseDir: string;
   architectToken?: string;
+  allowHeldSeat?: boolean;
 }): AdapterAggregatorRecord {
   const combine = input.combine.trim();
   if (!combine) {
     throw new AvError("ADAPTER_AGGREGATOR_REQUIRED", "Architect aggregator write requires a combine");
   }
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    allowHeldSeat: input.allowHeldSeat,
+  });
   const record: AdapterAggregatorRecord = {
     tenantId: input.tenantId,
     combine,

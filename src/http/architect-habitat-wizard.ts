@@ -63,15 +63,6 @@ const GUIDED_SUB: ProviderFields = {
   glmPlan: "hidden",
 };
 
-const API_KEY_OFFICIAL_BASE: ProviderFields = {
-  subscriptionAuth: "hidden",
-  startUrl: "hidden",
-  apiKey: "required",
-  vendorBaseUrl: "hidden",
-  modelId: "required",
-  glmPlan: "hidden",
-};
-
 const API_KEY_OPTIONAL_URL: ProviderFields = {
   subscriptionAuth: "hidden",
   startUrl: "hidden",
@@ -118,7 +109,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     bindModelId: "codex-subscription",
     guidedActionLabel: "Sign in",
     guidedLead:
-      "Codex Subscription starts first-party Codex CLI device-code. Core owns issuer and client. Architect does not type an issuer URL. If device-code is admin-gated, that fails closed; Codex API key paste is the usage-billed fallback.",
+      "Codex Subscription starts first-party Codex CLI device-code. Core owns issuer and client. Architect does not type an issuer URL. Login only.",
     fields: GUIDED_SUB,
   },
   {
@@ -128,7 +119,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     bindModelId: "grok-subscription",
     guidedActionLabel: "Sign in",
     guidedLead:
-      "Grok Subscription starts first-party grok-build device-code. Core owns issuer and client. Architect does not type an issuer URL. This is SuperGrok session, not api.x.ai key billing. If device-code is admin-gated, that fails closed; Grok API key paste is the usage-billed fallback.",
+      "Grok Subscription starts first-party grok-build device-code. Core owns issuer and client. Architect does not type an issuer URL. This is SuperGrok session. Login only.",
     fields: GUIDED_SUB,
   },
   {
@@ -138,7 +129,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     bindModelId: "glm-subscription",
     guidedActionLabel: "Continue with Z.ai",
     guidedLead:
-      "Continue with Z.ai starts official Z.ai account authorize. Architect does not type an issuer. No API-key field on this choice. If Habitat cannot start the official desktop authorize without inventing a client_id, this fails closed. API key is the separate GLM API choice.",
+      "Continue with Z.ai starts official ZCode desktop authorize. Core owns the first-party client and redirect. Architect does not type an issuer. Login only.",
     fields: GUIDED_SUB,
   },
   {
@@ -148,40 +139,10 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     fields: API_KEY_OPTIONAL_URL,
   },
   {
-    id: "api-codex",
-    label: "Codex",
-    mode: "api",
-    fields: API_KEY_OPTIONAL_URL,
-  },
-  {
-    id: "api-grok",
-    label: "Grok",
-    mode: "api",
-    officialBaseUrl: GROK_OFFICIAL_API_BASE,
-    officialKeyUrl: GROK_OFFICIAL_CONSOLE_URL,
-    billingNote: "API key (usage-billed). SuperGrok session is the Grok Subscription choice.",
-    fields: API_KEY_OFFICIAL_BASE,
-  },
-  {
     id: "api-kimi",
     label: "Kimi",
     mode: "api",
     fields: API_KEY_OPTIONAL_URL,
-  },
-  {
-    id: "api-glm",
-    label: "GLM",
-    mode: "api",
-    officialKeyUrl: GLM_OFFICIAL_KEY_URL,
-    billingNote: "API key (usage-billed). Coding Plan vs PAYG use different official documented base URLs.",
-    fields: {
-      subscriptionAuth: "hidden",
-      startUrl: "hidden",
-      apiKey: "required",
-      vendorBaseUrl: "hidden",
-      modelId: "required",
-      glmPlan: "required",
-    },
   },
   {
     id: "api-generic-openai",

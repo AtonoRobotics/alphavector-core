@@ -14,7 +14,10 @@ export function architectSit(input: {
   computerBaseDir: string;
   surface: ArchitectSurface;
   architectToken?: string;
+  allowHeldSeat?: boolean;
 }): ArchitectHabitatSeat {
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    allowHeldSeat: input.allowHeldSeat,
+  });
   return input.surface.sit(input.tenantId);
 }

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { AvError } from "../errors.js";
 import { vendorFetch } from "./vendor-fetch.js";
 
@@ -6,8 +7,8 @@ import { vendorFetch } from "./vendor-fetch.js";
  *
  * Codex: openai/codex custom device-auth (auth.openai.com + public Codex CLI client).
  * Grok: xai-org/grok-build RFC 8628 (auth.x.ai + grok-build client in config.rs / install.sh).
- * GLM: official Z.ai account authorize (Continue with Z.ai). No first-party published
- * client_id or OIDC issuer Habitat can start. Fail closed. Not API-key paste.
+ * GLM: official ZCode desktop Continue with Z.ai auth-code (client / authorize /
+ * redirect / token / business-login as shipped in ZCode 3.7.7 `out/host/index.js`).
  *
  * HTTP never returns the session. Does not copy ~/.codex|grok|zcode auth files.
  */
@@ -35,6 +36,11 @@ export type OfficialLoginPollHandle =
   | {
       kind: "grok-device";
       deviceCode: string;
+    }
+  | {
+      kind: "glm-auth-code";
+      state: string;
+      redirectUri: string;
     };
 
 export const CODEX_ISSUER = "https://auth.openai.com";
@@ -72,8 +78,41 @@ export const GROK_SCOPES = [
   "workspaces:write",
 ] as const;
 
-/** Official Z.ai desktop/account login exchange. Requires an already-issued token. */
+/**
+ * First-party ZCode desktop Z.ai client. Same class as grok-build `CLIENT_ID`.
+ * Source: official ZCode 3.7.7 `out/host/index.js` `$G` / `createZaiProviderRuntimeConfig`
+ * / `ZaiProviderAdapter.buildAuthorizeUrl`.
+ */
+export const GLM_CLIENT_ID = "client_P8X5CMWmlaRO9gyO-KSqtg";
+export const GLM_AUTHORIZE_URL = "https://chat.z.ai/api/oauth/authorize";
+export const GLM_TOKEN_URL = "https://zcode.z.ai/api/v1/oauth/token";
+export const GLM_USERINFO_URL = "https://chat.z.ai/api/oauth/userinfo";
+/** Official custom-protocol callback shipped on `$G.redirectUri`. */
+export const GLM_CALLBACK_URI = "zcode://oauth/callback";
+/**
+ * Runtime redirect ZCode desktop actually sends (`buildDesktopOAuthRedirectUriFromEnv`).
+ * `https://zcode.z.ai/app/oauth/login?redirect=zcode://oauth/callback`
+ */
+export const GLM_REDIRECT_URI = `https://zcode.z.ai/app/oauth/login?redirect=${GLM_CALLBACK_URI}`;
+/** Official Z.ai business-login exchange after auth-code token (`ZaiBusinessTokenResolver`). */
 export const GLM_ACCOUNT_LOGIN_URL = "https://api.z.ai/api/auth/z/login";
+
+const glmAuthCodes = new Map<string, string>();
+
+/** Habitat / tests receive the official callback `code`/`authCode` for a held state. */
+export function receiveGlmAuthorizationCode(state: string, code: string): void {
+  const held = state.trim();
+  const issued = code.trim();
+  if (!held || !issued) return;
+  glmAuthCodes.set(held, issued);
+}
+
+function takeGlmAuthorizationCode(state: string): string | undefined {
+  const code = glmAuthCodes.get(state);
+  if (!code) return undefined;
+  glmAuthCodes.delete(state);
+  return code;
+}
 
 export function isNamedSubscriptionId(value: string): value is NamedSubscriptionId {
   return value === "sub-codex" || value === "sub-grok" || value === "sub-glm";
@@ -92,9 +131,10 @@ export async function pollOfficialSubscriptionLogin(
 ): Promise<OfficialLoginPoll> {
   if (handle.kind === "codex-device") return pollCodexDeviceLogin(handle);
   if (handle.kind === "grok-device") return pollGrokDeviceLogin(handle);
+  if (handle.kind === "glm-auth-code") return pollGlmAuthCodeLogin(handle);
   throw new AvError(
     "SUBSCRIPTION_PROVIDER_REQUIRED",
-    "Guided subscription login is Codex device-code or Grok device-code",
+    "Guided subscription login is Codex device-code, Grok device-code, or GLM auth-code",
   );
 }
 
@@ -104,7 +144,7 @@ async function startCodexDeviceLogin(): Promise<OfficialLoginStart> {
   if (res.status === 404) {
     throw new AvError(
       "SUBSCRIPTION_AUTH_NOT_ENABLED",
-      "Codex device-code login is not enabled. Use Codex API (usage-billed) and paste an API key. Do not type an issuer URL.",
+      "Codex device-code login is not enabled. Do not type an issuer URL.",
     );
   }
   const raw = await readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Codex device start returned an unusable body");
@@ -210,7 +250,7 @@ async function startGrokDeviceLogin(): Promise<OfficialLoginStart> {
   if (res.status === 404) {
     throw new AvError(
       "SUBSCRIPTION_AUTH_NOT_ENABLED",
-      "Grok device-code login is not enabled. Use Grok API (usage-billed) and paste an API key. Do not type an issuer URL.",
+      "Grok device-code login is not enabled. Do not type an issuer URL.",
     );
   }
   const raw = await readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Grok device start returned an unusable body");
@@ -276,11 +316,82 @@ async function pollGrokDeviceLogin(handle: { deviceCode: string }): Promise<Offi
   };
 }
 
-function startGlmAccountAuthorize(): never {
-  throw new AvError(
-    "SUBSCRIPTION_AUTH_NOT_ENABLED",
-    "GLM Subscription is official Z.ai account authorize (Continue with Z.ai). Z.ai publishes no first-party client_id or OIDC issuer Habitat can start. POST api.z.ai/api/auth/z/login only exchanges an already-issued token. oauth/cli/init is 404. Do not type an issuer. Do not paste an API key on this choice.",
-  );
+function startGlmAccountAuthorize(): OfficialLoginStart {
+  const state = randomBytes(32).toString("hex");
+  const params = new URLSearchParams({
+    redirect_uri: GLM_REDIRECT_URI,
+    response_type: "code",
+    client_id: GLM_CLIENT_ID,
+    state,
+  });
+  return {
+    providerId: "sub-glm",
+    verificationUri: `${GLM_AUTHORIZE_URL}?${params.toString()}`,
+    intervalSec: 2,
+    poll: { kind: "glm-auth-code", state, redirectUri: GLM_REDIRECT_URI },
+  };
+}
+
+async function pollGlmAuthCodeLogin(handle: {
+  state: string;
+  redirectUri: string;
+}): Promise<OfficialLoginPoll> {
+  const code = takeGlmAuthorizationCode(handle.state);
+  if (!code) return { status: "authorization_pending" };
+  const exchanged = await exchangeGlmAuthorizationCode(code, handle);
+  const accessToken = await exchangeGlmBusinessToken(exchanged.zaiAccessToken);
+  return {
+    status: "complete",
+    accessToken,
+    ...(exchanged.zcodeJwtToken ? { refreshToken: exchanged.zcodeJwtToken } : {}),
+  };
+}
+
+async function exchangeGlmAuthorizationCode(
+  code: string,
+  handle: { state: string; redirectUri: string },
+): Promise<{ zaiAccessToken: string; zcodeJwtToken?: string }> {
+  const raw = await postJsonRecord(GLM_TOKEN_URL, {
+    provider: "zai",
+    code,
+    redirect_uri: handle.redirectUri,
+    state: handle.state,
+  });
+  const envelopeCode = raw.code;
+  if (envelopeCode !== undefined && envelopeCode !== 0 && envelopeCode !== "0") {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "ZCode official login rejected the auth-code exchange");
+  }
+  const data = isRecord(raw.data) ? raw.data : raw;
+  const zai = isRecord(data.zai) ? data.zai : undefined;
+  const zaiAccessToken =
+    stringField(zai ?? {}, "access_token") ?? stringField(data, "access_token") ?? stringField(data, "accessToken");
+  const zcodeJwtToken = stringField(data, "token") ?? stringField(data, "zcodeJwtToken");
+  if (!zaiAccessToken) {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "ZCode official login must return data.zai.access_token");
+  }
+  return { zaiAccessToken, ...(zcodeJwtToken ? { zcodeJwtToken } : {}) };
+}
+
+async function exchangeGlmBusinessToken(oauthAccessToken: string): Promise<string> {
+  const raw = await postJsonRecord(GLM_ACCOUNT_LOGIN_URL, { token: oauthAccessToken });
+  const envelopeCode = raw.code;
+  if (envelopeCode !== undefined && envelopeCode !== 0 && envelopeCode !== 200 && envelopeCode !== "0" && envelopeCode !== "200") {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Z.ai official login rejected the account authorize");
+  }
+  if (raw.success === false) {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Z.ai official login rejected the account authorize");
+  }
+  const data = isRecord(raw.data) ? raw.data : raw;
+  const accessToken = stringField(data, "access_token") ?? stringField(data, "accessToken");
+  if (!accessToken) {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Z.ai official login must return a business access token");
+  }
+  return accessToken;
+}
+
+async function postJsonRecord(url: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const res = await postJson(url, body);
+  return readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Official ZCode login returned an unusable body");
 }
 
 async function postJson(url: string, body: Record<string, unknown>): Promise<Response> {

@@ -18,12 +18,15 @@ export function architectWriteAdapterCredentials(input: {
   refreshToken?: string;
   computerBaseDir: string;
   architectToken?: string;
+  allowHeldSeat?: boolean;
 }): AdapterCredentialsRecord {
   const apiKey = input.apiKey.trim();
   if (!apiKey) {
     throw new AvError("ADAPTER_CREDENTIALS_REQUIRED", "Architect credentials write requires an api key");
   }
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    allowHeldSeat: input.allowHeldSeat,
+  });
   const refreshToken = input.refreshToken?.trim();
   const record: AdapterCredentialsRecord = {
     tenantId: input.tenantId,

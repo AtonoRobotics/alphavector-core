@@ -79,9 +79,12 @@ export async function architectStartSubscriptionAuth(input: {
   providerId: string;
   computerBaseDir: string;
   architectToken?: string;
+  allowHeldSeat?: boolean;
   hold: SubscriptionAuthHold;
 }): Promise<SubscriptionAuthStarted> {
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    allowHeldSeat: input.allowHeldSeat,
+  });
   const provider = findProvider(input.providerId);
   if (!provider || provider.mode !== "subscription" || provider.fields.subscriptionAuth !== "guided") {
     throw new AvError(
@@ -116,9 +119,12 @@ export async function architectCompleteSubscriptionAuth(input: {
   authId: string;
   computerBaseDir: string;
   architectToken?: string;
+  allowHeldSeat?: boolean;
   hold: SubscriptionAuthHold;
 }): Promise<SubscriptionAuthPending | SubscriptionAuthBound> {
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    allowHeldSeat: input.allowHeldSeat,
+  });
   const authId = input.authId.trim();
   if (!authId) {
     throw new AvError("SUBSCRIPTION_AUTH_REQUIRED", "Guided subscription auth must be started first");
@@ -142,6 +148,7 @@ export async function architectCompleteSubscriptionAuth(input: {
     modelId: session.modelId,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
+    allowHeldSeat: input.allowHeldSeat,
   });
   architectWriteAdapterCredentials({
     tenantId: input.tenantId,
@@ -149,6 +156,7 @@ export async function architectCompleteSubscriptionAuth(input: {
     refreshToken: polled.refreshToken,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
+    allowHeldSeat: input.allowHeldSeat,
   });
   input.hold.drop(authId);
   return {

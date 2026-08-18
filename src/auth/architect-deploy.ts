@@ -23,6 +23,7 @@ export interface ArchitectDeployInput {
   host: string;
   port: number;
   architectToken?: string;
+  allowHeldSeat?: boolean;
   /** Env for DATABASE_URL. Defaults to process.env. Not a field control. */
   env?: NodeJS.ProcessEnv;
   /** Trust anchors used to re-verify the L1 registry pack. Defaults to the core loader anchors. */
@@ -53,7 +54,9 @@ export async function architectDeploy(input: ArchitectDeployInput): Promise<Arch
   if (!tenantId) {
     throw new DeployIncompleteError("Tenant id is required; deploy is incomplete");
   }
-  requireArchitect(tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(tenantId, input.computerBaseDir, input.architectToken, {
+    allowHeldSeat: input.allowHeldSeat,
+  });
   assertNotTheater({ tenantId, host, port });
   assertNotFixtureStem(input.core.habitat.cognitiveAdapterName());
 

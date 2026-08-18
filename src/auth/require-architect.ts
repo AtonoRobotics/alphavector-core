@@ -4,15 +4,19 @@ import { AvError, SurfaceViolationError } from "../errors.js";
 /**
  * Architect write gate. Same class as field-token issue/revoke and adapter bind.
  * Shell is not Architect. A field token cannot pass.
+ * Habitat HTTP may use the deploy-held Architect seat on the tenant computer
+ * (`allowHeldSeat`) instead of a pasted secret. CLI still presents a credential.
  */
 export function requireArchitect(
   tenantId: string,
   computerBaseDir: string,
   presented: string | undefined,
+  opts?: { allowHeldSeat?: boolean },
 ): void {
   const book = new FieldTokenBook(computerBaseDir);
   const secret = presented?.trim() ? presented.trim() : undefined;
   if (!secret) {
+    if (opts?.allowHeldSeat && book.hasActiveArchitect(tenantId)) return;
     throw new SurfaceViolationError("Shell is not Architect. Present an Architect credential.");
   }
   const principal = book.lookup(secret, tenantId);

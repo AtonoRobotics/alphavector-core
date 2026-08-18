@@ -1,20 +1,11 @@
 import { GLASS, PRODUCT } from "../identity.js";
-import {
-  GLM_CODING_PLAN_BASE,
-  GLM_PAYG_API_BASE,
-  GLM_OFFICIAL_KEY_URL,
-  GLM_PLANS,
-  HABITAT_CONNECTORS,
-  HABITAT_PROVIDERS,
-  WIZARD_STEPS,
-  type AttachMode,
-} from "./architect-habitat-wizard.js";
+import { HABITAT_CONNECTORS, HABITAT_PROVIDERS, WIZARD_STEPS, type AttachMode } from "./architect-habitat-wizard.js";
 
 /**
  * Habitat wizard page (HK-082). Off `/field`. Not a named desktop.
  * Unauthenticated GET may serve this inert shell when Accept is text/html.
- * The page collects an already-issued Architect credential in the browser;
- * subsequent `/architect/*` calls send it as Authorization. The GET does not.
+ * Architect seat is the deploy-held session on the tenant computer, or a real
+ * Architect login. The wizard does not collect a pasted Architect credential.
  *
  * Add path is a stepped wizard. Admin inspects/edits already-bound settings
  * and cannot attach a new model or connector.
@@ -132,8 +123,7 @@ export function architectHabitatPageHtml(): string {
 
       <section class="band step" data-wizard-step="session" aria-label="Architect session">
         <h2>1. Architect session</h2>
-        <label for="token">Issued Architect credential</label>
-        <input id="token" autocomplete="off" spellcheck="false" />
+        <p class="lead">Architect sits in this habitat. The deploy-held Architect session is this seat.</p>
         <button id="session-continue" type="button">Continue</button>
       </section>
 
@@ -158,11 +148,6 @@ export function architectHabitatPageHtml(): string {
         <div id="official-key-docs" class="field" hidden>
           <p id="official-billing-note" class="lead"></p>
           <p id="official-key-link" class="lead"></p>
-        </div>
-        <div id="glm-plan-field" class="field" hidden>
-          <p class="lead">API key. Coding Plan vs PAYG use official documented base URLs. Architect does not type a host.</p>
-          <label for="glm-plan-coding"><input id="glm-plan-coding" type="radio" name="glm-plan" checked /> ${GLM_PLANS.coding.label} (${GLM_CODING_PLAN_BASE})</label>
-          <label for="glm-plan-payg"><input id="glm-plan-payg" type="radio" name="glm-plan" /> ${GLM_PLANS.payg.label} (${GLM_PAYG_API_BASE})</label>
         </div>
         <div id="model-id-field" class="field" hidden>
           <label for="model-id">model id</label>
@@ -238,7 +223,6 @@ export function architectHabitatPageHtml(): string {
     <section id="admin" data-path="admin" hidden aria-label="Admin">
       <section class="band" aria-label="Seat">
         <h2>Seat</h2>
-        <button id="load" type="button">Load seat</button>
         <ul id="org"></ul>
         <ul id="runs"></ul>
         <ul id="workers"></ul>
@@ -253,8 +237,10 @@ export function architectHabitatPageHtml(): string {
         <select id="admin-model-id"></select>
         <label for="admin-vendor-base-url">vendor base URL</label>
         <input id="admin-vendor-base-url" autocomplete="off" spellcheck="false" />
-        <label for="admin-api-key">api key</label>
-        <input id="admin-api-key" type="password" autocomplete="off" spellcheck="false" />
+        <div id="admin-api-key-field" class="field" hidden>
+          <label for="admin-api-key">api key</label>
+          <input id="admin-api-key" type="password" autocomplete="off" spellcheck="false" />
+        </div>
         <button id="admin-edit-adapter" type="button">Save model settings</button>
       </section>
       <section class="band" aria-label="Bound connectors">
@@ -301,10 +287,7 @@ export function architectHabitatPageHtml(): string {
         ]),
       ),
     )};
-    var GLM_PLAN_BASES = ${JSON.stringify({
-      coding: { officialBaseUrl: GLM_CODING_PLAN_BASE, keyUrl: GLM_OFFICIAL_KEY_URL },
-      payg: { officialBaseUrl: GLM_PAYG_API_BASE, keyUrl: GLM_OFFICIAL_KEY_URL },
-    })};
+    var SUBSCRIPTION_MODELS = ["codex-subscription", "grok-subscription", "glm-subscription"];
     var state = { step: "session", panel: "wizard", mode: "", provider: "", connector: "", models: [], connectors: [], subscriptionAuthId: "", connectorAuthId: "" };
     var subscriptionPoll = null;
     var subscriptionCompleting = false;
@@ -319,9 +302,6 @@ export function architectHabitatPageHtml(): string {
         return "&#39;";
       });
     }
-    function token() {
-      return document.getElementById("token").value.trim();
-    }
     function status(text) {
       document.getElementById("status").textContent = text;
     }
@@ -330,7 +310,7 @@ export function architectHabitatPageHtml(): string {
       el.innerHTML = rows.length ? rows.map(html).join("") : "";
     }
     async function call(path, opts) {
-      var headers = Object.assign({ authorization: "Bearer " + token() }, opts.headers || {});
+      var headers = Object.assign({}, opts.headers || {});
       var res = await fetch(path, Object.assign({}, opts, { headers: headers }));
       var body = await res.json().catch(function () { return {}; });
       if (!res.ok) {
@@ -381,8 +361,7 @@ export function architectHabitatPageHtml(): string {
       show("api-key-field", spec && spec.apiKey);
       show("vendor-base-url-field", spec && spec.vendorBaseUrl);
       show("model-id-field", spec && spec.modelId);
-      show("glm-plan-field", spec && spec.glmPlan);
-      var showDocs = !!(spec && (spec.officialKeyUrl || spec.billingNote || (spec.glmPlan && spec.glmPlan !== "hidden")));
+      var showDocs = !!(spec && (spec.officialKeyUrl || spec.billingNote));
       show("official-key-docs", showDocs);
       document.getElementById("official-billing-note").textContent = spec && spec.billingNote ? spec.billingNote : "";
       var keyUrl = spec && spec.officialKeyUrl ? spec.officialKeyUrl : "";
@@ -410,10 +389,6 @@ export function architectHabitatPageHtml(): string {
         state.connectorAuthId = "";
       }
     }
-    function selectedGlmPlan() {
-      var coding = document.getElementById("glm-plan-coding");
-      return coding && coding.checked ? "coding" : "payg";
-    }
     function wizardModelId() {
       var provider = selectedProvider();
       if (!provider) return "";
@@ -426,8 +401,6 @@ export function architectHabitatPageHtml(): string {
     function wizardOfficialBaseUrl() {
       var provider = selectedProvider();
       if (!provider) return "";
-      var spec = FIELDS[provider.getAttribute("data-provider")];
-      if (spec && spec.glmPlan === "required") return GLM_PLAN_BASES[selectedGlmPlan()].officialBaseUrl;
       return provider.getAttribute("data-official-base-url") || "";
     }
     async function wizardBindAdapter() {
@@ -638,10 +611,15 @@ export function architectHabitatPageHtml(): string {
         return "<option value=\\"" + escapeHtml(row[valueKey]) + "\\">" + escapeHtml(row[valueKey]) + "</option>";
       }).join("");
     }
+    function showAdminApiKeyField() {
+      var modelId = document.getElementById("admin-model-id").value.trim();
+      document.getElementById("admin-api-key-field").hidden = !modelId || SUBSCRIPTION_MODELS.indexOf(modelId) !== -1;
+    }
     async function loadAdmin() {
       await loadSeat();
       var binds = await call("/architect/adapter-bind", { headers: { accept: "application/json" } });
       fillSelect("admin-model-id", binds.models || [], "modelId");
+      showAdminApiKeyField();
       var connectors = await call("/architect/connector-bind", { headers: { accept: "application/json" } });
       fillSelect("admin-connector-id", connectors.connectors || [], "connectorId");
       var router = await call("/architect/adapter-router", { headers: { accept: "application/json" } });
@@ -661,7 +639,7 @@ export function architectHabitatPageHtml(): string {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (apiKey) {
+      if (apiKey && SUBSCRIPTION_MODELS.indexOf(modelId) === -1) {
         await call("/architect/set-adapter-credentials", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -709,7 +687,6 @@ export function architectHabitatPageHtml(): string {
       status("aggregator saved");
     }
     document.getElementById("session-continue").addEventListener("click", function () {
-      if (!token()) { status("Issued Architect credential is required"); return; }
       document.getElementById("surface-switch").hidden = false;
       showStep("attach-model");
     });
@@ -775,8 +752,8 @@ export function architectHabitatPageHtml(): string {
     });
     document.getElementById("show-wizard").addEventListener("click", function () { showPanel("wizard"); });
     document.getElementById("show-admin").addEventListener("click", function () { showPanel("admin"); });
-    document.getElementById("load").addEventListener("click", function () {
-      loadSeat().catch(function (err) { status(err.message); });
+    document.getElementById("admin-model-id").addEventListener("change", function () {
+      showAdminApiKeyField();
     });
     document.getElementById("admin-edit-adapter").addEventListener("click", function () {
       adminEditAdapter().catch(function (err) { status(err.message); });
