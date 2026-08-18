@@ -32,13 +32,16 @@ export function architectBindConnector(input: {
   requiresCredentials?: boolean;
   /** Architect-written world URL. Not a field setter. Not a hardcoded vendor host. */
   baseUrl?: string;
+  sessionVerified?: boolean;
 }): ConnectorBindRecord {
   const connectorId = input.connectorId.trim();
   if (!connectorId) {
     throw new AvError("CONNECTOR_ID_REQUIRED", "Architect connector bind requires a connector id");
   }
   const baseUrl = input.baseUrl?.trim() || undefined;
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const file = connectorBindFile(input.computerBaseDir, input.tenantId);
   const current = readTenantConnectorBinds(input.computerBaseDir, input.tenantId);
   const existing = findStoredConnectorBind(current, input.tenantId, connectorId);
@@ -65,12 +68,15 @@ export function architectEditConnectorBind(input: {
   architectToken?: string;
   requiresCredentials?: boolean;
   baseUrl?: string;
+  sessionVerified?: boolean;
 }): ConnectorBindRecord {
   const connectorId = input.connectorId.trim();
   if (!connectorId) {
     throw new AvError("CONNECTOR_ID_REQUIRED", "Architect connector bind requires a connector id");
   }
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const current = readTenantConnectorBinds(input.computerBaseDir, input.tenantId);
   if (!findStoredConnectorBind(current, input.tenantId, connectorId)) {
     throw new AvError(
@@ -92,6 +98,7 @@ export function architectWriteConnectorCredentials(input: {
   secret: string;
   computerBaseDir: string;
   architectToken?: string;
+  sessionVerified?: boolean;
 }): ConnectorCredentialsRecord {
   const connectorId = input.connectorId.trim();
   const secret = input.secret.trim();
@@ -104,7 +111,9 @@ export function architectWriteConnectorCredentials(input: {
       "Architect connector credentials write requires a secret",
     );
   }
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const file = connectorCredentialsFile(input.computerBaseDir, input.tenantId);
   const current = readTenantConnectorCredentials(input.computerBaseDir, input.tenantId);
   const existing = findStoredConnectorCredentials(current, input.tenantId, connectorId);

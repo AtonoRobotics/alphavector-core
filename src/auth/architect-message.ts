@@ -15,8 +15,11 @@ export async function architectDeliverMessage(input: {
   computerBaseDir: string;
   habitat: HabitatKernel;
   architectToken?: string;
+  sessionVerified?: boolean;
 }): Promise<WakeResult> {
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   return input.habitat.deliverArchitectMessage({
     tenantId: input.tenantId,
     body: input.body,

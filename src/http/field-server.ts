@@ -26,6 +26,12 @@ import {
 import { architectDeploy, fieldDeploy } from "../auth/architect-deploy.js";
 import { architectSit } from "../auth/architect-habitat.js";
 import { architectDeliverMessage } from "../auth/architect-message.js";
+import {
+  ARCHITECT_SESSION_COOKIE,
+  MemoryArchitectSessionHold,
+  architectSessionCookieHeader,
+  readArchitectSessionCookie,
+} from "../auth/architect-session.js";
 import { AuthorizationRequiredError, AvError, DeployIncompleteError, SurfaceViolationError } from "../errors.js";
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
@@ -33,6 +39,8 @@ import { readTenantAdapterAggregator } from "../habitat/adapter-aggregator.js";
 import { readTenantAdapterBinds } from "../habitat/adapter-bind.js";
 import { readTenantAdapterRouter } from "../habitat/adapter-router.js";
 import { readTenantConnectorBinds } from "../habitat/connector-bind.js";
+import { ingestOfficialGlmHop } from "../habitat/vendor-login.js";
+import { registerHabitatZcodeCallback } from "../habitat/zcode-callback.js";
 import { architectHabitatPageHtml, wantsArchitectHabitatHtml } from "./architect-habitat-page.js";
 import { fieldLinuxPagePath } from "./field-boot.js";
 import type {
@@ -76,6 +84,7 @@ export class FieldHttpServer {
   private readonly pending = new Map<string, PendingProgress>();
   private readonly subscriptionHold = new MemorySubscriptionAuthHold();
   private readonly connectorHold = new MemoryConnectorAuthHold();
+  private readonly architectSessions = new MemoryArchitectSessionHold();
   private restored = false;
 
   constructor(private readonly opts: FieldHttpServerOptions) {}
@@ -90,7 +99,9 @@ export class FieldHttpServer {
       server.listen(port, host, () => resolve());
     });
     const addr = server.address() as AddressInfo;
-    return { port: addr.port, url: `http://${host}:${addr.port}` };
+    const url = `http://${host}:${addr.port}`;
+    void registerHabitatZcodeCallback(`${url}/architect/glm-callback`);
+    return { port: addr.port, url };
   }
 
   async close(): Promise<void> {
@@ -123,7 +134,16 @@ export class FieldHttpServer {
       }
 
       if (req.method === "GET" && path === "/architect/habitat") {
+        this.interceptGlmCallbackQuery(url);
         this.routeArchitectHabitat(req, res);
+        return;
+      }
+      if (req.method === "GET" && path === "/architect/glm-callback") {
+        await this.routeArchitectGlmCallback(req, res, url);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/login") {
+        await this.routeArchitectLogin(req, res);
         return;
       }
       if (req.method === "POST" && path === "/architect/bind-adapter") {
@@ -563,8 +583,8 @@ export class FieldHttpServer {
    * Listen on the declared host:port is the deploy; deploy.json is the ledger.
    */
   private async routeArchitectDeploy(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const token = this.architectBearer(req, res, "Field cannot deploy; Architect is the only deployer");
-    if (!token) return;
+    const gate = this.architectGate(req, res, "Field cannot deploy; Architect is the only deployer");
+    if (!gate) return;
     const body = (await readJson(req)) as { host?: string; port?: number };
     const computerBaseDir = this.opts.core.fieldTokens.baseDir();
     if (!computerBaseDir) {
@@ -576,7 +596,8 @@ export class FieldHttpServer {
       core: this.opts.core,
       host: String(body.host ?? ""),
       port: Number(body.port),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, record);
   }
@@ -586,8 +607,8 @@ export class FieldHttpServer {
    * Field token is 403 SURFACE_VIOLATION. Not sit().
    */
   private async routeArchitectMessage(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const token = this.architectBearer(req, res, "Field cannot issue architect_message");
-    if (!token) return;
+    const gate = this.architectGate(req, res, "Field cannot issue architect_message");
+    if (!gate) return;
     const body = (await readJson(req)) as { body?: string; addresseeId?: string };
     const computerBaseDir = this.architectComputerDir();
     const woke = await architectDeliverMessage({
@@ -596,7 +617,8 @@ export class FieldHttpServer {
       addresseeId: typeof body.addresseeId === "string" ? body.addresseeId : undefined,
       computerBaseDir,
       habitat: this.opts.core.habitat,
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 200, {
       ok: true,
@@ -611,16 +633,16 @@ export class FieldHttpServer {
   /**
    * Architect habitat seat. Off `/field` and off the field HTML page.
    * Unauthenticated Accept: text/html is the inert wizard shell (no credential read).
-   * JSON and every other Architect route stay Architect-token gated.
+   * Writes require a verified Architect credential or a checked session cookie.
    * Field token is 403 SURFACE_VIOLATION. Not a named desktop or IDE.
    */
   private routeArchitectHabitat(req: IncomingMessage, res: ServerResponse): void {
-    if (wantsArchitectHabitatHtml(req.headers.accept) && !req.headers.authorization) {
+    if (wantsArchitectHabitatHtml(req.headers.accept) && !req.headers.authorization && !readArchitectSessionCookie(req.headers.cookie)) {
       this.writeArchitectHabitatHtmlShell(res);
       return;
     }
-    const token = this.architectBearer(req, res, "A field token cannot sit in the habitat");
-    if (!token) return;
+    const gate = this.architectGate(req, res, "A field token cannot sit in the habitat");
+    if (!gate) return;
     if (wantsArchitectHabitatHtml(req.headers.accept)) {
       this.writeArchitectHabitatHtmlShell(res);
       return;
@@ -637,7 +659,8 @@ export class FieldHttpServer {
         tenantId: this.opts.tenantId,
         computerBaseDir,
         surface: this.opts.core.architect,
-        architectToken: token,
+        architectToken: gate.presented,
+        sessionVerified: gate.sessionVerified,
       }),
     );
   }
@@ -647,19 +670,20 @@ export class FieldHttpServer {
    * Field token is 403 SURFACE_VIOLATION. Not a /field route.
    */
   private async routeArchitectBindAdapter(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { modelId?: string; vendorBaseUrl?: string };
     const bound = architectBindAdapter({
       tenantId: this.opts.tenantId,
       modelId: String(body.modelId ?? ""),
       vendorBaseUrl: typeof body.vendorBaseUrl === "string" ? body.vendorBaseUrl : undefined,
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, bound);
   }
@@ -672,18 +696,19 @@ export class FieldHttpServer {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { apiKey?: string };
     const written = architectWriteAdapterCredentials({
       tenantId: this.opts.tenantId,
       apiKey: String(body.apiKey ?? ""),
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, { ok: true, tenantId: written.tenantId, writtenBy: written.writtenBy });
   }
@@ -696,18 +721,19 @@ export class FieldHttpServer {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { providerId?: string };
     const started = await architectStartSubscriptionAuth({
       tenantId: this.opts.tenantId,
       providerId: String(body.providerId ?? ""),
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
       hold: this.subscriptionHold,
     });
     this.json(res, 201, started);
@@ -721,18 +747,19 @@ export class FieldHttpServer {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { authId?: string };
     const result = await architectCompleteSubscriptionAuth({
       tenantId: this.opts.tenantId,
       authId: String(body.authId ?? ""),
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
       hold: this.subscriptionHold,
     });
     this.json(res, result.status === "bound" ? 201 : 200, result);
@@ -743,31 +770,32 @@ export class FieldHttpServer {
    * Unbound modelId is ADAPTER_NOT_BOUND — add stays on the wizard.
    */
   private async routeArchitectEditAdapterBind(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { modelId?: string; vendorBaseUrl?: string };
     const bound = architectEditAdapterBind({
       tenantId: this.opts.tenantId,
       modelId: String(body.modelId ?? ""),
       vendorBaseUrl: typeof body.vendorBaseUrl === "string" ? body.vendorBaseUrl : undefined,
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, bound);
   }
 
   /** Architect-gated read of adapter-bind.json. Never returns credentials. */
   private routeArchitectReadAdapterBind(req: IncomingMessage, res: ServerResponse): void {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const store = readTenantAdapterBinds(this.architectComputerDir(), this.opts.tenantId);
     this.json(res, 200, {
       models: store.models.map((row) => ({
@@ -785,29 +813,30 @@ export class FieldHttpServer {
    * Field token is 403 SURFACE_VIOLATION.
    */
   private async routeArchitectSetAdapterRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { rules?: string };
     const written = architectWriteAdapterRouter({
       tenantId: this.opts.tenantId,
       rules: String(body.rules ?? ""),
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, { ok: true, tenantId: written.tenantId, boundBy: written.boundBy, rules: written.rules });
   }
 
   private routeArchitectReadAdapterRouter(req: IncomingMessage, res: ServerResponse): void {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const record = readTenantAdapterRouter(this.architectComputerDir(), this.opts.tenantId);
     this.json(res, 200, record ? { rules: record.rules, boundBy: record.boundBy } : { rules: "" });
   }
@@ -817,18 +846,19 @@ export class FieldHttpServer {
    * Field token is 403 SURFACE_VIOLATION.
    */
   private async routeArchitectSetAdapterAggregator(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { combine?: string };
     const written = architectWriteAdapterAggregator({
       tenantId: this.opts.tenantId,
       combine: String(body.combine ?? ""),
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, {
       ok: true,
@@ -839,12 +869,12 @@ export class FieldHttpServer {
   }
 
   private routeArchitectReadAdapterAggregator(req: IncomingMessage, res: ServerResponse): void {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const record = readTenantAdapterAggregator(this.architectComputerDir(), this.opts.tenantId);
     this.json(res, 200, record ? { combine: record.combine, boundBy: record.boundBy } : { combine: "" });
   }
@@ -857,19 +887,20 @@ export class FieldHttpServer {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { connectorId?: string; clientId?: string };
     const started = await architectStartConnectorAuth({
       tenantId: this.opts.tenantId,
       connectorId: String(body.connectorId ?? ""),
       clientId: typeof body.clientId === "string" ? body.clientId : undefined,
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
       hold: this.connectorHold,
     });
     this.json(res, 201, started);
@@ -883,18 +914,19 @@ export class FieldHttpServer {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { authId?: string };
     const result = await architectCompleteConnectorAuth({
       tenantId: this.opts.tenantId,
       authId: String(body.authId ?? ""),
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
       hold: this.connectorHold,
     });
     this.json(res, result.status === "bound" ? 201 : 200, result);
@@ -905,12 +937,12 @@ export class FieldHttpServer {
    * Field token is 403 SURFACE_VIOLATION. Not a /field route.
    */
   private async routeArchitectBindConnector(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as {
       connectorId?: string;
       baseUrl?: string;
@@ -922,7 +954,8 @@ export class FieldHttpServer {
       requiresCredentials: body.requiresCredentials === true,
       baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : undefined,
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, {
       ok: true,
@@ -938,12 +971,12 @@ export class FieldHttpServer {
    * Unbound connectorId is CONNECTOR_UNBOUND — add stays on the wizard.
    */
   private async routeArchitectEditConnectorBind(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as {
       connectorId?: string;
       baseUrl?: string;
@@ -955,7 +988,8 @@ export class FieldHttpServer {
       requiresCredentials: body.requiresCredentials === true,
       baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : undefined,
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, {
       ok: true,
@@ -968,12 +1002,12 @@ export class FieldHttpServer {
 
   /** Architect-gated read of connector-bind.json. Never returns secrets. */
   private routeArchitectReadConnectorBind(req: IncomingMessage, res: ServerResponse): void {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const store = readTenantConnectorBinds(this.architectComputerDir(), this.opts.tenantId);
     this.json(res, 200, {
       connectors: store.connectors.map((row) => ({
@@ -995,19 +1029,20 @@ export class FieldHttpServer {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const token = this.architectBearer(
+    const gate = this.architectGate(
       req,
       res,
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
-    if (!token) return;
+    if (!gate) return;
     const body = (await readJson(req)) as { connectorId?: string; secret?: string };
     const written = architectWriteConnectorCredentials({
       tenantId: this.opts.tenantId,
       connectorId: String(body.connectorId ?? ""),
       secret: String(body.secret ?? ""),
       computerBaseDir: this.architectComputerDir(),
-      architectToken: token,
+      architectToken: gate.presented,
+      sessionVerified: gate.sessionVerified,
     });
     this.json(res, 201, {
       ok: true,
@@ -1015,6 +1050,74 @@ export class FieldHttpServer {
       connectorId: written.connectorId,
       writtenBy: written.writtenBy,
     });
+  }
+
+  /**
+   * Official Continue with Z.ai hop Habitat can see. Accepts the official HTTPS
+   * hop or zcode://oauth/callback. Not an Architect write. Field is 403.
+   * Never returns the vendor session.
+   */
+  private async routeArchitectGlmCallback(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    if (this.principalOf(req) === "field") {
+      this.json(res, 403, { error: "SURFACE_VIOLATION", message: "A field token cannot sit in the habitat" });
+      return;
+    }
+    const hop = url.searchParams.get("hop")?.trim() || url.toString();
+    const received = await ingestOfficialGlmHop(hop);
+    if (!received) {
+      this.json(res, 400, {
+        error: "SUBSCRIPTION_AUTH_REQUIRED",
+        message: "ZCode official login must return state and code",
+      });
+      return;
+    }
+    if (wantsArchitectHabitatHtml(req.headers.accept)) {
+      this.write(res, 200, "<!DOCTYPE html><html><body><p>Continue with Z.ai received.</p></body></html>", {
+        "content-type": "text/html; charset=utf-8",
+        ...CORS,
+      });
+      return;
+    }
+    this.json(res, 200, { status: "received" });
+  }
+
+  private interceptGlmCallbackQuery(url: URL): void {
+    void ingestOfficialGlmHop(url.searchParams.get("hop")?.trim() || url.toString());
+  }
+
+  /**
+   * Architect sign-in. Verifies a presented Architect credential against the
+   * deploy-held book and sets a checked session cookie. Never returns the secret.
+   */
+  private async routeArchitectLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const header = req.headers.authorization;
+    let presented: string | undefined;
+    if (header?.startsWith("Bearer ")) {
+      presented = header.slice("Bearer ".length).trim();
+    } else {
+      const body = (await readJson(req)) as { secret?: string };
+      presented = typeof body.secret === "string" ? body.secret.trim() : undefined;
+    }
+    if (presented) {
+      const principal = this.opts.core.fieldTokens.lookup(presented, this.opts.tenantId);
+      if (principal === "field") {
+        this.json(res, 403, { error: "SURFACE_VIOLATION", message: "A field token cannot sit in the habitat" });
+        return;
+      }
+      if (principal !== "architect") {
+        this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
+        return;
+      }
+    } else if (!this.architectSessions.lookup(this.opts.tenantId, readArchitectSessionCookie(req.headers.cookie))) {
+      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect sign-in required" });
+      return;
+    }
+    const issued = this.architectSessions.issue(this.opts.tenantId);
+    this.json(res, 200, { ok: true }, { "set-cookie": architectSessionCookieHeader(issued.cookie, issued.maxAgeSec) });
   }
 
   /** Static inert wizard shell. Does not read, mint, or write any credential. */
@@ -1025,28 +1128,44 @@ export class FieldHttpServer {
     });
   }
 
-  /** Architect HTTP gate. Field is 403. Missing or unknown is 401. */
-  private architectBearer(req: IncomingMessage, res: ServerResponse, fieldMessage: string): string | undefined {
+  /**
+   * Architect HTTP gate. Field is 403. Presented Architect credential is verified
+   * against the deploy-held book. A checked session cookie from Architect sign-in
+   * also passes. An open listen is not a seat. HTTP never returns the session secret.
+   */
+  private architectGate(
+    req: IncomingMessage,
+    res: ServerResponse,
+    fieldMessage: string,
+  ): { presented?: string; sessionVerified?: boolean } | undefined {
     const header = req.headers.authorization;
-    if (!header?.startsWith("Bearer ")) {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
-      return undefined;
+    if (header?.startsWith("Bearer ")) {
+      const token = header.slice("Bearer ".length).trim();
+      if (!token) {
+        this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
+        return undefined;
+      }
+      const principal = this.opts.core.fieldTokens.lookup(token, this.opts.tenantId);
+      if (principal === "field") {
+        this.json(res, 403, { error: "SURFACE_VIOLATION", message: fieldMessage });
+        return undefined;
+      }
+      if (principal !== "architect") {
+        this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
+        return undefined;
+      }
+      return { presented: token };
     }
-    const token = header.slice("Bearer ".length).trim();
-    if (!token) {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
-      return undefined;
-    }
-    const principal = this.opts.core.fieldTokens.lookup(token, this.opts.tenantId);
-    if (principal === "field") {
+    if (this.principalOf(req) === "field") {
       this.json(res, 403, { error: "SURFACE_VIOLATION", message: fieldMessage });
       return undefined;
     }
-    if (principal !== "architect") {
-      this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
-      return undefined;
+    const session = readArchitectSessionCookie(req.headers.cookie);
+    if (session && this.architectSessions.lookup(this.opts.tenantId, session)) {
+      return { sessionVerified: true };
     }
-    return token;
+    this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect credential required" });
+    return undefined;
   }
 
   private architectComputerDir(): string {
@@ -1122,8 +1241,17 @@ export class FieldHttpServer {
     this.json(res, 500, { error: "INTERNAL", message });
   }
 
-  private json(res: ServerResponse, status: number, body: unknown): void {
-    this.write(res, status, JSON.stringify(body), { "content-type": "application/json; charset=utf-8", ...CORS });
+  private json(
+    res: ServerResponse,
+    status: number,
+    body: unknown,
+    extraHeaders?: Record<string, string>,
+  ): void {
+    this.write(res, status, JSON.stringify(body), {
+      "content-type": "application/json; charset=utf-8",
+      ...CORS,
+      ...extraHeaders,
+    });
   }
 
   private write(

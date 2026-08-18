@@ -72,9 +72,12 @@ export async function architectStartConnectorAuth(input: {
   clientId?: string;
   computerBaseDir: string;
   architectToken?: string;
+  sessionVerified?: boolean;
   hold: ConnectorAuthHold;
 }): Promise<ConnectorAuthStarted> {
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const connectorId = input.connectorId.trim();
   if (!isNamedConnectorId(connectorId)) {
     throw new AvError(
@@ -107,9 +110,12 @@ export async function architectCompleteConnectorAuth(input: {
   authId: string;
   computerBaseDir: string;
   architectToken?: string;
+  sessionVerified?: boolean;
   hold: ConnectorAuthHold;
 }): Promise<ConnectorAuthPending | ConnectorAuthBound> {
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const authId = input.authId.trim();
   if (!authId) {
     throw new AvError("CONNECTOR_AUTH_REQUIRED", "Guided connector auth must be started first");
@@ -138,6 +144,7 @@ export async function architectCompleteConnectorAuth(input: {
     requiresCredentials: true,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
+    sessionVerified: input.sessionVerified,
   });
   architectWriteConnectorCredentials({
     tenantId: input.tenantId,
@@ -145,6 +152,7 @@ export async function architectCompleteConnectorAuth(input: {
     secret: polled.secret,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
+    sessionVerified: input.sessionVerified,
   });
   input.hold.drop(authId);
   return {

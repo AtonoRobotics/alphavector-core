@@ -18,12 +18,15 @@ export function architectWriteAdapterRouter(input: {
   rules: string;
   computerBaseDir: string;
   architectToken?: string;
+  sessionVerified?: boolean;
 }): AdapterRouterRecord {
   const rules = input.rules.trim();
   if (!rules) {
     throw new AvError("ADAPTER_ROUTER_REQUIRED", "Architect router write requires rules");
   }
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const record: AdapterRouterRecord = {
     tenantId: input.tenantId,
     rules,

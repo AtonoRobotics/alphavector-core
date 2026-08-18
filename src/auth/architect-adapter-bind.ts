@@ -22,13 +22,16 @@ export function architectBindAdapter(input: {
   vendorBaseUrl?: string;
   computerBaseDir: string;
   architectToken?: string;
+  sessionVerified?: boolean;
 }): AdapterBindRecord {
   const modelId = input.modelId.trim();
   if (!modelId) {
     throw new AvError("ADAPTER_BIND_REQUIRED", "Architect bind requires a model id");
   }
   const vendorBaseUrl = input.vendorBaseUrl?.trim();
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const record: AdapterBindRecord = {
     tenantId: input.tenantId,
     modelId,
@@ -52,12 +55,15 @@ export function architectEditAdapterBind(input: {
   vendorBaseUrl?: string;
   computerBaseDir: string;
   architectToken?: string;
+  sessionVerified?: boolean;
 }): AdapterBindRecord {
   const modelId = input.modelId.trim();
   if (!modelId) {
     throw new AvError("ADAPTER_BIND_REQUIRED", "Architect bind requires a model id");
   }
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const current = readTenantAdapterBinds(input.computerBaseDir, input.tenantId);
   if (!findStoredAdapterBind(current, input.tenantId, modelId)) {
     throw new AvError(

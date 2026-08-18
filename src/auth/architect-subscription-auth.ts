@@ -5,6 +5,7 @@ import {
   startSubscriptionLogin,
   type OfficialLoginPollHandle,
 } from "../habitat/subscription-auth.js";
+import { GLM_HOLD_TTL_MS, glmHoldNowMs } from "../habitat/vendor-login.js";
 import { findProvider, modelIdForBind } from "../http/architect-habitat-wizard.js";
 import { architectBindAdapter } from "./architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "./architect-adapter-credentials.js";
@@ -23,6 +24,8 @@ export interface SubscriptionAuthSession {
   userCode?: string;
   verificationUri: string;
   poll: OfficialLoginPollHandle;
+  /** GLM Continue with Z.ai hold. Missing on Codex/Grok device-code. */
+  heldUntilMs?: number;
 }
 
 export interface SubscriptionAuthHold {
@@ -39,7 +42,13 @@ export class MemorySubscriptionAuthHold implements SubscriptionAuthHold {
   }
 
   get(authId: string): SubscriptionAuthSession | undefined {
-    return this.sessions.get(authId);
+    const session = this.sessions.get(authId);
+    if (!session) return undefined;
+    if (session.heldUntilMs !== undefined && glmHoldNowMs() > session.heldUntilMs) {
+      this.sessions.delete(authId);
+      return undefined;
+    }
+    return session;
   }
 
   drop(authId: string): void {
@@ -79,9 +88,12 @@ export async function architectStartSubscriptionAuth(input: {
   providerId: string;
   computerBaseDir: string;
   architectToken?: string;
+  sessionVerified?: boolean;
   hold: SubscriptionAuthHold;
 }): Promise<SubscriptionAuthStarted> {
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const provider = findProvider(input.providerId);
   if (!provider || provider.mode !== "subscription" || provider.fields.subscriptionAuth !== "guided") {
     throw new AvError(
@@ -99,6 +111,9 @@ export async function architectStartSubscriptionAuth(input: {
     userCode: started.userCode,
     verificationUri: started.verificationUri,
     poll: started.poll,
+    ...(started.poll.kind === "glm-auth-code"
+      ? { heldUntilMs: glmHoldNowMs() + GLM_HOLD_TTL_MS }
+      : {}),
   };
   input.hold.put(session);
   return {
@@ -116,9 +131,12 @@ export async function architectCompleteSubscriptionAuth(input: {
   authId: string;
   computerBaseDir: string;
   architectToken?: string;
+  sessionVerified?: boolean;
   hold: SubscriptionAuthHold;
 }): Promise<SubscriptionAuthPending | SubscriptionAuthBound> {
-  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
+    sessionVerified: input.sessionVerified,
+  });
   const authId = input.authId.trim();
   if (!authId) {
     throw new AvError("SUBSCRIPTION_AUTH_REQUIRED", "Guided subscription auth must be started first");
@@ -142,6 +160,7 @@ export async function architectCompleteSubscriptionAuth(input: {
     modelId: session.modelId,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
+    sessionVerified: input.sessionVerified,
   });
   architectWriteAdapterCredentials({
     tenantId: input.tenantId,
@@ -149,6 +168,7 @@ export async function architectCompleteSubscriptionAuth(input: {
     refreshToken: polled.refreshToken,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
+    sessionVerified: input.sessionVerified,
   });
   input.hold.drop(authId);
   return {

@@ -4,15 +4,19 @@ import { AvError, SurfaceViolationError } from "../errors.js";
 /**
  * Architect write gate. Same class as field-token issue/revoke and adapter bind.
  * Shell is not Architect. A field token cannot pass.
+ * Habitat HTTP accepts a verified Architect credential or a checked session
+ * cookie issued after Architect sign-in. An open listen is not a seat.
  */
 export function requireArchitect(
   tenantId: string,
   computerBaseDir: string,
   presented: string | undefined,
+  opts?: { sessionVerified?: boolean },
 ): void {
   const book = new FieldTokenBook(computerBaseDir);
   const secret = presented?.trim() ? presented.trim() : undefined;
   if (!secret) {
+    if (opts?.sessionVerified) return;
     throw new SurfaceViolationError("Shell is not Architect. Present an Architect credential.");
   }
   const principal = book.lookup(secret, tenantId);
