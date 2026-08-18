@@ -185,7 +185,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Field/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "AV Dev";
+				INFOPLIST_KEY_CFBundleDisplayName = "Pyrallon";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -214,7 +214,7 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Field/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "AV Dev";
+				INFOPLIST_KEY_CFBundleDisplayName = "Pyrallon";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.business";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

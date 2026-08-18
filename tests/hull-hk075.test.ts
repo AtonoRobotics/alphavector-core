@@ -76,8 +76,8 @@ describe("HK-075 workers on the tenant computer", () => {
     expect(readFileSync(path.join(REPO_ROOT, "fixtures/packs/alphavector-re/SOURCE.md"), "utf8")).toContain(
       "5091328a2a5d4a9429ec65fef6da5683ede1cac9",
     );
-    expect(PRODUCT.appDisplay).toBe("AV Dev");
-    expect(PRODUCT.appDisplay).not.toMatch(/VEYRA/);
+    expect(PRODUCT.appDisplay).toBe("Pyrallon");
+    expect(PRODUCT.appDisplay).not.toMatch(/VEYRA|AV Dev|Alpha Vector LLC/);
   });
 
   it("a worker does real work on the tenant computer, not in-process and not as a host kernel child", async () => {
@@ -241,10 +241,10 @@ describe("HK-075 workers on the tenant computer", () => {
     expect(viewerB).toContain(`display :${deskB.display}`);
     expect(viewerA).toContain(`localhost:${deskA.vncPort}`);
     expect(viewerB).toContain(`localhost:${deskB.vncPort}`);
-    expect(viewerA).toContain("AV Dev");
-    expect(viewerA).toContain("Alpha Vector LLC");
-    expect(viewerA).not.toMatch(/VEYRA|colorForDisplay|#C4A574/);
-    expect(viewerB).not.toMatch(/VEYRA|colorForDisplay|#C4A574/);
+    expect(viewerA).toContain("Architect Desktop");
+    expect(viewerA).toContain("Pyrallon");
+    expect(viewerA).not.toMatch(/VEYRA|AV Dev|Alpha Vector LLC|colorForDisplay|#C4A574/);
+    expect(viewerB).not.toMatch(/VEYRA|AV Dev|Alpha Vector LLC|colorForDisplay|#C4A574/);
 
     const desktopSrc = readFileSync(path.join(REPO_ROOT, "src/computer/desktop.ts"), "utf8");
     expect(desktopSrc).not.toMatch(/colorForDisplay/);

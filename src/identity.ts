@@ -1,10 +1,11 @@
 /**
- * Development scaffold identity. Not a consumer brand.
- * Locked 2026-08-15: AV Dev / alphavector-core / llc.alphavector.dev.
+ * Public house name is Pyrallon. Architect Desktop is the surface placeholder only.
+ * Locked 2026-08-17: Pyrallon / alphavector-core / llc.alphavector.dev.
+ * Repos, packages, and bundle ids stay. Legal entity Alpha Vector LLC is off-app.
  * alphavector-re is a separate pack repository and SHALL NOT live here.
  */
 export const PRODUCT = {
-  appDisplay: "AV Dev",
+  appDisplay: "Pyrallon",
   package: "alphavector-core",
   bundleId: "llc.alphavector.dev",
   firstPackPackage: "alphavector-re",

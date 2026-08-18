@@ -154,7 +154,7 @@ describe("HK-011 closed v1 wake kinds", () => {
     expect(iosHome).not.toMatch(/architect_message|VEYRA|Architect Desktop/i);
 
     const identity = readFileSync(path.join(process.cwd(), "src/identity.ts"), "utf8");
-    expect(identity).toMatch(/appDisplay: "AV Dev"/);
+    expect(identity).toMatch(/appDisplay: "Pyrallon"/);
     expect(identity).toMatch(/"VEYRA"/);
   });
 

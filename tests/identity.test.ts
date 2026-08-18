@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { FORBIDDEN_PRODUCT_NAMES, GLASS, GLASS_HUES, PRODUCT, isForbiddenProductName } from "../src/identity.js";
 
 describe("product identity", () => {
-  it("is AV Dev / alphavector-core / llc.alphavector.dev", () => {
-    expect(PRODUCT.appDisplay).toBe("AV Dev");
+  it("is Pyrallon / alphavector-core / llc.alphavector.dev", () => {
+    expect(PRODUCT.appDisplay).toBe("Pyrallon");
+    expect(PRODUCT.appDisplay).not.toMatch(/AV Dev|Alpha Vector LLC|VEYRA/);
     expect(PRODUCT.package).toBe("alphavector-core");
     expect(PRODUCT.bundleId).toBe("llc.alphavector.dev");
     expect(PRODUCT.firstPackPackage).toBe("alphavector-re");

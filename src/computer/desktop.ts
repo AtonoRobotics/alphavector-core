@@ -6,7 +6,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { ComputerError } from "../errors.js";
-import { GLASS } from "../identity.js";
+import { GLASS, PRODUCT } from "../identity.js";
 import type { DesktopSession } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -48,7 +48,7 @@ export async function ensureRealDesktop(input: {
   await ensureSpawned({
     pidFile: path.join(input.desktopPath, "label.pid"),
     command: "xmessage",
-    args: ["-center", `AV desktop\nagent=${input.agentId}\ndisplay=:${display}\ntenant=${input.tenantId}`],
+    args: ["-center", `Architect Desktop\nagent=${input.agentId}\ndisplay=:${display}\ntenant=${input.tenantId}`],
     env,
   });
 
@@ -236,7 +236,7 @@ export function architectViewerHtml(input: {
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>AV Dev desktop · ${escapeHtml(input.agentId)}</title>
+  <title>Architect Desktop · ${escapeHtml(input.agentId)}</title>
   <style>
     :root {
       --bone: ${GLASS.bone};
@@ -263,7 +263,7 @@ export function architectViewerHtml(input: {
     <hr />
     <p>VNC localhost:${input.vncPort} (localhost only). Agent never sees keystrokes or passwords.</p>
     <div class="screen"><img src="screenshot.png" alt="agent desktop"/></div>
-    <footer>Alpha Vector LLC</footer>
+    <footer>${PRODUCT.appDisplay}</footer>
   </main>
 </body>
 </html>
