@@ -21,6 +21,10 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     grantsFile: path.join(root, "grants.json"),
     // Field and Architect credentials. Same reason as secrets and cards.
     fieldTokensFile: path.join(root, "field-tokens.json"),
+    // One-time first-run host code. Same class as field-tokens.json / e4-artifacts.
+    architectBootstrapFile: path.join(root, "architect-bootstrap.json"),
+    // Habitat password hash. Same class as field-tokens.json: never the password.
+    architectPasswordFile: path.join(root, "architect-password.json"),
     // Predicate facts. Same reason as secrets, cards, and tokens.
     factsFile: path.join(root, "facts.json"),
     // Generic subject records. Same reason as facts, cards, and tokens.

@@ -1,12 +1,15 @@
+import { architectBootstrapRelPath } from "../auth/architect-password.js";
 import { GLASS, PRODUCT } from "../identity.js";
 import { HABITAT_CONNECTORS, HABITAT_PROVIDERS, WIZARD_STEPS, type AttachMode } from "./architect-habitat-wizard.js";
 
 /**
  * Habitat wizard page (HK-082). Off `/field`. Not a named desktop.
  * Unauthenticated GET may serve this inert shell when Accept is text/html.
- * Architect seat is a real login: Sign in verifies the deploy-held Architect
- * credential and sets a checked session cookie. Not an open listen. The wizard
- * does not collect a pasted Architect credential on every write.
+ * Architect seat is a password the Architect sets. First-run asks for the
+ * one-time host bootstrap code written at tenants/<tenantId>/architect-bootstrap.json
+ * (same host-only class as field-tokens.json / e4-artifacts). Later sign-in is
+ * that password, then an HttpOnly av_architect cookie. The deploy-held Architect
+ * credential is never a wizard field. Not an open listen.
  *
  * Add path is a stepped wizard. Admin inspects/edits already-bound settings
  * and cannot attach a new model or connector.
@@ -57,10 +60,11 @@ function stepNav(): string {
   ).join("");
 }
 
-export function architectHabitatPageHtml(): string {
+export function architectHabitatPageHtml(opts?: { tenantId?: string }): string {
   const subscriptionChoices = providerButtons("subscription");
   const apiChoices = providerButtons("api");
   const connectorChoices = connectorButtons();
+  const bootstrapPath = architectBootstrapRelPath(opts?.tenantId ?? "<tenantId>");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -101,7 +105,8 @@ export function architectHabitatPageHtml(): string {
     ul { list-style: none; padding: 0; margin: 0; }
     li { border-top: 1px solid var(--hairline); padding: 0.6rem 0; }
     li:first-child { border-top: 0; }
-    .field[hidden], .step[hidden], #wizard[hidden], #admin[hidden], #surface-switch[hidden] { display: none; }
+    .field[hidden], .step[hidden], #wizard[hidden], #admin[hidden], #surface-switch[hidden],
+    #architect-first-run[hidden], #architect-later[hidden] { display: none; }
     .step[data-held="true"] { border-left: 2px solid #C4A574; padding-left: 0.75rem; }
     #status { min-height: 1.2rem; font-size: 0.9rem; margin: 0.75rem 0; }
     footer { max-width: 42rem; margin: 0 auto; padding: 1rem 1.5rem 1.5rem; font-size: 0.75rem; }
@@ -124,10 +129,22 @@ export function architectHabitatPageHtml(): string {
 
       <section class="band step" data-wizard-step="session" aria-label="Architect session">
         <h2>1. Architect session</h2>
-        <p class="lead">Architect signs in to this habitat. Sign-in is a checked session, not an open listen.</p>
-        <label for="architect-sign-in">Architect sign-in</label>
-        <input id="architect-sign-in" type="password" autocomplete="off" spellcheck="false" />
-        <button id="session-sign-in" type="button">Sign in</button>
+        <p class="lead">Architect signs in to this habitat with a password they own. Sign-in is a checked session, not an open listen, not the deploy-held credential.</p>
+        <div id="architect-first-run">
+          <p class="lead">First run: read the one-time host code from ${bootstrapPath} on this computer (beside field-tokens.json). It is not printed here. After you set a password, that file is consumed and this field goes away.</p>
+          <label for="architect-bootstrap">Host bootstrap code</label>
+          <input id="architect-bootstrap" type="password" autocomplete="off" spellcheck="false" />
+          <label for="architect-password">Choose password</label>
+          <input id="architect-password" type="password" autocomplete="off" spellcheck="false" />
+          <label for="architect-password-confirm">Confirm password</label>
+          <input id="architect-password-confirm" type="password" autocomplete="off" spellcheck="false" />
+          <button id="session-set-password" type="button">Set password</button>
+        </div>
+        <div id="architect-later" hidden>
+          <label for="architect-sign-in">Architect password</label>
+          <input id="architect-sign-in" type="password" autocomplete="off" spellcheck="false" />
+          <button id="session-sign-in" type="button">Sign in</button>
+        </div>
         <button id="session-continue" type="button">Continue</button>
       </section>
 
@@ -443,15 +460,45 @@ export function architectHabitatPageHtml(): string {
         subscriptionPoll = null;
       }
     }
+    function clearArchitectFields() {
+      document.getElementById("architect-bootstrap").value = "";
+      document.getElementById("architect-password").value = "";
+      document.getElementById("architect-password-confirm").value = "";
+      document.getElementById("architect-sign-in").value = "";
+    }
+    function applySeatMode(passwordSet) {
+      document.getElementById("architect-first-run").hidden = !!passwordSet;
+      document.getElementById("architect-later").hidden = !passwordSet;
+    }
+    async function refreshSeatMode() {
+      var body = await call("/architect/login", { method: "GET" });
+      applySeatMode(!!body.passwordSet);
+    }
+    async function wizardSetPassword() {
+      var bootstrap = document.getElementById("architect-bootstrap").value.trim();
+      var password = document.getElementById("architect-password").value;
+      var confirm = document.getElementById("architect-password-confirm").value;
+      if (!bootstrap) throw new Error("Host bootstrap code required");
+      if (!password) throw new Error("Choose an Architect password");
+      if (password !== confirm) throw new Error("Password confirmation does not match");
+      await call("/architect/set-password", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ bootstrap: bootstrap, password: password, confirm: confirm }),
+      });
+      clearArchitectFields();
+      applySeatMode(true);
+      status("password set");
+    }
     async function wizardSignIn() {
-      var secret = document.getElementById("architect-sign-in").value.trim();
-      if (!secret) throw new Error("Architect sign-in required");
+      var password = document.getElementById("architect-sign-in").value;
+      if (!password) throw new Error("Architect sign-in required");
       await call("/architect/login", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ secret: secret }),
+        body: JSON.stringify({ password: password }),
       });
-      document.getElementById("architect-sign-in").value = "";
+      clearArchitectFields();
       status("signed in");
     }
     async function wizardStartSubscription() {
@@ -705,6 +752,12 @@ export function architectHabitatPageHtml(): string {
       });
       status("aggregator saved");
     }
+    document.getElementById("session-set-password").addEventListener("click", function () {
+      wizardSetPassword().then(function () {
+        document.getElementById("surface-switch").hidden = false;
+        showStep("attach-model");
+      }).catch(function (err) { status(err.message); });
+    });
     document.getElementById("session-sign-in").addEventListener("click", function () {
       wizardSignIn().then(function () {
         document.getElementById("surface-switch").hidden = false;
@@ -794,7 +847,9 @@ export function architectHabitatPageHtml(): string {
     document.getElementById("admin-write-aggregator").addEventListener("click", function () {
       adminWriteAggregator().catch(function (err) { status(err.message); });
     });
+    applySeatMode(false);
     showStep("session");
+    refreshSeatMode().catch(function () { applySeatMode(false); });
   </script>
 </body>
 </html>

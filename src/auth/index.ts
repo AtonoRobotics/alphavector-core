@@ -5,6 +5,8 @@ export * from "./field-tokens.js";
 export * from "./field-token-store.js";
 export * from "./architect-field-token.js";
 export * from "./require-architect.js";
+export * from "./architect-password.js";
+export * from "./architect-session.js";
 export * from "./architect-adapter-bind.js";
 export * from "./architect-adapter-credentials.js";
 export * from "./architect-subscription-auth.js";

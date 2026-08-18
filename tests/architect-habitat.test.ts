@@ -50,6 +50,10 @@ import {
   GROK_SCOPES,
   GROK_TOKEN_PATH,
 } from "../src/habitat/vendor-login.js";
+import {
+  architectBootstrapRelPath,
+  readArchitectBootstrapCode,
+} from "../src/auth/architect-password.js";
 import { architectHabitatPageHtml } from "../src/http/architect-habitat-page.js";
 import {
   GLM_CODING_PLAN_BASE,
@@ -175,20 +179,59 @@ function officialGlmHopUrl(state: string, code: string): string {
   )}`;
 }
 
-async function signInArchitect(url: string, secret: string): Promise<string> {
+function hostBootstrapCode(computerBaseDir: string, tenantId: string): string {
+  const code = readArchitectBootstrapCode(computerBaseDir, tenantId);
+  expect(code).toBeTruthy();
+  return code!;
+}
+
+async function setArchitectPassword(
+  url: string,
+  computerBaseDir: string,
+  tenantId: string,
+  password: string,
+): Promise<string> {
+  const bootstrap = hostBootstrapCode(computerBaseDir, tenantId);
+  const created = await fetch(`${url}/architect/set-password`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ bootstrap, password, confirm: password }),
+  });
+  expect(created.status).toBe(200);
+  const body = (await created.json()) as Record<string, unknown>;
+  expect(body).toEqual({ ok: true });
+  expect(body).not.toHaveProperty("session");
+  expect(body).not.toHaveProperty("token");
+  expect(body).not.toHaveProperty("apiKey");
+  expect(body).not.toHaveProperty("access_token");
+  expect(JSON.stringify(body)).not.toContain(password);
+  expect(JSON.stringify(body)).not.toContain(bootstrap);
+  const setCookie = created.headers.get("set-cookie");
+  expect(setCookie).toMatch(/^av_architect=/);
+  expect(setCookie).not.toContain(password);
+  expect(setCookie).not.toContain(bootstrap);
+  return setCookie!.split(";")[0]!;
+}
+
+async function signInArchitect(url: string, password: string): Promise<string> {
   const login = await fetch(`${url}/architect/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ secret }),
+    body: JSON.stringify({ password }),
   });
   expect(login.status).toBe(200);
   const body = (await login.json()) as Record<string, unknown>;
   expect(body).toEqual({ ok: true });
-  expect(JSON.stringify(body)).not.toMatch(/av_architect|secret|access_token|apiKey/);
+  expect(body).not.toHaveProperty("session");
+  expect(body).not.toHaveProperty("token");
+  expect(body).not.toHaveProperty("apiKey");
+  expect(body).not.toHaveProperty("access_token");
+  expect(JSON.stringify(body)).not.toMatch(/av_architect|access_token|apiKey/);
+  expect(JSON.stringify(body)).not.toContain(password);
   const setCookie = login.headers.get("set-cookie");
   expect(setCookie).toMatch(/^av_architect=/);
   expect(setCookie).toMatch(/HttpOnly/i);
-  expect(setCookie).not.toContain(secret);
+  expect(setCookie).not.toContain(password);
   return setCookie!.split(";")[0]!;
 }
 
@@ -211,6 +254,7 @@ describe("HK-082 Architect sits in the habitat", () => {
       "src/surfaces/architect.ts",
       "src/surfaces/types.ts",
       "src/auth/architect-habitat.ts",
+      "src/auth/architect-password.ts",
       "src/cli.ts",
       "src/http/field-server.ts",
       "src/http/architect-habitat-page.ts",
@@ -462,7 +506,11 @@ describe("HK-082 Architect sits in the habitat", () => {
     expect(html).toMatch(/Architect sits in the habitat/);
     expect(html).toMatch(/Architect signs in to this habitat/);
     expect(html).toMatch(/id="architect-sign-in"|id="session-sign-in"/);
+    expect(html).toMatch(/id="architect-bootstrap"/);
+    expect(html).toMatch(/id="architect-password"/);
+    expect(html).toMatch(/architect-bootstrap\.json/);
     expect(html).not.toMatch(/id="token"|Issued Architect credential|Load seat/);
+    expect(html).not.toMatch(/paste architect-token\.json/i);
     expect(html).toMatch(/id="model-id"/);
     expect(html).toMatch(/\/architect\/bind-adapter/);
     expect(html).not.toMatch(/Architect Desktop|Architect IDE|Architect Studio|Architect App/i);
@@ -680,10 +728,16 @@ describe("HK-082 Architect sits in the habitat", () => {
     expect(shell).toMatch(/Architect signs in to this habitat/);
     expect(shell).toMatch(/id="architect-sign-in"/);
     expect(shell).toMatch(/id="session-sign-in"/);
+    expect(shell).toMatch(/id="architect-bootstrap"/);
+    expect(shell).toMatch(/id="architect-password"/);
+    expect(shell).toMatch(/id="architect-password-confirm"/);
     expect(shell).toMatch(/\/architect\/login/);
+    expect(shell).toMatch(/\/architect\/set-password/);
+    expect(shell).toMatch(/architect-bootstrap\.json/);
     expect(shell).not.toMatch(/id="token"|input#token|<input[^>]*id="token"/);
     expect(shell).not.toMatch(/Issued Architect credential/);
     expect(shell).not.toMatch(/Load seat/);
+    expect(shell).not.toMatch(/paste architect-token\.json/i);
     expect(shell).not.toMatch(/function token\s*\(|authorization:\s*"Bearer " \+ token\(\)/);
     expect(shell).not.toMatch(/document\.cookie|localStorage|sessionStorage/i);
     expect(shell).not.toMatch(/[?&]token=/);
@@ -764,7 +818,18 @@ describe("HK-082 Architect sits in the habitat", () => {
     expect(fieldLogin.status).toBe(403);
     expect(((await fieldLogin.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
 
-    const sessionCookie = await signInArchitect(live.url, live.architectToken);
+    const deployLogin = await fetch(`${live.url}/architect/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: live.architectToken }),
+    });
+    expect(deployLogin.status).toBe(401);
+    expect(((await deployLogin.json()) as { error: string }).error).toBe("UNAUTHORIZED");
+
+    const habitatPassword = "architect-owns-this-seat";
+    await setArchitectPassword(live.url, live.computerBaseDir, live.tenantId, habitatPassword);
+    const sessionCookie = await signInArchitect(live.url, habitatPassword);
+    expect(sessionCookie).not.toContain(live.architectToken);
     const sessionSeat = await fetch(`${live.url}/architect/habitat`, {
       headers: { accept: "application/json", cookie: sessionCookie },
     });
@@ -811,6 +876,165 @@ describe("HK-082 Architect sits in the habitat", () => {
     });
     expect(writeBare.status).toBe(401);
     expect(((await writeBare.json()) as { error: string }).error).toBe("UNAUTHORIZED");
+  });
+
+  it("Architect seat is a password he owns; host bootstrap is first-run only", async () => {
+    const live = await liveHttp("password-seat");
+    const password = "samuel-owns-this-seat";
+    const bootstrap = hostBootstrapCode(live.computerBaseDir, live.tenantId);
+    expect(existsSync(computerRoot(live.computerBaseDir, live.tenantId).architectBootstrapFile)).toBe(true);
+    expect(statSync(computerRoot(live.computerBaseDir, live.tenantId).architectBootstrapFile).mode & 0o777).toBe(
+      0o600,
+    );
+    expect(architectBootstrapRelPath(live.tenantId)).toBe(
+      `tenants/${live.tenantId}/architect-bootstrap.json`,
+    );
+
+    const status = await fetch(`${live.url}/architect/login`);
+    expect(status.status).toBe(200);
+    const statusBody = (await status.json()) as Record<string, unknown>;
+    expect(statusBody).toEqual({ passwordSet: false });
+    expect(JSON.stringify(statusBody)).not.toContain(bootstrap);
+    expect(JSON.stringify(statusBody)).not.toContain(live.architectToken);
+    expect(statusBody).not.toHaveProperty("session");
+    expect(statusBody).not.toHaveProperty("token");
+    expect(statusBody).not.toHaveProperty("apiKey");
+    expect(statusBody).not.toHaveProperty("access_token");
+
+    const noCode = await fetch(`${live.url}/architect/set-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password, confirm: password }),
+    });
+    expect(noCode.status).toBe(401);
+    const noCodeBody = (await noCode.json()) as Record<string, unknown>;
+    expect(noCodeBody.error).toBe("UNAUTHORIZED");
+    expect(JSON.stringify(noCodeBody)).not.toContain(password);
+    expect(JSON.stringify(noCodeBody)).not.toContain(bootstrap);
+
+    const wrongCode = await fetch(`${live.url}/architect/set-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bootstrap: "not-the-host-code", password, confirm: password }),
+    });
+    expect(wrongCode.status).toBe(401);
+
+    const fieldSet = await fetch(`${live.url}/architect/set-password`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${live.fieldToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ bootstrap, password, confirm: password }),
+    });
+    expect(fieldSet.status).toBe(403);
+    expect(((await fieldSet.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+
+    const deploySet = await fetch(`${live.url}/architect/set-password`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ bootstrap, password, confirm: password }),
+    });
+    expect(deploySet.status).toBe(401);
+
+    const unauthBind = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "ci-password" }),
+    });
+    expect(unauthBind.status).toBe(401);
+    expect(unauthBind.status).not.toBe(201);
+    const unauthStart = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerId: "sub-codex" }),
+    });
+    expect(unauthStart.status).toBe(401);
+    expect(unauthStart.status).not.toBe(201);
+
+    for (const route of ["/architect/login", "/architect/set-password", "/architect/bind-adapter"]) {
+      const denied = await fetch(`${live.url}${route}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${live.fieldToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ password, bootstrap, modelId: "ci-password", providerId: "sub-codex" }),
+      });
+      expect(denied.status).toBe(403);
+      expect(((await denied.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+    }
+
+    const created = await setArchitectPassword(live.url, live.computerBaseDir, live.tenantId, password);
+    expect(existsSync(computerRoot(live.computerBaseDir, live.tenantId).architectBootstrapFile)).toBe(false);
+    expect(existsSync(computerRoot(live.computerBaseDir, live.tenantId).architectPasswordFile)).toBe(true);
+    expect(statSync(computerRoot(live.computerBaseDir, live.tenantId).architectPasswordFile).mode & 0o777).toBe(
+      0o600,
+    );
+    const passwordRaw = readFileSync(
+      computerRoot(live.computerBaseDir, live.tenantId).architectPasswordFile,
+      "utf8",
+    );
+    expect(passwordRaw).not.toContain(password);
+    expect(passwordRaw).toMatch(/"hash"/);
+
+    const afterSet = await fetch(`${live.url}/architect/login`);
+    expect(((await afterSet.json()) as { passwordSet: boolean }).passwordSet).toBe(true);
+
+    const reuseBootstrap = await fetch(`${live.url}/architect/set-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bootstrap, password: "other-password", confirm: "other-password" }),
+    });
+    expect(reuseBootstrap.status).toBe(401);
+
+    const bootstrapAsSignIn = await fetch(`${live.url}/architect/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: bootstrap }),
+    });
+    expect(bootstrapAsSignIn.status).toBe(401);
+
+    const deploySecret = await fetch(`${live.url}/architect/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: live.architectToken }),
+    });
+    expect(deploySecret.status).toBe(401);
+    const deployPassword = await fetch(`${live.url}/architect/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: live.architectToken }),
+    });
+    expect(deployPassword.status).toBe(401);
+    const deployBearer = await fetch(`${live.url}/architect/login`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    expect(deployBearer.status).toBe(401);
+
+    const cookie = await signInArchitect(live.url, password);
+    const cookieValue = cookie.slice("av_architect=".length);
+    expect(cookieValue).not.toBe(password);
+    expect(cookieValue).not.toBe(live.architectToken);
+    expect(cookieValue).not.toBe(bootstrap);
+    expect(created.split("=")[1]).not.toBe(password);
+    expect(created.split("=")[1]).not.toBe(live.architectToken);
+
+    const habitat = await fetch(`${live.url}/architect/habitat`, {
+      headers: { accept: "application/json", cookie },
+    });
+    expect(habitat.status).toBe(200);
+    const seat = (await habitat.json()) as Record<string, unknown>;
+    expect(seat).not.toHaveProperty("session");
+    expect(seat).not.toHaveProperty("token");
+    expect(seat).not.toHaveProperty("apiKey");
+    expect(seat).not.toHaveProperty("access_token");
+    expect(JSON.stringify(seat)).not.toContain(password);
+    expect(JSON.stringify(seat)).not.toContain(bootstrap);
+    expect(JSON.stringify(seat)).not.toContain(live.architectToken);
+
+    const pageSrc = readFileSync(path.join(process.cwd(), "src/http/architect-habitat-page.ts"), "utf8");
+    const loginSrc = readFileSync(path.join(process.cwd(), "src/http/field-server.ts"), "utf8");
+    expect(pageSrc).not.toMatch(/allowHeldSeat/);
+    expect(loginSrc).not.toMatch(/allowHeldSeat/);
+    expect(pageSrc).not.toMatch(/VEYRA|api-codex|api-grok|api-glm/);
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
   it("HTTP bind without a model or vendor URL stays fail-closed; no hardcoded vendor", async () => {
@@ -885,7 +1109,12 @@ describe("Architect habitat bind wizard", () => {
     expect(html).toMatch(/window\.open\(started\.verificationUri\)/);
     expect(html).toMatch(/id="architect-sign-in"/);
     expect(html).toMatch(/id="session-sign-in"/);
+    expect(html).toMatch(/id="architect-bootstrap"/);
+    expect(html).toMatch(/id="session-set-password"/);
     expect(html).toMatch(/\/architect\/login/);
+    expect(html).toMatch(/\/architect\/set-password/);
+    expect(html).toMatch(/wizardSetPassword/);
+    expect(html).toMatch(/JSON.stringify\(\{ password: password \}\)/);
     expect(html).toMatch(/credentials:\s*"same-origin"/);
     expect(html).not.toMatch(/function parseGlmCallback|glmPopup\.location/);
     expect(html).toMatch(/SuperGrok session/);
@@ -1052,9 +1281,11 @@ describe("Architect habitat bind wizard", () => {
     const html = await served.text();
     expect(html).toMatch(/Architect signs in to this habitat/);
     expect(html).toMatch(/id="architect-sign-in"|id="session-sign-in"/);
+    expect(html).toMatch(/id="architect-bootstrap"/);
     expect(html).not.toMatch(/id="token"/);
     expect(html).not.toMatch(/Issued Architect credential/);
     expect(html).not.toMatch(/Load seat/);
+    expect(html).not.toMatch(/paste architect-token\.json/i);
     expect(html).not.toMatch(/function token\s*\(/);
     expect(html).not.toMatch(/Bearer " \+ token\(/);
     expect(html).not.toMatch(/data-provider="api-codex"|data-provider="api-grok"|data-provider="api-glm"/);
@@ -1994,6 +2225,7 @@ describe("Architect habitat official subscription attach", () => {
       "src/auth/architect-subscription-auth.ts",
       "src/auth/architect-session.ts",
       "src/auth/require-architect.ts",
+      "src/auth/architect-password.ts",
       "src/habitat/subscription-auth.ts",
       "src/habitat/vendor-login.ts",
       "src/habitat/connector-auth.ts",
