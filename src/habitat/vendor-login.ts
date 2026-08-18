@@ -2,20 +2,21 @@ import { AvError } from "../errors.js";
 import { vendorFetch } from "./vendor-fetch.js";
 
 /**
- * Official first-party Codex CLI device-code.
- * Source: openai/codex `codex-rs/login/src/device_code_auth.rs` + `CLIENT_ID`.
- * Custom device-auth (POST /api/accounts/deviceauth/usercode, poll
- * /api/accounts/deviceauth/token, then /oauth/token). Not a generic device grant. Not POST {}.
+ * Official first-party named-subscription login. Architect never types an issuer.
  *
- * Architect never types an issuer. Grok/GLM are not here: those vendors
- * publish API keys, not public subscription OAuth.
+ * Codex: openai/codex custom device-auth (auth.openai.com + public Codex CLI client).
+ * Grok: xai-org/grok-build RFC 8628 (auth.x.ai + grok-build client in config.rs / install.sh).
+ * GLM: official Z.ai account authorize (Continue with Z.ai). No first-party published
+ * client_id or OIDC issuer Habitat can start. Fail closed. Not API-key paste.
+ *
+ * HTTP never returns the session. Does not copy ~/.codex|grok|zcode auth files.
  */
 
-export type NamedSubscriptionId = "sub-codex";
+export type NamedSubscriptionId = "sub-codex" | "sub-grok" | "sub-glm";
 
 export interface OfficialLoginStart {
   providerId: NamedSubscriptionId;
-  userCode: string;
+  userCode?: string;
   verificationUri: string;
   intervalSec: number;
   poll: OfficialLoginPollHandle;
@@ -23,13 +24,18 @@ export interface OfficialLoginStart {
 
 export type OfficialLoginPoll =
   | { status: "authorization_pending" }
-  | { status: "complete"; accessToken: string };
+  | { status: "complete"; accessToken: string; refreshToken?: string };
 
-export type OfficialLoginPollHandle = {
-  kind: "codex-device";
-  deviceAuthId: string;
-  userCode: string;
-};
+export type OfficialLoginPollHandle =
+  | {
+      kind: "codex-device";
+      deviceAuthId: string;
+      userCode: string;
+    }
+  | {
+      kind: "grok-device";
+      deviceCode: string;
+    };
 
 export const CODEX_ISSUER = "https://auth.openai.com";
 /** Public Codex CLI client. First-party openai/codex `CLIENT_ID`. */
@@ -41,32 +47,55 @@ export const CODEX_VERIFICATION_PATH = "/codex/device";
 export const CODEX_DEVICE_REDIRECT_URI = `${CODEX_ISSUER}/deviceauth/callback`;
 export const CODEX_VERIFICATION_URI = `${CODEX_ISSUER}${CODEX_VERIFICATION_PATH}`;
 
+export const GROK_ISSUER = "https://auth.x.ai";
+/**
+ * First-party grok-build client. Same class as Codex CLI `CLIENT_ID`.
+ * Source: xai-org/grok-build `crates/codegen/xai-grok-shell/src/auth/config.rs`
+ * and official `install.sh` `OIDC_SCOPE=https://auth.x.ai::b1a00492-…`.
+ */
+export const GROK_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+export const GROK_DEVICE_PATH = "/oauth2/device/code";
+export const GROK_TOKEN_PATH = "/oauth2/token";
+export const GROK_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
+export const GROK_REFERRER = "grok-build";
+/** Frozen first-party Grok OAuth2 scopes from grok-build `default_oauth2_scopes`. */
+export const GROK_SCOPES = [
+  "openid",
+  "profile",
+  "email",
+  "offline_access",
+  "grok-cli:access",
+  "api:access",
+  "conversations:read",
+  "conversations:write",
+  "workspaces:read",
+  "workspaces:write",
+] as const;
+
+/** Official Z.ai desktop/account login exchange. Requires an already-issued token. */
+export const GLM_ACCOUNT_LOGIN_URL = "https://api.z.ai/api/auth/z/login";
+
 export function isNamedSubscriptionId(value: string): value is NamedSubscriptionId {
-  return value === "sub-codex";
+  return value === "sub-codex" || value === "sub-grok" || value === "sub-glm";
 }
 
 export async function startOfficialSubscriptionLogin(
   providerId: NamedSubscriptionId,
 ): Promise<OfficialLoginStart> {
-  if (providerId !== "sub-codex") {
-    throw new AvError(
-      "SUBSCRIPTION_PROVIDER_REQUIRED",
-      "Guided subscription login is only Codex Subscription",
-    );
-  }
-  return startCodexDeviceLogin();
+  if (providerId === "sub-codex") return startCodexDeviceLogin();
+  if (providerId === "sub-grok") return startGrokDeviceLogin();
+  return startGlmAccountAuthorize();
 }
 
 export async function pollOfficialSubscriptionLogin(
   handle: OfficialLoginPollHandle,
 ): Promise<OfficialLoginPoll> {
-  if (handle.kind !== "codex-device") {
-    throw new AvError(
-      "SUBSCRIPTION_PROVIDER_REQUIRED",
-      "Guided subscription login is only Codex Subscription",
-    );
-  }
-  return pollCodexDeviceLogin(handle);
+  if (handle.kind === "codex-device") return pollCodexDeviceLogin(handle);
+  if (handle.kind === "grok-device") return pollGrokDeviceLogin(handle);
+  throw new AvError(
+    "SUBSCRIPTION_PROVIDER_REQUIRED",
+    "Guided subscription login is Codex device-code or Grok device-code",
+  );
 }
 
 async function startCodexDeviceLogin(): Promise<OfficialLoginStart> {
@@ -157,6 +186,103 @@ async function exchangeCodexAuthorizationCode(code: string, codeVerifier: string
   return accessToken;
 }
 
+async function startGrokDeviceLogin(): Promise<OfficialLoginStart> {
+  const url = `${GROK_ISSUER}${GROK_DEVICE_PATH}`;
+  const body = new URLSearchParams({
+    client_id: GROK_CLIENT_ID,
+    scope: GROK_SCOPES.join(" "),
+    referrer: GROK_REFERRER,
+  });
+  let res: Response;
+  try {
+    res = await vendorFetch(url, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+        "x-grok-client-surface": "ui",
+      },
+      body: body.toString(),
+    });
+  } catch {
+    throw new AvError("SUBSCRIPTION_AUTH_UNREACHABLE", "Grok official device-code URL was unreachable");
+  }
+  if (res.status === 404) {
+    throw new AvError(
+      "SUBSCRIPTION_AUTH_NOT_ENABLED",
+      "Grok device-code login is not enabled. Use Grok API (usage-billed) and paste an API key. Do not type an issuer URL.",
+    );
+  }
+  const raw = await readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Grok device start returned an unusable body");
+  if (!res.ok) {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Grok official login rejected the device-code start");
+  }
+  const deviceCode = stringField(raw, "device_code") ?? stringField(raw, "deviceCode");
+  const userCode = stringField(raw, "user_code") ?? stringField(raw, "userCode");
+  const verificationUri = stringField(raw, "verification_uri") ?? stringField(raw, "verificationUri");
+  if (!deviceCode || !userCode || !verificationUri) {
+    throw new AvError(
+      "SUBSCRIPTION_AUTH_REJECTED",
+      "Grok official login must return device_code, user_code, and verification_uri",
+    );
+  }
+  return {
+    providerId: "sub-grok",
+    userCode,
+    verificationUri: assertHttpsUrl(verificationUri),
+    intervalSec: intervalOf(raw, 5),
+    poll: { kind: "grok-device", deviceCode },
+  };
+}
+
+async function pollGrokDeviceLogin(handle: { deviceCode: string }): Promise<OfficialLoginPoll> {
+  const url = `${GROK_ISSUER}${GROK_TOKEN_PATH}`;
+  const body = new URLSearchParams({
+    grant_type: GROK_DEVICE_GRANT,
+    device_code: handle.deviceCode,
+    client_id: GROK_CLIENT_ID,
+  });
+  let res: Response;
+  try {
+    res = await vendorFetch(url, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+        "x-grok-client-surface": "ui",
+      },
+      body: body.toString(),
+    });
+  } catch {
+    throw new AvError("SUBSCRIPTION_AUTH_UNREACHABLE", "Grok official token URL was unreachable");
+  }
+  const raw = await readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Grok token poll returned an unusable body");
+  const error = stringField(raw, "error");
+  if (error === "authorization_pending" || error === "slow_down") {
+    return { status: "authorization_pending" };
+  }
+  if (error === "access_denied" || error === "expired_token") {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Grok official login was denied or expired");
+  }
+  const accessToken = stringField(raw, "access_token") ?? stringField(raw, "accessToken");
+  const refreshToken = stringField(raw, "refresh_token") ?? stringField(raw, "refreshToken");
+  if (!res.ok || !accessToken) {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Grok official login rejected the device-code poll");
+  }
+  return {
+    status: "complete",
+    accessToken,
+    ...(refreshToken ? { refreshToken } : {}),
+  };
+}
+
+function startGlmAccountAuthorize(): never {
+  throw new AvError(
+    "SUBSCRIPTION_AUTH_NOT_ENABLED",
+    "GLM Subscription is official Z.ai account authorize (Continue with Z.ai). Z.ai publishes no first-party client_id or OIDC issuer Habitat can start. POST api.z.ai/api/auth/z/login only exchanges an already-issued token. oauth/cli/init is 404. Do not type an issuer. Do not paste an API key on this choice.",
+  );
+}
+
 async function postJson(url: string, body: Record<string, unknown>): Promise<Response> {
   try {
     return await vendorFetch(url, {
@@ -199,6 +325,19 @@ function stringField(raw: Record<string, unknown>, key: string): string | undefi
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function assertHttpsUrl(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Official login returned an unusable verification URI");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Official login returned an unusable verification URI");
+  }
+  return parsed.toString();
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

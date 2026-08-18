@@ -40,11 +40,22 @@ export interface ProviderChoice {
   /** Official vendor key / console page. */
   officialKeyUrl?: string;
   billingNote?: string;
+  guidedLead?: string;
+  guidedActionLabel?: string;
   fields: ProviderFields;
 }
 
 const HIDDEN_TYPED_URL: ProviderFields = {
   subscriptionAuth: "hidden",
+  startUrl: "hidden",
+  apiKey: "hidden",
+  vendorBaseUrl: "hidden",
+  modelId: "hidden",
+  glmPlan: "hidden",
+};
+
+const GUIDED_SUB: ProviderFields = {
+  subscriptionAuth: "guided",
   startUrl: "hidden",
   apiKey: "hidden",
   vendorBaseUrl: "hidden",
@@ -105,14 +116,30 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     label: "Codex Subscription",
     mode: "subscription",
     bindModelId: "codex-subscription",
-    fields: {
-      subscriptionAuth: "guided",
-      startUrl: "hidden",
-      apiKey: "hidden",
-      vendorBaseUrl: "hidden",
-      modelId: "hidden",
-      glmPlan: "hidden",
-    },
+    guidedActionLabel: "Sign in",
+    guidedLead:
+      "Codex Subscription starts first-party Codex CLI device-code. Core owns issuer and client. Architect does not type an issuer URL. If device-code is admin-gated, that fails closed; Codex API key paste is the usage-billed fallback.",
+    fields: GUIDED_SUB,
+  },
+  {
+    id: "sub-grok",
+    label: "Grok Subscription",
+    mode: "subscription",
+    bindModelId: "grok-subscription",
+    guidedActionLabel: "Sign in",
+    guidedLead:
+      "Grok Subscription starts first-party grok-build device-code. Core owns issuer and client. Architect does not type an issuer URL. This is SuperGrok session, not api.x.ai key billing. If device-code is admin-gated, that fails closed; Grok API key paste is the usage-billed fallback.",
+    fields: GUIDED_SUB,
+  },
+  {
+    id: "sub-glm",
+    label: "GLM Subscription",
+    mode: "subscription",
+    bindModelId: "glm-subscription",
+    guidedActionLabel: "Continue with Z.ai",
+    guidedLead:
+      "Continue with Z.ai starts official Z.ai account authorize. Architect does not type an issuer. No API-key field on this choice. If Habitat cannot start the official desktop authorize without inventing a client_id, this fails closed. API key is the separate GLM API choice.",
+    fields: GUIDED_SUB,
   },
   {
     id: "api-claude",
@@ -132,7 +159,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     mode: "api",
     officialBaseUrl: GROK_OFFICIAL_API_BASE,
     officialKeyUrl: GROK_OFFICIAL_CONSOLE_URL,
-    billingNote: "API key. xAI publishes no public subscription OAuth.",
+    billingNote: "API key (usage-billed). SuperGrok session is the Grok Subscription choice.",
     fields: API_KEY_OFFICIAL_BASE,
   },
   {
@@ -146,7 +173,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     label: "GLM",
     mode: "api",
     officialKeyUrl: GLM_OFFICIAL_KEY_URL,
-    billingNote: "API key. Coding Plan vs PAYG use different official documented base URLs.",
+    billingNote: "API key (usage-billed). Coding Plan vs PAYG use different official documented base URLs.",
     fields: {
       subscriptionAuth: "hidden",
       startUrl: "hidden",

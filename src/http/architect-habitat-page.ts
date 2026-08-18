@@ -147,7 +147,7 @@ export function architectHabitatPageHtml(): string {
         <div id="subscription-providers" class="field" hidden data-providers="subscription">${subscriptionChoices}</div>
         <div id="api-providers" class="field" hidden data-providers="api">${apiChoices}</div>
         <div id="subscription-guided-auth" class="field" hidden>
-          <p class="lead">Codex Subscription starts first-party Codex CLI device-code. Core owns issuer and client. Architect does not type an issuer URL. If device-code is admin-gated, that fails closed; Codex API key paste is the usage-billed fallback.</p>
+          <p id="subscription-guided-lead" class="lead">Named subscription starts official first-party login. Architect does not type an issuer URL.</p>
           <button id="subscription-sign-in" type="button">Sign in</button>
           <div id="subscription-auth-progress" hidden>
             <p id="subscription-user-code" class="lead"></p>
@@ -295,6 +295,8 @@ export function architectHabitatPageHtml(): string {
             officialBaseUrl: row.officialBaseUrl ?? "",
             officialKeyUrl: row.officialKeyUrl ?? "",
             billingNote: row.billingNote ?? "",
+            guidedLead: row.guidedLead ?? "",
+            guidedActionLabel: row.guidedActionLabel ?? "Sign in",
           },
         ]),
       ),
@@ -372,6 +374,10 @@ export function architectHabitatPageHtml(): string {
         el.hidden = !need || need === "hidden";
       }
       show("subscription-guided-auth", spec && spec.subscriptionAuth === "guided");
+      document.getElementById("subscription-guided-lead").textContent =
+        spec && spec.guidedLead ? spec.guidedLead : "Named subscription starts official first-party login. Architect does not type an issuer URL.";
+      document.getElementById("subscription-sign-in").textContent =
+        spec && spec.guidedActionLabel ? spec.guidedActionLabel : "Sign in";
       show("api-key-field", spec && spec.apiKey);
       show("vendor-base-url-field", spec && spec.vendorBaseUrl);
       show("model-id-field", spec && spec.modelId);

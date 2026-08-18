@@ -11,8 +11,8 @@ import { architectWriteAdapterCredentials } from "./architect-adapter-credential
 import { requireArchitect } from "./require-architect.js";
 
 /**
- * In-flight Codex official login held by the habitat wizard. Not a second secrets plane.
- * After complete, ChatGPT session tokens are written through architectWriteAdapterCredentials.
+ * In-flight official login held by the habitat wizard. Not a second secrets plane.
+ * After complete, session tokens are written through architectWriteAdapterCredentials.
  * HTTP never returns them. Does not copy a host CLI session file.
  */
 export interface SubscriptionAuthSession {
@@ -86,7 +86,7 @@ export async function architectStartSubscriptionAuth(input: {
   if (!provider || provider.mode !== "subscription" || provider.fields.subscriptionAuth !== "guided") {
     throw new AvError(
       "SUBSCRIPTION_PROVIDER_REQUIRED",
-      "Guided subscription auth is only Codex Subscription. Grok and GLM are labeled API key attach.",
+      "Guided subscription auth is Codex Subscription, Grok Subscription, or GLM Subscription",
     );
   }
   const modelId = modelIdForBind(provider, "");
@@ -146,6 +146,7 @@ export async function architectCompleteSubscriptionAuth(input: {
   architectWriteAdapterCredentials({
     tenantId: input.tenantId,
     apiKey: polled.accessToken,
+    refreshToken: polled.refreshToken,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
   });

@@ -12,6 +12,8 @@ import { readJsonFileStrict, writeJsonAtomic } from "../persist/json-file.js";
 export interface AdapterCredentialsRecord {
   tenantId: string;
   apiKey: string;
+  /** SuperGrok / session refresh. Written through this same file. Optional. */
+  refreshToken?: string;
   writtenBy: "architect";
   writtenAt: string;
 }
@@ -72,9 +74,12 @@ function parseCredentials(raw: unknown): AdapterCredentialsRecord {
       "Adapter credentials are corrupt; refusing to invent a key",
     );
   }
+  const refreshToken =
+    typeof raw.refreshToken === "string" && raw.refreshToken.trim() ? raw.refreshToken.trim() : undefined;
   return {
     tenantId: raw.tenantId,
     apiKey: raw.apiKey.trim(),
+    ...(refreshToken ? { refreshToken } : {}),
     writtenBy: "architect",
     writtenAt: raw.writtenAt,
   };
