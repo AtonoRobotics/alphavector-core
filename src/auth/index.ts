@@ -7,6 +7,8 @@ export * from "./architect-field-token.js";
 export * from "./require-architect.js";
 export * from "./architect-adapter-bind.js";
 export * from "./architect-adapter-credentials.js";
+export * from "./architect-adapter-router.js";
+export * from "./architect-adapter-aggregator.js";
 export * from "./architect-routines.js";
 export * from "./architect-mail.js";
 export * from "./architect-message.js";

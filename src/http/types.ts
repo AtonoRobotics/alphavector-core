@@ -134,3 +134,13 @@ export interface ArchitectSetConnectorCredentialsBody {
   connectorId: string;
   secret: string;
 }
+
+/** Architect habitat wizard / admin → architectWriteAdapterRouter. */
+export interface ArchitectSetAdapterRouterBody {
+  rules: string;
+}
+
+/** Architect habitat wizard / admin → architectWriteAdapterAggregator. */
+export interface ArchitectSetAdapterAggregatorBody {
+  combine: string;
+}

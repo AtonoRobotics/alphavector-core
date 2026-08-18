@@ -11,6 +11,8 @@ export * from "./adapter.js";
 export * from "./typed-decision.js";
 export * from "./adapter-bind.js";
 export * from "./adapter-credentials.js";
+export * from "./adapter-router.js";
+export * from "./adapter-aggregator.js";
 export * from "./routine-store.js";
 export * from "./mail-store.js";
 export * from "./deadline-store.js";

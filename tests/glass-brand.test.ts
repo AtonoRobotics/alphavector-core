@@ -186,7 +186,7 @@ describe("glass brand boards", () => {
 
     const html = architectHabitatPageHtml();
     assertOnlyBoardHues(html, "architectHabitatPageHtml");
-    expect(hexes(html).sort()).toEqual(["#0B0B0C", "#2A2A2D", "#F4F1EA"].sort());
+    expect(hexes(html).sort()).toEqual(["#0B0B0C", "#2A2A2D", "#C4A574", "#F4F1EA"].sort());
     expect(html).toContain("<title>AV Dev habitat</title>");
     expect(html).toContain("<h1>AV Dev habitat</h1>");
     expect(html).toContain("Architect sits in the habitat.");
@@ -199,8 +199,9 @@ describe("glass brand boards", () => {
     expect(html).toMatch(/\/architect\/set-adapter-credentials/);
     expect(html).toMatch(/\/architect\/bind-connector/);
     expect(html).toMatch(/\/architect\/set-connector-credentials/);
-    expect(html).not.toContain("#C4A574");
-    expect(html).not.toMatch(/--hold/);
+    expect(html).toContain("#C4A574");
+    expect(html).toMatch(/\.step\[data-held="true"\][^}]*#C4A574/);
+    expect(html).not.toMatch(/h1[^}]*#C4A574|button[^}]*#C4A574/);
     expect(html).not.toMatch(LOCKUP);
     expect(html).not.toMatch(GLOW);
     expect(html).not.toMatch(/<svg|monogram|lockup|bird/i);

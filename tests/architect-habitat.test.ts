@@ -4,15 +4,26 @@ import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { architectBindAdapter } from "../src/auth/architect-adapter-bind.js";
+import { architectBindAdapter, architectEditAdapterBind } from "../src/auth/architect-adapter-bind.js";
+import { architectWriteAdapterAggregator } from "../src/auth/architect-adapter-aggregator.js";
+import { architectWriteAdapterRouter } from "../src/auth/architect-adapter-router.js";
 import { architectSit } from "../src/auth/architect-habitat.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { SurfaceViolationError } from "../src/errors.js";
 import { DryStemAdapter } from "../src/habitat/adapter.js";
-import { loadAdapterBind } from "../src/habitat/adapter-bind.js";
+import { loadAdapterAggregator } from "../src/habitat/adapter-aggregator.js";
+import { loadAdapterBind, loadAdapterBindStore } from "../src/habitat/adapter-bind.js";
 import { loadAdapterCredentials } from "../src/habitat/adapter-credentials.js";
+import { loadAdapterRouter } from "../src/habitat/adapter-router.js";
 import { loadConnectorBindStore } from "../src/habitat/connector-bind.js";
 import { loadConnectorCredentialsStore } from "../src/habitat/connector-credentials.js";
+import { architectHabitatPageHtml } from "../src/http/architect-habitat-page.js";
+import {
+  HABITAT_PROVIDERS,
+  isAdminAddPath,
+  modelIdForBind,
+  visibleAttachFields,
+} from "../src/http/architect-habitat-wizard.js";
 import { reapHeldCoders } from "../src/habitat/index.js";
 import { resolveVendorBaseUrl } from "../src/habitat/vendor-think.js";
 import { FieldHttpServer } from "../src/http/field-server.js";
@@ -675,5 +686,276 @@ describe("HK-082 Architect sits in the habitat", () => {
     const pageSrc = readFileSync(path.join(process.cwd(), "src/http/architect-habitat-page.ts"), "utf8");
     expect(pageSrc).not.toMatch(/gpt-|claude-|api\.openai\.com|api\.anthropic\.com|OPENAI_API_KEY|AV_NO_VENDOR/);
     expect(pageSrc).toMatch(/Architect sits in the habitat/);
+  });
+});
+
+describe("Architect habitat bind wizard", () => {
+  it("is a stepped add path, not a catch-all form or admin dump", () => {
+    const html = architectHabitatPageHtml();
+    const pageSrc = readFileSync(path.join(process.cwd(), "src/http/architect-habitat-page.ts"), "utf8");
+    expect(pageSrc).toMatch(/data-wizard-step/);
+    for (const step of [
+      "session",
+      "attach-model",
+      "attach-connector",
+      "router",
+      "aggregator",
+      "confirm",
+    ]) {
+      expect(html).toMatch(new RegExp(`data-wizard-step="${step}"`));
+      expect(html).toMatch(new RegExp(`data-step-marker="${step}"`));
+    }
+    expect(html).toMatch(/id="wizard"/);
+    expect(html).toMatch(/data-path="add"/);
+    expect(html).toMatch(/id="admin"/);
+    expect(html).toMatch(/data-path="admin"/);
+    expect(html).toMatch(/function wizardBindAdapter/);
+    expect(html).toMatch(/function wizardBindConnector/);
+    expect(html).toMatch(/function adminEditAdapter/);
+    expect(html).toMatch(/function adminEditConnector/);
+    expect(html).toMatch(/\/architect\/bind-adapter/);
+    expect(html).toMatch(/\/architect\/edit-adapter-bind/);
+    expect(html).toMatch(/\/architect\/bind-connector/);
+    expect(html).toMatch(/\/architect\/edit-connector-bind/);
+    expect(html).toMatch(/Codex Subscription/);
+    expect(html).toMatch(/Grok Subscription/);
+    expect(html).toMatch(/GLM subscription/);
+    expect(html).toMatch(/Generic OpenAI \(vLLM \/ Ollama\)/);
+    expect(html).toMatch(/>Claude</);
+    expect(html).toMatch(/>Codex</);
+    expect(html).toMatch(/>Grok</);
+    expect(html).toMatch(/>Kimi</);
+    expect(html).toMatch(/>GLM</);
+    expect(html).not.toMatch(/localhost|:11434|:8000|127\.0\.0\.1:11434|127\.0\.0\.1:8000/);
+    expect(html).not.toMatch(/sk-|OPENAI_API_KEY|ANTHROPIC_API_KEY/);
+    expect(html).not.toMatch(/VEYRA|Architect Desktop|NemoClaw|Pyrallon/);
+    const adminMarkup = html.slice(html.indexOf('id="admin"'), html.indexOf("<script>"));
+    expect(adminMarkup).not.toMatch(/data-provider=/);
+    expect(adminMarkup).not.toMatch(/data-mode="subscription"|data-mode="api"/);
+    expect(adminMarkup).not.toMatch(/\/architect\/bind-adapter|\/architect\/bind-connector/);
+    expect(html).toMatch(/async function adminEditAdapter\([\s\S]*\/architect\/edit-adapter-bind/);
+    expect(html).toMatch(/async function adminEditConnector\([\s\S]*\/architect\/edit-connector-bind/);
+    expect(html).toMatch(/async function wizardBindAdapter\([\s\S]*\/architect\/bind-adapter/);
+    expect(html).toMatch(/async function wizardBindConnector\([\s\S]*\/architect\/bind-connector/);
+    expect(html).not.toMatch(/async function adminEditAdapter\([\s\S]*\/architect\/bind-adapter/);
+    expect(html).not.toMatch(/async function adminEditConnector\([\s\S]*\/architect\/bind-connector/);
+    expect(isAdminAddPath("admin", "add-model")).toBe(false);
+    expect(isAdminAddPath("admin", "add-connector")).toBe(false);
+    expect(isAdminAddPath("wizard", "add-model")).toBe(true);
+    expect(isAdminAddPath("wizard", "add-connector")).toBe(true);
+  });
+
+  it("shows only the fields the chosen mode and provider need", () => {
+    expect(HABITAT_PROVIDERS.map((row) => row.label)).toEqual(
+      expect.arrayContaining([
+        "Codex Subscription",
+        "Grok Subscription",
+        "GLM subscription",
+        "Claude",
+        "Codex",
+        "Grok",
+        "Kimi",
+        "GLM",
+        "Generic OpenAI (vLLM / Ollama)",
+      ]),
+    );
+    const sub = visibleAttachFields("subscription", "sub-codex");
+    expect(sub).toEqual({
+      subscriptionAuth: "required",
+      apiKey: "hidden",
+      vendorBaseUrl: "hidden",
+      modelId: "hidden",
+    });
+    const api = visibleAttachFields("api", "api-claude");
+    expect(api).toEqual({
+      subscriptionAuth: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "optional",
+      modelId: "required",
+    });
+    const generic = visibleAttachFields("api", "api-generic-openai");
+    expect(generic).toEqual({
+      subscriptionAuth: "hidden",
+      apiKey: "optional",
+      vendorBaseUrl: "required",
+      modelId: "required",
+    });
+    expect(visibleAttachFields("api", "sub-codex").modelId).toBe("hidden");
+    const genericChoice = HABITAT_PROVIDERS.find((row) => row.id === "api-generic-openai")!;
+    expect(modelIdForBind(genericChoice, "local-llama")).toBe("local-llama");
+    const subChoice = HABITAT_PROVIDERS.find((row) => row.id === "sub-codex")!;
+    expect(modelIdForBind(subChoice, "")).toBe("codex-subscription");
+  });
+
+  it("wizard can bind more than one model and write Architect-entered router and aggregator", async () => {
+    const live = await liveHttp("multi");
+    const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
+    const first = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "claude-bind", vendorBaseUrl: "https://architect-typed.example/claude" }),
+    });
+    expect(first.status).toBe(201);
+    const second = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "generic-bind", vendorBaseUrl: "https://architect-typed.example/vllm" }),
+    });
+    expect(second.status).toBe(201);
+    const creds = await fetch(`${live.url}/architect/set-adapter-credentials`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ apiKey: "av-generic-optional" }),
+    });
+    expect(creds.status).toBe(201);
+
+    const routerRules = "fallback order: claude-bind then generic-bind; match coding tasks to generic-bind";
+    const router = await fetch(`${live.url}/architect/set-adapter-router`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ rules: routerRules }),
+    });
+    expect(router.status).toBe(201);
+    expect(((await router.json()) as { rules: string }).rules).toBe(routerRules);
+
+    const combine = "gather then vote";
+    const aggregator = await fetch(`${live.url}/architect/set-adapter-aggregator`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ combine }),
+    });
+    expect(aggregator.status).toBe(201);
+    expect(((await aggregator.json()) as { combine: string }).combine).toBe(combine);
+
+    const paths = computerRoot(live.computerBaseDir, live.tenantId);
+    const store = loadAdapterBindStore(paths.adapterBindFile);
+    expect(store.models.map((row) => row.modelId).sort()).toEqual(["claude-bind", "generic-bind"]);
+    expect(store.models.every((row) => row.boundBy === "architect")).toBe(true);
+    expect(store.models.find((row) => row.modelId === "generic-bind")?.vendorBaseUrl).toBe(
+      "https://architect-typed.example/vllm",
+    );
+    const latest = loadAdapterBind(paths.adapterBindFile)!;
+    expect(latest.modelId).toBe("generic-bind");
+    expect(latest).not.toHaveProperty("apiKey");
+    const writtenCreds = loadAdapterCredentials(paths.adapterCredentialsFile)!;
+    expect(writtenCreds.writtenBy).toBe("architect");
+    expect(writtenCreds.apiKey).toBe("av-generic-optional");
+
+    const routerRecord = loadAdapterRouter(paths.adapterRouterFile)!;
+    expect(routerRecord.boundBy).toBe("architect");
+    expect(routerRecord.rules).toBe(routerRules);
+    expect(routerRecord).not.toHaveProperty("apiKey");
+    const aggregatorRecord = loadAdapterAggregator(paths.adapterAggregatorFile)!;
+    expect(aggregatorRecord.boundBy).toBe("architect");
+    expect(aggregatorRecord.combine).toBe(combine);
+    expect(existsSync(path.join(paths.disk, "adapter-router.json"))).toBe(false);
+    expect(existsSync(path.join(paths.disk, "adapter-aggregator.json"))).toBe(false);
+    expect(statSync(paths.adapterRouterFile).mode & 0o777).toBe(0o600);
+    expect(statSync(paths.adapterAggregatorFile).mode & 0o777).toBe(0o600);
+
+    const listed = await fetch(`${live.url}/architect/adapter-bind`, { headers: auth });
+    expect(listed.status).toBe(200);
+    const listedBody = (await listed.json()) as { models: Array<{ modelId: string }> };
+    expect(listedBody.models.map((row) => row.modelId).sort()).toEqual(["claude-bind", "generic-bind"]);
+    expect(JSON.stringify(listedBody)).not.toMatch(/apiKey|av-generic-optional/);
+  });
+
+  it("admin cannot add a new model or connector; field cannot write router or aggregator", async () => {
+    const live = await liveHttp("admin-gate");
+    const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
+    const fieldAuth = { authorization: `Bearer ${live.fieldToken}`, "content-type": "application/json" };
+
+    const addViaAdmin = await fetch(`${live.url}/architect/edit-adapter-bind`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "brand-new", vendorBaseUrl: "https://architect-typed.example" }),
+    });
+    expect(addViaAdmin.status).toBe(400);
+    expect(((await addViaAdmin.json()) as { error: string }).error).toBe("ADAPTER_NOT_BOUND");
+    expect(loadAdapterBind(computerRoot(live.computerBaseDir, live.tenantId).adapterBindFile)).toBeUndefined();
+
+    const addConnectorViaAdmin = await fetch(`${live.url}/architect/edit-connector-bind`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ connectorId: "brand-new-world" }),
+    });
+    expect(addConnectorViaAdmin.status).toBe(400);
+    expect(((await addConnectorViaAdmin.json()) as { error: string }).error).toBe("CONNECTOR_UNBOUND");
+
+    const wizardAdd = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "already-bound" }),
+    });
+    expect(wizardAdd.status).toBe(201);
+    const adminEdit = await fetch(`${live.url}/architect/edit-adapter-bind`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "already-bound", vendorBaseUrl: "https://architect-typed.example/edit" }),
+    });
+    expect(adminEdit.status).toBe(201);
+    expect(loadAdapterBind(computerRoot(live.computerBaseDir, live.tenantId).adapterBindFile)?.vendorBaseUrl).toBe(
+      "https://architect-typed.example/edit",
+    );
+
+    for (const route of [
+      "/architect/set-adapter-router",
+      "/architect/set-adapter-aggregator",
+      "/architect/edit-adapter-bind",
+      "/architect/edit-connector-bind",
+    ]) {
+      const denied = await fetch(`${live.url}${route}`, {
+        method: "POST",
+        headers: fieldAuth,
+        body: JSON.stringify({ rules: "fallback", combine: "vote", modelId: "x", connectorId: "y" }),
+      });
+      expect(denied.status).toBe(403);
+      expect(((await denied.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+    }
+    for (const route of ["/architect/adapter-router", "/architect/adapter-aggregator", "/architect/adapter-bind"]) {
+      const denied = await fetch(`${live.url}${route}`, { headers: fieldAuth });
+      expect(denied.status).toBe(403);
+      expect(((await denied.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+    }
+
+    const missingRouter = await fetch(`${live.url}/architect/set-adapter-router`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rules: "fallback" }),
+    });
+    expect(missingRouter.status).toBe(401);
+    expect(() =>
+      architectWriteAdapterRouter({
+        tenantId: live.tenantId,
+        rules: "fallback",
+        computerBaseDir: live.computerBaseDir,
+        architectToken: live.fieldToken,
+      }),
+    ).toThrow(SurfaceViolationError);
+    expect(() =>
+      architectWriteAdapterAggregator({
+        tenantId: live.tenantId,
+        combine: "vote",
+        computerBaseDir: live.computerBaseDir,
+        architectToken: live.fieldToken,
+      }),
+    ).toThrow(SurfaceViolationError);
+    expect(() =>
+      architectEditAdapterBind({
+        tenantId: live.tenantId,
+        modelId: "already-bound",
+        computerBaseDir: live.computerBaseDir,
+        architectToken: live.fieldToken,
+      }),
+    ).toThrow(SurfaceViolationError);
+
+    const inProcess = architectWriteAdapterRouter({
+      tenantId: live.tenantId,
+      rules: "capability match entered by Architect",
+      computerBaseDir: live.computerBaseDir,
+      architectToken: live.architectToken,
+    });
+    expect(inProcess.rules).toBe("capability match entered by Architect");
+    expect(inProcess.boundBy).toBe("architect");
   });
 });
