@@ -9,7 +9,7 @@ import { HABITAT_CONNECTORS, HABITAT_PROVIDERS, WIZARD_STEPS, type AttachMode } 
  * one-time host bootstrap code written at tenants/<tenantId>/architect-bootstrap.json
  * (same host-only class as field-tokens.json / e4-artifacts). Later sign-in is
  * that password, then an HttpOnly av_architect cookie. The deploy-held Architect
- * credential is never a wizard field. Not an open listen. Not allowHeldSeat.
+ * credential is never a wizard field. Not an open listen.
  *
  * Add path is a stepped wizard. Admin inspects/edits already-bound settings
  * and cannot attach a new model or connector.

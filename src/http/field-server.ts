@@ -1150,8 +1150,8 @@ export class FieldHttpServer {
 
   /**
    * First-run password create. Requires the unused host bootstrap code written
-   * beside field-tokens.json. Consumes that code. Not allowHeldSeat. Not a
-   * deploy-token paste. Issues the same av_architect cookie as later sign-in.
+   * beside field-tokens.json. Consumes that code. Not a deploy-token paste.
+   * Issues the same av_architect cookie as later sign-in.
    */
   private async routeArchitectSetPassword(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (this.refuseFieldArchitectSeat(req, res, "A field token cannot sit in the habitat")) return;
