@@ -2,8 +2,10 @@ import { AvError } from "../errors.js";
 import { vendorFetch } from "./vendor-fetch.js";
 
 /**
- * Named connector official login. GitHub publishes device-code OAuth (first-party gh CLI).
- * Generic / private MCP is Architect-typed server URL — no baked host.
+ * Named connector OAuth uses OUR GitHub OAuth App registration (Architect-supplied
+ * client_id) on GitHub's published device endpoints. Not OpenAI's connector catalog.
+ * Not the first-party GitHub CLI client. Generic / private MCP is Architect-typed
+ * server URL — no baked host.
  */
 
 export type NamedConnectorId = "github";
@@ -14,16 +16,16 @@ export interface OfficialConnectorStart {
   verificationUri: string;
   intervalSec: number;
   deviceCode: string;
+  clientId: string;
 }
 
 export type OfficialConnectorPoll =
   | { status: "authorization_pending" }
   | { status: "complete"; secret: string };
 
+/** GitHub-published device authorization. https://docs.github.com/apps/oauth-apps */
 export const GITHUB_DEVICE_URL = "https://github.com/login/device/code";
 export const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
-/** Public GitHub CLI OAuth app. First-party cli/cli. */
-export const GITHUB_CLIENT_ID = "178c6fc778ccc68e1d6a";
 export const GITHUB_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
 export const GITHUB_SCOPES = "repo read:org";
 
@@ -31,22 +33,41 @@ export function isNamedConnectorId(value: string): value is NamedConnectorId {
   return value === "github";
 }
 
-export async function startOfficialConnectorLogin(connectorId: NamedConnectorId): Promise<OfficialConnectorStart> {
-  if (connectorId === "github") return startGithubDeviceLogin();
-  throw new AvError("CONNECTOR_PROVIDER_REQUIRED", "Named connector login is only for published official OAuth");
+export async function startOfficialConnectorLogin(
+  connectorId: NamedConnectorId,
+  clientId: string,
+): Promise<OfficialConnectorStart> {
+  if (connectorId !== "github") {
+    throw new AvError("CONNECTOR_PROVIDER_REQUIRED", "Named connector login is only GitHub with our OAuth App");
+  }
+  return startGithubDeviceLogin(requireClientId(clientId));
 }
 
 export async function pollOfficialConnectorLogin(input: {
   connectorId: NamedConnectorId;
   deviceCode: string;
+  clientId: string;
 }): Promise<OfficialConnectorPoll> {
-  if (input.connectorId === "github") return pollGithubDeviceLogin(input.deviceCode);
-  throw new AvError("CONNECTOR_PROVIDER_REQUIRED", "Named connector login is only for published official OAuth");
+  if (input.connectorId !== "github") {
+    throw new AvError("CONNECTOR_PROVIDER_REQUIRED", "Named connector login is only GitHub with our OAuth App");
+  }
+  return pollGithubDeviceLogin(input.deviceCode, requireClientId(input.clientId));
 }
 
-async function startGithubDeviceLogin(): Promise<OfficialConnectorStart> {
+function requireClientId(clientId: string): string {
+  const trimmed = clientId.trim();
+  if (!trimmed) {
+    throw new AvError(
+      "CONNECTOR_CLIENT_REQUIRED",
+      "GitHub attach needs this habitat's OAuth App client id. Register a GitHub OAuth App; do not type a mystery issuer.",
+    );
+  }
+  return trimmed;
+}
+
+async function startGithubDeviceLogin(clientId: string): Promise<OfficialConnectorStart> {
   const body = new URLSearchParams({
-    client_id: GITHUB_CLIENT_ID,
+    client_id: clientId,
     scope: GITHUB_SCOPES,
   });
   let res: Response;
@@ -81,12 +102,13 @@ async function startGithubDeviceLogin(): Promise<OfficialConnectorStart> {
     verificationUri,
     intervalSec: intervalOf(raw, 5),
     deviceCode,
+    clientId,
   };
 }
 
-async function pollGithubDeviceLogin(deviceCode: string): Promise<OfficialConnectorPoll> {
+async function pollGithubDeviceLogin(deviceCode: string, clientId: string): Promise<OfficialConnectorPoll> {
   const body = new URLSearchParams({
-    client_id: GITHUB_CLIENT_ID,
+    client_id: clientId,
     device_code: deviceCode,
     grant_type: GITHUB_DEVICE_GRANT,
   });

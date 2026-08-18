@@ -10,8 +10,9 @@ import {
 } from "./vendor-login.js";
 
 /**
- * Named-subscription official login. Core owns issuer + client from first-party CLIs.
- * Architect never types a start URL. POST {} to an Architect-typed issuer is not the product path.
+ * Codex Subscription official login. Core owns issuer + client from openai/codex.
+ * Architect never types a start URL. POST {} to an Architect-typed issuer is not
+ * the product path. Grok/GLM are official API-key paste, not this login.
  */
 
 export type { OfficialLoginPoll, OfficialLoginPollHandle, OfficialLoginStart, NamedSubscriptionId };
@@ -20,7 +21,7 @@ export function assertNamedSubscription(providerId: string): NamedSubscriptionId
   if (!isNamedSubscriptionId(providerId)) {
     throw new AvError(
       "SUBSCRIPTION_PROVIDER_REQUIRED",
-      "Guided subscription auth is only for Codex Subscription, Grok Subscription, and GLM subscription",
+      "Guided subscription auth is only Codex Subscription. Grok and GLM publish API keys, not public subscription OAuth.",
     );
   }
   return providerId;
@@ -30,9 +31,6 @@ export async function startSubscriptionLogin(providerId: string): Promise<Offici
   return startOfficialSubscriptionLogin(assertNamedSubscription(providerId));
 }
 
-export async function pollSubscriptionLogin(
-  handle: OfficialLoginPollHandle,
-  input?: { callbackUrl?: string },
-): Promise<OfficialLoginPoll> {
-  return pollOfficialSubscriptionLogin(handle, input);
+export async function pollSubscriptionLogin(handle: OfficialLoginPollHandle): Promise<OfficialLoginPoll> {
+  return pollOfficialSubscriptionLogin(handle);
 }

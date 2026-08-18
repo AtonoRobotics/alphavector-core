@@ -130,13 +130,13 @@ export interface ArchitectStartSubscriptionAuthBody {
 /** Architect habitat wizard → architectCompleteSubscriptionAuth. */
 export interface ArchitectCompleteSubscriptionAuthBody {
   authId: string;
-  /** Official Z.ai / ZCode callback after Continue with Z.ai (zcode://zai-auth/callback). */
-  callbackUrl?: string;
 }
 
 /** Architect habitat wizard → architectStartConnectorAuth. */
 export interface ArchitectStartConnectorAuthBody {
   connectorId: string;
+  /** Habitat GitHub OAuth App client id. Not the GitHub CLI client. */
+  clientId?: string;
 }
 
 /** Architect habitat wizard → architectCompleteConnectorAuth. */

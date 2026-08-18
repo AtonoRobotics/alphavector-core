@@ -1,5 +1,9 @@
 import { GLASS, PRODUCT } from "../identity.js";
 import {
+  GLM_CODING_PLAN_BASE,
+  GLM_GENERAL_API_BASE,
+  GLM_OFFICIAL_KEY_URL,
+  GLM_PLANS,
   HABITAT_CONNECTORS,
   HABITAT_PROVIDERS,
   WIZARD_STEPS,
@@ -22,13 +26,27 @@ export function wantsArchitectHabitatHtml(accept: string | undefined): boolean {
 
 function providerButtons(mode: AttachMode): string {
   return HABITAT_PROVIDERS.filter((row) => row.mode === mode)
-    .map(
-      (row) =>
-        `<button type="button" class="choice" data-provider="${row.id}" data-mode="${row.mode}"${
-          row.bindModelId ? ` data-bind-model-id="${row.bindModelId}"` : ""
-        }>${row.label}</button>`,
-    )
+    .map((row) => {
+      const attrs = [
+        `data-provider="${row.id}"`,
+        `data-mode="${row.mode}"`,
+        row.bindModelId ? `data-bind-model-id="${row.bindModelId}"` : "",
+        row.officialBaseUrl ? `data-official-base-url="${row.officialBaseUrl}"` : "",
+        row.officialKeyUrl ? `data-official-key-url="${row.officialKeyUrl}"` : "",
+        row.billingNote ? `data-billing-note="${escapeAttr(row.billingNote)}"` : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      return `<button type="button" class="choice" ${attrs}>${row.label}</button>`;
+    })
     .join("");
+}
+
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
 }
 
 function connectorButtons(): string {
@@ -129,17 +147,22 @@ export function architectHabitatPageHtml(): string {
         <div id="subscription-providers" class="field" hidden data-providers="subscription">${subscriptionChoices}</div>
         <div id="api-providers" class="field" hidden data-providers="api">${apiChoices}</div>
         <div id="subscription-guided-auth" class="field" hidden>
-          <p class="lead">Sign in to attach this subscription. Core starts that vendor's official login. Architect does not type an issuer URL.</p>
+          <p class="lead">Codex Subscription starts first-party Codex CLI device-code. Core owns issuer and client. Architect does not type an issuer URL. If device-code is admin-gated, that fails closed; Codex API key paste is the usage-billed fallback.</p>
           <button id="subscription-sign-in" type="button">Sign in</button>
           <div id="subscription-auth-progress" hidden>
             <p id="subscription-user-code" class="lead"></p>
             <p id="subscription-verification-uri" class="lead"></p>
-            <div id="subscription-callback-field" hidden>
-              <label for="subscription-callback-url">vendor callback URL (Z.ai / ZCode)</label>
-              <input id="subscription-callback-url" autocomplete="off" spellcheck="false" />
-            </div>
             <button id="subscription-complete" type="button">Complete sign-in</button>
           </div>
+        </div>
+        <div id="official-key-docs" class="field" hidden>
+          <p id="official-billing-note" class="lead"></p>
+          <p id="official-key-link" class="lead"></p>
+        </div>
+        <div id="glm-plan-field" class="field" hidden>
+          <p class="lead">Official is API key only. Coding Plan and general use different official base URLs. Architect does not type an issuer.</p>
+          <label for="glm-plan-coding"><input id="glm-plan-coding" type="radio" name="glm-plan" checked /> ${GLM_PLANS.coding.label} (${GLM_CODING_PLAN_BASE})</label>
+          <label for="glm-plan-general"><input id="glm-plan-general" type="radio" name="glm-plan" /> ${GLM_PLANS.general.label} (${GLM_GENERAL_API_BASE})</label>
         </div>
         <div id="model-id-field" class="field" hidden>
           <label for="model-id">model id</label>
@@ -159,10 +182,12 @@ export function architectHabitatPageHtml(): string {
 
       <section class="band step" data-wizard-step="attach-connector" hidden aria-label="Attach connector">
         <h2>3. Attach connector</h2>
-        <p class="lead">Named connectors start that app's official OAuth. Generic / private MCP is an Architect-typed server URL.</p>
+        <p class="lead">Named connectors use vendor OAuth with this habitat's registration. Generic / private MCP is an Architect-typed server URL.</p>
         <div id="connector-choices">${connectorChoices}</div>
         <div id="connector-guided-auth" class="field" hidden>
-          <p class="lead">Sign in to attach this connector. Core starts the official login.</p>
+          <p class="lead">GitHub device OAuth with this habitat's OAuth App. Paste that client id. Core uses GitHub's published device endpoints. Not OpenAI's catalog.</p>
+          <label for="github-client-id">GitHub OAuth App client id</label>
+          <input id="github-client-id" autocomplete="off" spellcheck="false" />
           <button id="connector-sign-in" type="button">Sign in</button>
           <div id="connector-auth-progress" hidden>
             <p id="connector-user-code" class="lead"></p>
@@ -261,17 +286,23 @@ export function architectHabitatPageHtml(): string {
   <footer>${PRODUCT.appDisplay}</footer>
   <script>
     var STEPS = ["session", "attach-model", "attach-connector", "router", "aggregator", "confirm"];
-    var FIELDS = {
-      "sub-codex": { subscriptionAuth: "guided", startUrl: "hidden", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
-      "sub-grok": { subscriptionAuth: "guided", startUrl: "hidden", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
-      "sub-glm": { subscriptionAuth: "guided", startUrl: "hidden", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
-      "api-claude": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-codex": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-grok": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-kimi": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-glm": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-generic-openai": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "optional", vendorBaseUrl: "required", modelId: "required" }
-    };
+    var FIELDS = ${JSON.stringify(
+      Object.fromEntries(
+        HABITAT_PROVIDERS.map((row) => [
+          row.id,
+          {
+            ...row.fields,
+            officialBaseUrl: row.officialBaseUrl ?? "",
+            officialKeyUrl: row.officialKeyUrl ?? "",
+            billingNote: row.billingNote ?? "",
+          },
+        ]),
+      ),
+    )};
+    var GLM_PLAN_BASES = ${JSON.stringify({
+      coding: { officialBaseUrl: GLM_CODING_PLAN_BASE, bindModelId: GLM_PLANS.coding.bindModelId, keyUrl: GLM_OFFICIAL_KEY_URL },
+      general: { officialBaseUrl: GLM_GENERAL_API_BASE, bindModelId: GLM_PLANS.general.bindModelId, keyUrl: GLM_OFFICIAL_KEY_URL },
+    })};
     var state = { step: "session", panel: "wizard", mode: "", provider: "", connector: "", models: [], connectors: [], subscriptionAuthId: "", connectorAuthId: "" };
     var subscriptionPoll = null;
     var subscriptionCompleting = false;
@@ -344,6 +375,14 @@ export function architectHabitatPageHtml(): string {
       show("api-key-field", spec && spec.apiKey);
       show("vendor-base-url-field", spec && spec.vendorBaseUrl);
       show("model-id-field", spec && spec.modelId);
+      show("glm-plan-field", spec && spec.glmPlan);
+      var showDocs = !!(spec && (spec.officialKeyUrl || spec.billingNote || (spec.glmPlan && spec.glmPlan !== "hidden")));
+      show("official-key-docs", showDocs);
+      document.getElementById("official-billing-note").textContent = spec && spec.billingNote ? spec.billingNote : "";
+      var keyUrl = spec && spec.officialKeyUrl ? spec.officialKeyUrl : "";
+      document.getElementById("official-key-link").innerHTML = keyUrl
+        ? 'Get a key: <a href="' + keyUrl + '" target="_blank" rel="noopener">' + keyUrl + "</a>"
+        : "";
       document.getElementById("wizard-bind-adapter").hidden = !!(spec && spec.subscriptionAuth === "guided");
       if (!spec || spec.subscriptionAuth !== "guided") {
         stopSubscriptionPoll();
@@ -365,21 +404,36 @@ export function architectHabitatPageHtml(): string {
         state.connectorAuthId = "";
       }
     }
+    function selectedGlmPlan() {
+      var coding = document.getElementById("glm-plan-coding");
+      return coding && coding.checked ? "coding" : "general";
+    }
     function wizardModelId() {
       var provider = selectedProvider();
       if (!provider) return "";
-      var spec = FIELDS[provider.getAttribute("data-provider")];
+      var providerId = provider.getAttribute("data-provider");
+      var spec = FIELDS[providerId];
+      if (providerId === "sub-glm") {
+        return GLM_PLAN_BASES[selectedGlmPlan()].bindModelId;
+      }
       if (spec && spec.modelId !== "hidden") {
         return document.getElementById("model-id").value.trim();
       }
       return provider.getAttribute("data-bind-model-id") || provider.getAttribute("data-provider");
+    }
+    function wizardOfficialBaseUrl() {
+      var provider = selectedProvider();
+      if (!provider) return "";
+      var providerId = provider.getAttribute("data-provider");
+      if (providerId === "sub-glm") return GLM_PLAN_BASES[selectedGlmPlan()].officialBaseUrl;
+      return provider.getAttribute("data-official-base-url") || "";
     }
     async function wizardBindAdapter() {
       var provider = selectedProvider();
       if (!provider) throw new Error("Choose a provider");
       var spec = FIELDS[provider.getAttribute("data-provider")];
       var modelId = wizardModelId();
-      var vendorBaseUrl = document.getElementById("vendor-base-url").value.trim();
+      var vendorBaseUrl = wizardOfficialBaseUrl() || document.getElementById("vendor-base-url").value.trim();
       var apiKey = document.getElementById("api-key").value.trim();
       if (spec.subscriptionAuth === "guided") {
         throw new Error("Subscription attach starts a guided sign-in; a token dump is not the product path");
@@ -428,8 +482,6 @@ export function architectHabitatPageHtml(): string {
         : "";
       document.getElementById("subscription-verification-uri").textContent =
         "open: " + started.verificationUri;
-      document.getElementById("subscription-callback-field").hidden =
-        provider.getAttribute("data-provider") !== "sub-glm";
       document.getElementById("subscription-auth-progress").hidden = false;
       status("sign-in started; complete it at the official vendor URL");
       stopSubscriptionPoll();
@@ -441,9 +493,7 @@ export function architectHabitatPageHtml(): string {
       if (!state.subscriptionAuthId || subscriptionCompleting) return;
       subscriptionCompleting = true;
       try {
-        var callbackUrl = document.getElementById("subscription-callback-url").value.trim();
         var body = { authId: state.subscriptionAuthId };
-        if (callbackUrl) body.callbackUrl = callbackUrl;
         var done = await call("/architect/complete-subscription-auth", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -474,10 +524,12 @@ export function architectHabitatPageHtml(): string {
         throw new Error("Choose a named connector");
       }
       var connectorId = choice.getAttribute("data-bind-connector-id") || choice.getAttribute("data-connector");
+      var clientId = document.getElementById("github-client-id").value.trim();
+      if (!clientId) throw new Error("GitHub OAuth App client id is required");
       var started = await call("/architect/start-connector-auth", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ connectorId: connectorId }),
+        body: JSON.stringify({ connectorId: connectorId, clientId: clientId }),
       });
       state.connectorAuthId = started.authId;
       document.getElementById("connector-user-code").textContent = "user code: " + started.userCode;

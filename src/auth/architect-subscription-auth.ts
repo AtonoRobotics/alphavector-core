@@ -11,8 +11,9 @@ import { architectWriteAdapterCredentials } from "./architect-adapter-credential
 import { requireArchitect } from "./require-architect.js";
 
 /**
- * In-flight official vendor login held by the habitat wizard. Not a second secrets plane.
- * After complete, the session is written through architectWriteAdapterCredentials.
+ * In-flight Codex official login held by the habitat wizard. Not a second secrets plane.
+ * After complete, ChatGPT session tokens are written through architectWriteAdapterCredentials.
+ * HTTP never returns them. Does not copy a host CLI session file.
  */
 export interface SubscriptionAuthSession {
   authId: string;
@@ -82,10 +83,10 @@ export async function architectStartSubscriptionAuth(input: {
 }): Promise<SubscriptionAuthStarted> {
   requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
   const provider = findProvider(input.providerId);
-  if (!provider || provider.mode !== "subscription") {
+  if (!provider || provider.mode !== "subscription" || provider.fields.subscriptionAuth !== "guided") {
     throw new AvError(
       "SUBSCRIPTION_PROVIDER_REQUIRED",
-      "Guided subscription auth is only for Codex Subscription, Grok Subscription, and GLM subscription",
+      "Guided subscription auth is only Codex Subscription. Grok and GLM publish API keys, not public subscription OAuth.",
     );
   }
   const modelId = modelIdForBind(provider, "");
@@ -116,7 +117,6 @@ export async function architectCompleteSubscriptionAuth(input: {
   computerBaseDir: string;
   architectToken?: string;
   hold: SubscriptionAuthHold;
-  callbackUrl?: string;
 }): Promise<SubscriptionAuthPending | SubscriptionAuthBound> {
   requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
   const authId = input.authId.trim();
@@ -129,7 +129,7 @@ export async function architectCompleteSubscriptionAuth(input: {
   }
   let polled: Awaited<ReturnType<typeof pollSubscriptionLogin>>;
   try {
-    polled = await pollSubscriptionLogin(session.poll, { callbackUrl: input.callbackUrl });
+    polled = await pollSubscriptionLogin(session.poll);
   } catch (err) {
     input.hold.drop(authId);
     throw err;

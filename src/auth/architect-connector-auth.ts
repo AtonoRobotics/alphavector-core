@@ -17,6 +17,7 @@ export interface ConnectorAuthSession {
   authId: string;
   tenantId: string;
   connectorId: NamedConnectorId;
+  clientId: string;
   deviceCode: string;
   userCode: string;
   verificationUri: string;
@@ -68,6 +69,7 @@ export interface ConnectorAuthBound {
 export async function architectStartConnectorAuth(input: {
   tenantId: string;
   connectorId: string;
+  clientId?: string;
   computerBaseDir: string;
   architectToken?: string;
   hold: ConnectorAuthHold;
@@ -77,14 +79,15 @@ export async function architectStartConnectorAuth(input: {
   if (!isNamedConnectorId(connectorId)) {
     throw new AvError(
       "CONNECTOR_PROVIDER_REQUIRED",
-      "Guided connector auth is only for named connectors with published official OAuth",
+      "Guided connector auth is only GitHub with this habitat's OAuth App registration",
     );
   }
-  const started = await startOfficialConnectorLogin(connectorId);
+  const started = await startOfficialConnectorLogin(connectorId, input.clientId ?? "");
   const session: ConnectorAuthSession = {
     authId: newId("connauth"),
     tenantId: input.tenantId,
     connectorId,
+    clientId: started.clientId,
     deviceCode: started.deviceCode,
     userCode: started.userCode,
     verificationUri: started.verificationUri,
@@ -120,6 +123,7 @@ export async function architectCompleteConnectorAuth(input: {
     polled = await pollOfficialConnectorLogin({
       connectorId: session.connectorId,
       deviceCode: session.deviceCode,
+      clientId: session.clientId,
     });
   } catch (err) {
     input.hold.drop(authId);

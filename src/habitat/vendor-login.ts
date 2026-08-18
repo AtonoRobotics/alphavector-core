@@ -1,21 +1,21 @@
-import { randomBytes } from "node:crypto";
 import { AvError } from "../errors.js";
 import { vendorFetch } from "./vendor-fetch.js";
 
 /**
- * Official first-party login for named subscriptions.
- * Codex: openai/codex device-auth (auth.openai.com + public Codex CLI client).
- * Grok: xai-org/grok-build `grok login --device-auth` (auth.x.ai + public Grok CLI client).
- * GLM: current ZCode / z.ai “Continue with Z.ai” Coding Plan authorize.
+ * Official first-party Codex CLI device-code.
+ * Source: openai/codex `codex-rs/login/src/device_code_auth.rs` + `CLIENT_ID`.
+ * Custom device-auth (POST /api/accounts/deviceauth/usercode, poll
+ * /api/accounts/deviceauth/token, then /oauth/token). Not a generic device grant. Not POST {}.
  *
- * Architect never types an issuer. Generic OpenAI / vLLM / Ollama hosts are not baked here.
+ * Architect never types an issuer. Grok/GLM are not here: those vendors
+ * publish API keys, not public subscription OAuth.
  */
 
-export type NamedSubscriptionId = "sub-codex" | "sub-grok" | "sub-glm";
+export type NamedSubscriptionId = "sub-codex";
 
 export interface OfficialLoginStart {
   providerId: NamedSubscriptionId;
-  userCode?: string;
+  userCode: string;
   verificationUri: string;
   intervalSec: number;
   poll: OfficialLoginPollHandle;
@@ -25,21 +25,11 @@ export type OfficialLoginPoll =
   | { status: "authorization_pending" }
   | { status: "complete"; accessToken: string };
 
-export type OfficialLoginPollHandle =
-  | {
-      kind: "codex-device";
-      deviceAuthId: string;
-      userCode: string;
-    }
-  | {
-      kind: "grok-device";
-      deviceCode: string;
-    }
-  | {
-      kind: "glm-authorize";
-      state: string;
-      redirectUri: string;
-    };
+export type OfficialLoginPollHandle = {
+  kind: "codex-device";
+  deviceAuthId: string;
+  userCode: string;
+};
 
 export const CODEX_ISSUER = "https://auth.openai.com";
 /** Public Codex CLI client. First-party openai/codex `CLIENT_ID`. */
@@ -49,58 +39,45 @@ export const CODEX_TOKEN_POLL_PATH = "/api/accounts/deviceauth/token";
 export const CODEX_OAUTH_TOKEN_PATH = "/oauth/token";
 export const CODEX_VERIFICATION_PATH = "/codex/device";
 export const CODEX_DEVICE_REDIRECT_URI = `${CODEX_ISSUER}/deviceauth/callback`;
-
-export const GROK_ISSUER = "https://auth.x.ai";
-/** Public Grok CLI client. First-party xai-org/grok-build `XAI_OAUTH2` client. */
-export const GROK_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
-export const GROK_DEVICE_PATH = "/oauth2/device/code";
-export const GROK_TOKEN_PATH = "/oauth2/token";
-export const GROK_DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code";
-export const GROK_REFERRER = "grok-build";
-/** Frozen first-party Grok OAuth2 scopes from xai-org/grok-build. */
-export const GROK_SCOPES = [
-  "openid",
-  "profile",
-  "email",
-  "offline_access",
-  "grok-cli:access",
-  "api:access",
-  "conversations:read",
-  "conversations:write",
-  "workspaces:read",
-  "workspaces:write",
-] as const;
-
-export const GLM_AUTHORIZE_URL = "https://chat.z.ai/api/oauth/authorize";
-export const GLM_TOKEN_URL = "https://zcode.z.ai/api/v1/oauth/token";
-/** Official ZCode “Continue with Z.ai” public client. */
-export const GLM_CLIENT_ID = "client_P8X5CMWmlaRO9gyO-KSqtg";
-export const GLM_REDIRECT_URI = "zcode://zai-auth/callback";
+export const CODEX_VERIFICATION_URI = `${CODEX_ISSUER}${CODEX_VERIFICATION_PATH}`;
 
 export function isNamedSubscriptionId(value: string): value is NamedSubscriptionId {
-  return value === "sub-codex" || value === "sub-grok" || value === "sub-glm";
+  return value === "sub-codex";
 }
 
 export async function startOfficialSubscriptionLogin(
   providerId: NamedSubscriptionId,
 ): Promise<OfficialLoginStart> {
-  if (providerId === "sub-codex") return startCodexDeviceLogin();
-  if (providerId === "sub-grok") return startGrokDeviceLogin();
-  return startGlmAuthorize();
+  if (providerId !== "sub-codex") {
+    throw new AvError(
+      "SUBSCRIPTION_PROVIDER_REQUIRED",
+      "Guided subscription login is only Codex Subscription",
+    );
+  }
+  return startCodexDeviceLogin();
 }
 
 export async function pollOfficialSubscriptionLogin(
   handle: OfficialLoginPollHandle,
-  input?: { callbackUrl?: string },
 ): Promise<OfficialLoginPoll> {
-  if (handle.kind === "codex-device") return pollCodexDeviceLogin(handle);
-  if (handle.kind === "grok-device") return pollGrokDeviceLogin(handle);
-  return completeGlmAuthorize(handle, input?.callbackUrl);
+  if (handle.kind !== "codex-device") {
+    throw new AvError(
+      "SUBSCRIPTION_PROVIDER_REQUIRED",
+      "Guided subscription login is only Codex Subscription",
+    );
+  }
+  return pollCodexDeviceLogin(handle);
 }
 
 async function startCodexDeviceLogin(): Promise<OfficialLoginStart> {
   const url = `${CODEX_ISSUER}${CODEX_USERCODE_PATH}`;
   const res = await postJson(url, { client_id: CODEX_CLIENT_ID });
+  if (res.status === 404) {
+    throw new AvError(
+      "SUBSCRIPTION_AUTH_NOT_ENABLED",
+      "Codex device-code login is not enabled. Use Codex API (usage-billed) and paste an API key. Do not type an issuer URL.",
+    );
+  }
   const raw = await readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Codex device start returned an unusable body");
   if (!res.ok) {
     throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Codex official login rejected the device-code start");
@@ -116,7 +93,7 @@ async function startCodexDeviceLogin(): Promise<OfficialLoginStart> {
   return {
     providerId: "sub-codex",
     userCode,
-    verificationUri: `${CODEX_ISSUER}${CODEX_VERIFICATION_PATH}`,
+    verificationUri: CODEX_VERIFICATION_URI,
     intervalSec: intervalOf(raw, 5),
     poll: { kind: "codex-device", deviceAuthId, userCode },
   };
@@ -180,160 +157,6 @@ async function exchangeCodexAuthorizationCode(code: string, codeVerifier: string
   return accessToken;
 }
 
-async function startGrokDeviceLogin(): Promise<OfficialLoginStart> {
-  const url = `${GROK_ISSUER}${GROK_DEVICE_PATH}`;
-  const body = new URLSearchParams({
-    client_id: GROK_CLIENT_ID,
-    scope: GROK_SCOPES.join(" "),
-    referrer: GROK_REFERRER,
-  });
-  let res: Response;
-  try {
-    res = await vendorFetch(url, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/x-www-form-urlencoded",
-        "x-grok-client-surface": "ui",
-      },
-      body: body.toString(),
-    });
-  } catch {
-    throw new AvError("SUBSCRIPTION_AUTH_UNREACHABLE", "Grok official device-code URL was unreachable");
-  }
-  const raw = await readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Grok device start returned an unusable body");
-  if (!res.ok) {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Grok official login rejected the device-code start");
-  }
-  const deviceCode = stringField(raw, "device_code") ?? stringField(raw, "deviceCode");
-  const userCode = stringField(raw, "user_code") ?? stringField(raw, "userCode");
-  const verificationUri = stringField(raw, "verification_uri") ?? stringField(raw, "verificationUri");
-  if (!deviceCode || !userCode || !verificationUri) {
-    throw new AvError(
-      "SUBSCRIPTION_AUTH_REJECTED",
-      "Grok official login must return device_code, user_code, and verification_uri",
-    );
-  }
-  return {
-    providerId: "sub-grok",
-    userCode,
-    verificationUri: assertHttpsUrl(verificationUri),
-    intervalSec: intervalOf(raw, 5),
-    poll: { kind: "grok-device", deviceCode },
-  };
-}
-
-async function pollGrokDeviceLogin(handle: { deviceCode: string }): Promise<OfficialLoginPoll> {
-  const url = `${GROK_ISSUER}${GROK_TOKEN_PATH}`;
-  const body = new URLSearchParams({
-    grant_type: GROK_DEVICE_GRANT,
-    device_code: handle.deviceCode,
-    client_id: GROK_CLIENT_ID,
-  });
-  let res: Response;
-  try {
-    res = await vendorFetch(url, {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": "application/x-www-form-urlencoded",
-        "x-grok-client-surface": "ui",
-      },
-      body: body.toString(),
-    });
-  } catch {
-    throw new AvError("SUBSCRIPTION_AUTH_UNREACHABLE", "Grok official token URL was unreachable");
-  }
-  const raw = await readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Grok token poll returned an unusable body");
-  const error = stringField(raw, "error");
-  if (error === "authorization_pending" || error === "slow_down") {
-    return { status: "authorization_pending" };
-  }
-  if (error === "access_denied" || error === "expired_token") {
-    throw new AvError("SUBSCRIPTION_AUTH_DENIED", "Grok sign-in was denied or expired");
-  }
-  const accessToken = stringField(raw, "access_token") ?? stringField(raw, "accessToken");
-  if (accessToken) return { status: "complete", accessToken };
-  if (!res.ok) {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Grok official login rejected the token poll");
-  }
-  throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Grok official login returned an unusable token body");
-}
-
-function startGlmAuthorize(): OfficialLoginStart {
-  const state = randomBytes(16).toString("hex");
-  const url = new URL(GLM_AUTHORIZE_URL);
-  url.searchParams.set("redirect_uri", GLM_REDIRECT_URI);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("client_id", GLM_CLIENT_ID);
-  url.searchParams.set("state", state);
-  return {
-    providerId: "sub-glm",
-    verificationUri: url.toString(),
-    intervalSec: 5,
-    poll: { kind: "glm-authorize", state, redirectUri: GLM_REDIRECT_URI },
-  };
-}
-
-async function completeGlmAuthorize(
-  handle: { state: string; redirectUri: string },
-  callbackUrl?: string,
-): Promise<OfficialLoginPoll> {
-  const code = authorizationCodeFromCallback(callbackUrl, handle.state);
-  if (!code) {
-    return { status: "authorization_pending" };
-  }
-  let res: Response;
-  try {
-    res = await vendorFetch(GLM_TOKEN_URL, {
-      method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({
-        provider: "zai",
-        code,
-        redirect_uri: handle.redirectUri,
-        state: handle.state,
-      }),
-    });
-  } catch {
-    throw new AvError("SUBSCRIPTION_AUTH_UNREACHABLE", "Z.ai official token URL was unreachable");
-  }
-  const raw = await readJsonBody(res, "SUBSCRIPTION_AUTH_REJECTED", "Z.ai token exchange returned an unusable body");
-  if (!res.ok) {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Z.ai official login rejected the token exchange");
-  }
-  const accessToken =
-    stringField(raw, "zcodejwttoken") ??
-    stringField(raw, "access_token") ??
-    stringField(raw, "accessToken") ??
-    nestedToken(raw, "zai");
-  if (!accessToken) {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Z.ai official login returned an unusable token body");
-  }
-  return { status: "complete", accessToken };
-}
-
-export function authorizationCodeFromCallback(callbackUrl: string | undefined, expectedState: string): string | undefined {
-  const raw = callbackUrl?.trim();
-  if (!raw) return undefined;
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Z.ai callback URL is not a usable URL");
-  }
-  const hostPath = `${parsed.host}${parsed.pathname}`;
-  if (parsed.protocol !== "zcode:" || (hostPath !== "zai-auth/callback" && parsed.pathname !== "/callback")) {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Z.ai callback must be the official zcode://zai-auth/callback");
-  }
-  const state = parsed.searchParams.get("state")?.trim() ?? "";
-  if (state && state !== expectedState) {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Z.ai callback state does not match the held login");
-  }
-  const code = parsed.searchParams.get("code")?.trim() ?? "";
-  return code || undefined;
-}
-
 async function postJson(url: string, body: Record<string, unknown>): Promise<Response> {
   try {
     return await vendorFetch(url, {
@@ -361,12 +184,6 @@ async function readJsonBody(
   return raw;
 }
 
-function nestedToken(raw: Record<string, unknown>, key: string): string | undefined {
-  const nested = raw[key];
-  if (!isRecord(nested)) return undefined;
-  return stringField(nested, "access_token") ?? stringField(nested, "accessToken");
-}
-
 function intervalOf(raw: Record<string, unknown>, fallback: number): number {
   const value = raw.interval;
   if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.floor(value);
@@ -382,19 +199,6 @@ function stringField(raw: Record<string, unknown>, key: string): string | undefi
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed || undefined;
-}
-
-function assertHttpsUrl(raw: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Official verification URI must be an http(s) URL");
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "Official verification URI must be an http(s) URL");
-  }
-  return raw;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

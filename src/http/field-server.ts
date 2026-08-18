@@ -727,11 +727,10 @@ export class FieldHttpServer {
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
     if (!token) return;
-    const body = (await readJson(req)) as { authId?: string; callbackUrl?: string };
+    const body = (await readJson(req)) as { authId?: string };
     const result = await architectCompleteSubscriptionAuth({
       tenantId: this.opts.tenantId,
       authId: String(body.authId ?? ""),
-      callbackUrl: typeof body.callbackUrl === "string" ? body.callbackUrl : undefined,
       computerBaseDir: this.architectComputerDir(),
       architectToken: token,
       hold: this.subscriptionHold,
@@ -864,10 +863,11 @@ export class FieldHttpServer {
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
     if (!token) return;
-    const body = (await readJson(req)) as { connectorId?: string };
+    const body = (await readJson(req)) as { connectorId?: string; clientId?: string };
     const started = await architectStartConnectorAuth({
       tenantId: this.opts.tenantId,
       connectorId: String(body.connectorId ?? ""),
+      clientId: typeof body.clientId === "string" ? body.clientId : undefined,
       computerBaseDir: this.architectComputerDir(),
       architectToken: token,
       hold: this.connectorHold,
