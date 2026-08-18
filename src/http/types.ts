@@ -125,11 +125,22 @@ export interface ArchitectSetAdapterCredentialsBody {
 /** Architect habitat wizard → architectStartSubscriptionAuth. */
 export interface ArchitectStartSubscriptionAuthBody {
   providerId: string;
-  startUrl?: string;
 }
 
 /** Architect habitat wizard → architectCompleteSubscriptionAuth. */
 export interface ArchitectCompleteSubscriptionAuthBody {
+  authId: string;
+  /** Official Z.ai / ZCode callback after Continue with Z.ai (zcode://zai-auth/callback). */
+  callbackUrl?: string;
+}
+
+/** Architect habitat wizard → architectStartConnectorAuth. */
+export interface ArchitectStartConnectorAuthBody {
+  connectorId: string;
+}
+
+/** Architect habitat wizard → architectCompleteConnectorAuth. */
+export interface ArchitectCompleteConnectorAuthBody {
   authId: string;
 }
 

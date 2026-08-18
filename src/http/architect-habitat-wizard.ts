@@ -17,6 +17,16 @@ export interface ProviderFields {
   modelId: FieldNeed;
 }
 
+export type ConnectorAttachKind = "oauth" | "generic-mcp";
+
+export interface ConnectorChoice {
+  id: string;
+  label: string;
+  kind: ConnectorAttachKind;
+  /** Written as connector-bind connectorId when the Architect does not type one. */
+  bindConnectorId?: string;
+}
+
 export interface ProviderChoice {
   id: string;
   label: string;
@@ -43,7 +53,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     bindModelId: "codex-subscription",
     fields: {
       subscriptionAuth: "guided",
-      startUrl: "required",
+      startUrl: "hidden",
       apiKey: "hidden",
       vendorBaseUrl: "hidden",
       modelId: "hidden",
@@ -56,7 +66,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     bindModelId: "grok-subscription",
     fields: {
       subscriptionAuth: "guided",
-      startUrl: "required",
+      startUrl: "hidden",
       apiKey: "hidden",
       vendorBaseUrl: "hidden",
       modelId: "hidden",
@@ -69,7 +79,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     bindModelId: "glm-subscription",
     fields: {
       subscriptionAuth: "guided",
-      startUrl: "required",
+      startUrl: "hidden",
       apiKey: "hidden",
       vendorBaseUrl: "hidden",
       modelId: "hidden",
@@ -149,6 +159,20 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
   },
 ];
 
+export const HABITAT_CONNECTORS: readonly ConnectorChoice[] = [
+  {
+    id: "conn-github",
+    label: "GitHub",
+    kind: "oauth",
+    bindConnectorId: "github",
+  },
+  {
+    id: "conn-generic-mcp",
+    label: "Generic / private MCP",
+    kind: "generic-mcp",
+  },
+];
+
 export function providersForMode(mode: AttachMode): ProviderChoice[] {
   return HABITAT_PROVIDERS.filter((row) => row.mode === mode);
 }
@@ -175,6 +199,16 @@ export function modelIdForBind(provider: ProviderChoice, typedModelId: string): 
   const typed = typedModelId.trim();
   if (provider.fields.modelId !== "hidden") return typed;
   return provider.bindModelId ?? provider.id;
+}
+
+export function findConnector(id: string): ConnectorChoice | undefined {
+  return HABITAT_CONNECTORS.find((row) => row.id === id);
+}
+
+export function connectorIdForBind(connector: ConnectorChoice, typedConnectorId: string): string {
+  const typed = typedConnectorId.trim();
+  if (connector.kind !== "oauth") return typed;
+  return connector.bindConnectorId ?? connector.id;
 }
 
 export function isAdminAddPath(panel: "wizard" | "admin", action: "add-model" | "add-connector"): boolean {

@@ -12,6 +12,11 @@ import {
   architectStartSubscriptionAuth,
   MemorySubscriptionAuthHold,
 } from "../auth/architect-subscription-auth.js";
+import {
+  architectCompleteConnectorAuth,
+  architectStartConnectorAuth,
+  MemoryConnectorAuthHold,
+} from "../auth/architect-connector-auth.js";
 import { architectWriteAdapterRouter } from "../auth/architect-adapter-router.js";
 import {
   architectBindConnector,
@@ -48,7 +53,7 @@ const CORS = {
 } as const;
 
 const CONFIG_PATH =
-  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|adapter-router|adapter-aggregator|bind-adapter|set-adapter-credentials|set-adapter-router|set-adapter-aggregator|edit-adapter-bind|edit-connector-bind|bind-connector|set-connector-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message|router|aggregator|subscription-auth|start-subscription|complete-subscription/i;
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|adapter-router|adapter-aggregator|bind-adapter|set-adapter-credentials|set-adapter-router|set-adapter-aggregator|edit-adapter-bind|edit-connector-bind|bind-connector|set-connector-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message|router|aggregator|subscription-auth|start-subscription|complete-subscription|start-connector-auth|complete-connector-auth/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -70,6 +75,7 @@ export class FieldHttpServer {
   private server?: http.Server;
   private readonly pending = new Map<string, PendingProgress>();
   private readonly subscriptionHold = new MemorySubscriptionAuthHold();
+  private readonly connectorHold = new MemoryConnectorAuthHold();
   private restored = false;
 
   constructor(private readonly opts: FieldHttpServerOptions) {}
@@ -158,6 +164,14 @@ export class FieldHttpServer {
       }
       if (req.method === "GET" && path === "/architect/adapter-aggregator") {
         this.routeArchitectReadAdapterAggregator(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/start-connector-auth") {
+        await this.routeArchitectStartConnectorAuth(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/complete-connector-auth") {
+        await this.routeArchitectCompleteConnectorAuth(req, res);
         return;
       }
       if (req.method === "POST" && path === "/architect/bind-connector") {
@@ -688,11 +702,10 @@ export class FieldHttpServer {
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
     if (!token) return;
-    const body = (await readJson(req)) as { providerId?: string; startUrl?: string };
+    const body = (await readJson(req)) as { providerId?: string };
     const started = await architectStartSubscriptionAuth({
       tenantId: this.opts.tenantId,
       providerId: String(body.providerId ?? ""),
-      startUrl: typeof body.startUrl === "string" ? body.startUrl : undefined,
       computerBaseDir: this.architectComputerDir(),
       architectToken: token,
       hold: this.subscriptionHold,
@@ -714,10 +727,11 @@ export class FieldHttpServer {
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
     if (!token) return;
-    const body = (await readJson(req)) as { authId?: string };
+    const body = (await readJson(req)) as { authId?: string; callbackUrl?: string };
     const result = await architectCompleteSubscriptionAuth({
       tenantId: this.opts.tenantId,
       authId: String(body.authId ?? ""),
+      callbackUrl: typeof body.callbackUrl === "string" ? body.callbackUrl : undefined,
       computerBaseDir: this.architectComputerDir(),
       architectToken: token,
       hold: this.subscriptionHold,
@@ -834,6 +848,56 @@ export class FieldHttpServer {
     if (!token) return;
     const record = readTenantAdapterAggregator(this.architectComputerDir(), this.opts.tenantId);
     this.json(res, 200, record ? { combine: record.combine, boundBy: record.boundBy } : { combine: "" });
+  }
+
+  /**
+   * Official named-connector login start. Wizard holds the in-flight session.
+   * Complete writes through architectBindConnector + architectWriteConnectorCredentials.
+   */
+  private async routeArchitectStartConnectorAuth(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { connectorId?: string };
+    const started = await architectStartConnectorAuth({
+      tenantId: this.opts.tenantId,
+      connectorId: String(body.connectorId ?? ""),
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+      hold: this.connectorHold,
+    });
+    this.json(res, 201, started);
+  }
+
+  /**
+   * Poll/complete official named-connector login. Binds through the existing writers.
+   * Never returns the vendor session secret.
+   */
+  private async routeArchitectCompleteConnectorAuth(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { authId?: string };
+    const result = await architectCompleteConnectorAuth({
+      tenantId: this.opts.tenantId,
+      authId: String(body.authId ?? ""),
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+      hold: this.connectorHold,
+    });
+    this.json(res, result.status === "bound" ? 201 : 200, result);
   }
 
   /**
