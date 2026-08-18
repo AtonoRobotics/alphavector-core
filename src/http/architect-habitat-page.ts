@@ -113,9 +113,16 @@ export function architectHabitatPageHtml(): string {
         </div>
         <div id="subscription-providers" class="field" hidden data-providers="subscription">${subscriptionChoices}</div>
         <div id="api-providers" class="field" hidden data-providers="api">${apiChoices}</div>
-        <div id="subscription-auth-field" class="field" hidden>
-          <label for="subscription-auth">subscription auth</label>
-          <input id="subscription-auth" type="password" autocomplete="off" spellcheck="false" />
+        <div id="subscription-guided-auth" class="field" hidden>
+          <p class="lead">Sign in to attach this subscription. The wizard starts the vendor login and holds the session.</p>
+          <label for="subscription-start-url">start URL</label>
+          <input id="subscription-start-url" autocomplete="off" spellcheck="false" />
+          <button id="subscription-sign-in" type="button">Sign in</button>
+          <div id="subscription-auth-progress" hidden>
+            <p id="subscription-user-code" class="lead"></p>
+            <p id="subscription-verification-uri" class="lead"></p>
+            <button id="subscription-complete" type="button">Complete sign-in</button>
+          </div>
         </div>
         <div id="model-id-field" class="field" hidden>
           <label for="model-id">model id</label>
@@ -225,17 +232,19 @@ export function architectHabitatPageHtml(): string {
   <script>
     var STEPS = ["session", "attach-model", "attach-connector", "router", "aggregator", "confirm"];
     var FIELDS = {
-      "sub-codex": { subscriptionAuth: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
-      "sub-grok": { subscriptionAuth: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
-      "sub-glm": { subscriptionAuth: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
-      "api-claude": { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-codex": { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-grok": { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-kimi": { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-glm": { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
-      "api-generic-openai": { subscriptionAuth: "hidden", apiKey: "optional", vendorBaseUrl: "required", modelId: "required" }
+      "sub-codex": { subscriptionAuth: "guided", startUrl: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
+      "sub-grok": { subscriptionAuth: "guided", startUrl: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
+      "sub-glm": { subscriptionAuth: "guided", startUrl: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
+      "api-claude": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+      "api-codex": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+      "api-grok": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+      "api-kimi": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+      "api-glm": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+      "api-generic-openai": { subscriptionAuth: "hidden", startUrl: "hidden", apiKey: "optional", vendorBaseUrl: "required", modelId: "required" }
     };
-    var state = { step: "session", panel: "wizard", mode: "", provider: "", models: [], connectors: [] };
+    var state = { step: "session", panel: "wizard", mode: "", provider: "", models: [], connectors: [], subscriptionAuthId: "" };
+    var subscriptionPoll = null;
+    var subscriptionCompleting = false;
     function escapeHtml(value) {
       return String(value ?? "").replace(/[&<>"']/g, function (ch) {
         if (ch === "&") return "&amp;";
@@ -299,10 +308,16 @@ export function architectHabitatPageHtml(): string {
         var el = document.getElementById(id);
         el.hidden = !need || need === "hidden";
       }
-      show("subscription-auth-field", spec && spec.subscriptionAuth);
+      show("subscription-guided-auth", spec && spec.subscriptionAuth === "guided");
       show("api-key-field", spec && spec.apiKey);
       show("vendor-base-url-field", spec && spec.vendorBaseUrl);
       show("model-id-field", spec && spec.modelId);
+      document.getElementById("wizard-bind-adapter").hidden = !!(spec && spec.subscriptionAuth === "guided");
+      if (!spec || spec.subscriptionAuth !== "guided") {
+        stopSubscriptionPoll();
+        document.getElementById("subscription-auth-progress").hidden = true;
+        state.subscriptionAuthId = "";
+      }
     }
     function wizardModelId() {
       var provider = selectedProvider();
@@ -319,13 +334,13 @@ export function architectHabitatPageHtml(): string {
       var spec = FIELDS[provider.getAttribute("data-provider")];
       var modelId = wizardModelId();
       var vendorBaseUrl = document.getElementById("vendor-base-url").value.trim();
-      var apiKey = spec.subscriptionAuth !== "hidden"
-        ? document.getElementById("subscription-auth").value.trim()
-        : document.getElementById("api-key").value.trim();
+      var apiKey = document.getElementById("api-key").value.trim();
+      if (spec.subscriptionAuth === "guided") {
+        throw new Error("Subscription attach starts a guided sign-in; a token dump is not the product path");
+      }
       if (spec.modelId === "required" && !modelId) throw new Error("model id is required");
       if (spec.vendorBaseUrl === "required" && !vendorBaseUrl) throw new Error("vendor base URL is required");
       if (spec.apiKey === "required" && !apiKey) throw new Error("api key is required");
-      if (spec.subscriptionAuth === "required" && !apiKey) throw new Error("subscription auth is required");
       var bind = { modelId: modelId };
       if (vendorBaseUrl) bind.vendorBaseUrl = vendorBaseUrl;
       await call("/architect/bind-adapter", {
@@ -342,6 +357,59 @@ export function architectHabitatPageHtml(): string {
       }
       state.models.push(modelId);
       status("model attached");
+    }
+    function stopSubscriptionPoll() {
+      if (subscriptionPoll) {
+        clearInterval(subscriptionPoll);
+        subscriptionPoll = null;
+      }
+    }
+    async function wizardStartSubscription() {
+      var provider = selectedProvider();
+      if (!provider) throw new Error("Choose a provider");
+      var spec = FIELDS[provider.getAttribute("data-provider")];
+      if (!spec || spec.subscriptionAuth !== "guided") throw new Error("Choose a subscription");
+      var startUrl = document.getElementById("subscription-start-url").value.trim();
+      var started = await call("/architect/start-subscription-auth", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          providerId: provider.getAttribute("data-provider"),
+          startUrl: startUrl,
+        }),
+      });
+      state.subscriptionAuthId = started.authId;
+      document.getElementById("subscription-user-code").textContent = "user code: " + started.userCode;
+      document.getElementById("subscription-verification-uri").textContent =
+        "open: " + started.verificationUri;
+      document.getElementById("subscription-auth-progress").hidden = false;
+      status("sign-in started; complete it at the verification URL");
+      stopSubscriptionPoll();
+      subscriptionPoll = setInterval(function () {
+        wizardCompleteSubscription().catch(function (err) { status(err.message); });
+      }, 2000);
+    }
+    async function wizardCompleteSubscription() {
+      if (!state.subscriptionAuthId || subscriptionCompleting) return;
+      subscriptionCompleting = true;
+      try {
+        var done = await call("/architect/complete-subscription-auth", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ authId: state.subscriptionAuthId }),
+        });
+        if (done.status === "authorization_pending") {
+          status("waiting for sign-in");
+          return;
+        }
+        stopSubscriptionPoll();
+        state.models.push(done.modelId);
+        state.subscriptionAuthId = "";
+        document.getElementById("subscription-auth-progress").hidden = true;
+        status("subscription attached");
+      } finally {
+        subscriptionCompleting = false;
+      }
     }
     async function wizardBindConnector() {
       var connectorId = document.getElementById("connector-id").value.trim();
@@ -509,6 +577,12 @@ export function architectHabitatPageHtml(): string {
     });
     document.getElementById("wizard-bind-adapter").addEventListener("click", function () {
       wizardBindAdapter().catch(function (err) { status(err.message); });
+    });
+    document.getElementById("subscription-sign-in").addEventListener("click", function () {
+      wizardStartSubscription().catch(function (err) { status(err.message); });
+    });
+    document.getElementById("subscription-complete").addEventListener("click", function () {
+      wizardCompleteSubscription().catch(function (err) { status(err.message); });
     });
     document.getElementById("wizard-bind-connector").addEventListener("click", function () {
       wizardBindConnector().catch(function (err) { status(err.message); });
