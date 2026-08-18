@@ -127,8 +127,8 @@ function receiveGlmAuthorizationCode(state: string, code: string): void {
 
 /**
  * Habitat-visible official hop. Parses zcode://oauth/callback or the HTTPS
- * zcode.z.ai hop (query or hop HTML before scheme handoff). Does not invent
- * oauth/cli/init. Never returns the vendor session.
+ * zcode.z.ai hop (query or hop HTML before scheme handoff). Never returns
+ * the vendor session.
  */
 export async function ingestOfficialGlmHop(
   raw: string,
