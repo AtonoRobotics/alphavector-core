@@ -728,7 +728,9 @@ describe("Architect habitat bind wizard", () => {
     expect(html).toMatch(/>GLM</);
     expect(html).not.toMatch(/localhost|:11434|:8000|127\.0\.0\.1:11434|127\.0\.0\.1:8000/);
     expect(html).not.toMatch(/sk-|OPENAI_API_KEY|ANTHROPIC_API_KEY/);
-    expect(html).not.toMatch(/VEYRA|Architect Desktop|NemoClaw|Pyrallon/);
+    expect(html).toContain("Pyrallon habitat");
+    expect(html).toContain("<footer>Pyrallon</footer>");
+    expect(html).not.toMatch(/VEYRA|Architect Desktop|NemoClaw|AV Dev|Alpha Vector LLC/);
     const adminMarkup = html.slice(html.indexOf('id="admin"'), html.indexOf("<script>"));
     expect(adminMarkup).not.toMatch(/data-provider=/);
     expect(adminMarkup).not.toMatch(/data-mode="subscription"|data-mode="api"/);

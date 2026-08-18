@@ -141,7 +141,7 @@ describe("HK-014 immutable wake log", () => {
     }
 
     const identity = readFileSync(path.join(process.cwd(), "src/identity.ts"), "utf8");
-    expect(identity).toMatch(/appDisplay: "AV Dev"/);
+    expect(identity).toMatch(/appDisplay: "Pyrallon"/);
     expect(identity).toMatch(/"VEYRA"/);
 
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");

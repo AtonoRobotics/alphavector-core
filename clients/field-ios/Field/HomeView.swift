@@ -152,14 +152,14 @@ struct HomeView: View {
             .scrollContentBackground(.hidden)
             .background(FieldGlass.nearBlack)
             .foregroundStyle(FieldGlass.bone)
-            .navigationTitle("AV Dev Field")
+            .navigationTitle("Pyrallon Field")
             .toolbarBackground(FieldGlass.nearBlack, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .safeAreaInset(edge: .bottom) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(status)
                         .font(.footnote)
-                    Text("Alpha Vector LLC")
+                    Text("Pyrallon")
                         .font(.footnote)
                 }
                 .foregroundStyle(FieldGlass.bone)

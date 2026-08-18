@@ -221,7 +221,7 @@ export function architectHabitatPageHtml(): string {
       </section>
     </section>
   </main>
-  <footer>Alpha Vector LLC</footer>
+  <footer>${PRODUCT.appDisplay}</footer>
   <script>
     var STEPS = ["session", "attach-model", "attach-connector", "router", "aggregator", "confirm"];
     var FIELDS = {

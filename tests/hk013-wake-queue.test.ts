@@ -107,7 +107,7 @@ describe("HK-013 wake queue during a pass", () => {
     expect(typesSrc).not.toMatch(/architect_message|worker_failed/);
 
     const identity = readFileSync(path.join(process.cwd(), "src/identity.ts"), "utf8");
-    expect(identity).toMatch(/appDisplay: "AV Dev"/);
+    expect(identity).toMatch(/appDisplay: "Pyrallon"/);
     expect(identity).toMatch(/"VEYRA"/);
 
     const kernelSrc = readFileSync(path.join(process.cwd(), "src/habitat/kernel.ts"), "utf8");

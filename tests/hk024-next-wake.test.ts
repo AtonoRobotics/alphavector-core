@@ -224,7 +224,7 @@ describe("HK-024 next-wake on the run, fired by the stem", () => {
     }
 
     const identity = readFileSync(path.join(process.cwd(), "src/identity.ts"), "utf8");
-    expect(identity).toMatch(/appDisplay: "AV Dev"/);
+    expect(identity).toMatch(/appDisplay: "Pyrallon"/);
     expect(identity).toMatch(/"VEYRA"/);
     expect(identity).not.toMatch(/T0|T1|T2|T3/);
 

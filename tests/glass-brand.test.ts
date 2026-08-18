@@ -11,6 +11,9 @@ const ALLOWED = new Set(["#F4F1EA", "#0B0B0C", "#2A2A2D", "#C4A574"]);
 const HEX = /#(?:[0-9a-fA-F]{3,8})\b/g;
 const LOCKUP =
   /VEYRA|Agent OS|AgentOS|powerful|high-tech|high tech|realtor cream|\bpurple\b|\bviolet\b/i;
+const BANNED_SERVED = /Alpha Vector LLC|AV Dev|VEYRA/;
+const IOS_PLIST = path.join(REPO_ROOT, "clients/field-ios/Field/Info.plist");
+const IOS_PBX = path.join(REPO_ROOT, "clients/field-ios/Field.xcodeproj/project.pbxproj");
 const DISPLAY_FACE = /Georgia|Times New Roman|Playfair|ui-serif|Cormorant|Bodoni|Didot/i;
 const GLOW = /linear-gradient|radial-gradient|conic-gradient|box-shadow|text-shadow|drop-shadow|glow/i;
 
@@ -77,20 +80,61 @@ describe("glass brand boards", () => {
     expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
-  it("locks the four Website hues and AV Dev display", () => {
-    expect(PRODUCT.appDisplay).toBe("AV Dev");
+  it("locks the four Website hues and Pyrallon display", () => {
+    expect(PRODUCT.appDisplay).toBe("Pyrallon");
     expect(GLASS.bone).toBe("#F4F1EA");
     expect(GLASS.nearBlack).toBe("#0B0B0C");
     expect(GLASS.hairline).toBe("#2A2A2D");
     expect(GLASS.holdAmber).toBe("#C4A574");
   });
 
+  it("fails if Alpha Vector LLC, AV Dev, or VEYRA reappear in served HTML or identity chrome", () => {
+    const field = read(FIELD_LINUX);
+    const habitat = architectHabitatPageHtml();
+    const desktop = architectViewerHtml({
+      tenantId: "t1",
+      agentId: "writer",
+      display: 12,
+      vncPort: 5912,
+    });
+    const habitatSrc = read(path.join(REPO_ROOT, "src/http/architect-habitat-page.ts"));
+    const desktopSrc = read(DESKTOP);
+    const home = read(HOME_VIEW);
+    const app = read(FIELD_APP);
+    const plist = read(IOS_PLIST);
+    const pbx = read(IOS_PBX);
+    const served: Array<[string, string]> = [
+      ["field-linux", field],
+      ["habitat html", habitat],
+      ["desktop html", desktop],
+      ["habitat page source", habitatSrc],
+      ["desktop source", desktopSrc],
+      ["HomeView.swift", home],
+      ["FieldApp.swift", app],
+      ["Info.plist", plist],
+      ["project.pbxproj", pbx],
+    ];
+    for (const [label, src] of served) {
+      expect(src, label).not.toMatch(BANNED_SERVED);
+    }
+    expect(PRODUCT.appDisplay).not.toMatch(BANNED_SERVED);
+    expect(field).toContain("Pyrallon Field");
+    expect(habitat).toContain("Pyrallon habitat");
+    expect(habitat).toContain("<footer>Pyrallon</footer>");
+    expect(desktop).toContain("<title>Architect Desktop · writer</title>");
+    expect(desktop).toContain("<footer>Pyrallon</footer>");
+    expect(home).toContain('navigationTitle("Pyrallon Field")');
+    expect(home).toContain('Text("Pyrallon")');
+    expect(plist).toContain("<string>Pyrallon</string>");
+    expect(pbx).toMatch(/INFOPLIST_KEY_CFBundleDisplayName = "Pyrallon"/);
+  });
+
   it("field-linux glass uses only board hues, one grotesque, and amber only on a held step", () => {
     const html = read(FIELD_LINUX);
     assertOnlyBoardHues(html, "field-linux");
-    expect(html).toMatch(/<title>AV Dev Field<\/title>/);
-    expect(html).toMatch(/<h1>AV Dev Field<\/h1>/);
-    expect(html).toMatch(/<footer>Alpha Vector LLC<\/footer>/);
+    expect(html).toMatch(/<title>Pyrallon Field<\/title>/);
+    expect(html).toMatch(/<h1>Pyrallon Field<\/h1>/);
+    expect(html).toMatch(/<footer>Pyrallon<\/footer>/);
     expect(html).toMatch(/Architect is not on this surface/);
     expect(html).toMatch(/aria-label="Live"/);
     expect(html).toMatch(/aria-label="Tape"/);
@@ -151,9 +195,9 @@ describe("glass brand boards", () => {
     });
     assertOnlyBoardHues(html, "architectViewerHtml");
     expect(hexes(html).sort()).toEqual(["#0B0B0C", "#2A2A2D", "#F4F1EA"].sort());
-    expect(html).toContain("AV Dev desktop");
+    expect(html).toContain("Architect Desktop");
     expect(html).toContain("Architect attach");
-    expect(html).toContain("<footer>Alpha Vector LLC</footer>");
+    expect(html).toContain("<footer>Pyrallon</footer>");
     expect(html).toContain("border: 1px solid var(--hairline)");
     expect(html).not.toContain("#C4A574");
     expect(html).not.toMatch(/--hold/);
@@ -187,10 +231,10 @@ describe("glass brand boards", () => {
     const html = architectHabitatPageHtml();
     assertOnlyBoardHues(html, "architectHabitatPageHtml");
     expect(hexes(html).sort()).toEqual(["#0B0B0C", "#2A2A2D", "#C4A574", "#F4F1EA"].sort());
-    expect(html).toContain("<title>AV Dev habitat</title>");
-    expect(html).toContain("<h1>AV Dev habitat</h1>");
+    expect(html).toContain("<title>Pyrallon habitat</title>");
+    expect(html).toContain("<h1>Pyrallon habitat</h1>");
     expect(html).toContain("Architect sits in the habitat.");
-    expect(html).toContain("<footer>Alpha Vector LLC</footer>");
+    expect(html).toContain("<footer>Pyrallon</footer>");
     expect(html).toMatch(/id="model-id"/);
     expect(html).toMatch(/id="vendor-base-url"/);
     expect(html).toMatch(/id="api-key"/);
@@ -216,8 +260,11 @@ describe("glass brand boards", () => {
   it("field-ios color sources lock the same four tokens and hold amber only on Cards", () => {
     const home = read(HOME_VIEW);
     const app = read(FIELD_APP);
-    expect(home).toMatch(/navigationTitle\("AV Dev Field"\)/);
-    expect(home).toMatch(/Text\("Alpha Vector LLC"\)/);
+    expect(home).toMatch(/navigationTitle\("Pyrallon Field"\)/);
+    expect(home).toMatch(/Text\("Pyrallon"\)/);
+    expect(read(IOS_PLIST)).toContain("<string>Pyrallon</string>");
+    expect(read(IOS_PBX)).toMatch(/INFOPLIST_KEY_CFBundleDisplayName = "Pyrallon"/);
+    expect(read(IOS_PBX)).toMatch(/PRODUCT_BUNDLE_IDENTIFIER = llc\.alphavector\.dev/);
     expect(home).toMatch(/static let holdAmber = Color\("HoldAmber"\)/);
     expect(home).toMatch(/Section\("Cards"\)[\s\S]*FieldGlass\.holdAmber/);
     const usage = home.replace(/private enum FieldGlass \{[\s\S]*?\n\}/, "");

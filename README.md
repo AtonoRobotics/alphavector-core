@@ -10,7 +10,7 @@ This is a development scaffold, not a consumer brand.
 
 | Use | Value |
 | --- | --- |
-| App display | AV Dev |
+| App display | Pyrallon |
 | Package | alphavector-core |
 | Bundle | llc.alphavector.dev |
 | First domain pack | alphavector-re (separate repository) |
