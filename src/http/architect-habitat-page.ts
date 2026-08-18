@@ -4,8 +4,9 @@ import { HABITAT_CONNECTORS, HABITAT_PROVIDERS, WIZARD_STEPS, type AttachMode } 
 /**
  * Habitat wizard page (HK-082). Off `/field`. Not a named desktop.
  * Unauthenticated GET may serve this inert shell when Accept is text/html.
- * Architect seat is the deploy-held session on the tenant computer, or a real
- * Architect login. The wizard does not collect a pasted Architect credential.
+ * Architect seat is a real login: Sign in verifies the deploy-held Architect
+ * credential and sets a checked session cookie. Not an open listen. The wizard
+ * does not collect a pasted Architect credential on every write.
  *
  * Add path is a stepped wizard. Admin inspects/edits already-bound settings
  * and cannot attach a new model or connector.
@@ -123,7 +124,10 @@ export function architectHabitatPageHtml(): string {
 
       <section class="band step" data-wizard-step="session" aria-label="Architect session">
         <h2>1. Architect session</h2>
-        <p class="lead">Architect sits in this habitat. The deploy-held Architect session is this seat.</p>
+        <p class="lead">Architect signs in to this habitat. Sign-in is a checked session, not an open listen.</p>
+        <label for="architect-sign-in">Architect sign-in</label>
+        <input id="architect-sign-in" type="password" autocomplete="off" spellcheck="false" />
+        <button id="session-sign-in" type="button">Sign in</button>
         <button id="session-continue" type="button">Continue</button>
       </section>
 
@@ -288,7 +292,7 @@ export function architectHabitatPageHtml(): string {
       ),
     )};
     var SUBSCRIPTION_MODELS = ["codex-subscription", "grok-subscription", "glm-subscription"];
-    var state = { step: "session", panel: "wizard", mode: "", provider: "", connector: "", models: [], connectors: [], subscriptionAuthId: "", connectorAuthId: "", glmState: "", glmCode: "", glmPopup: null };
+    var state = { step: "session", panel: "wizard", mode: "", provider: "", connector: "", models: [], connectors: [], subscriptionAuthId: "", connectorAuthId: "", glmPopup: null };
     var subscriptionPoll = null;
     var subscriptionCompleting = false;
     var connectorPoll = null;
@@ -311,7 +315,7 @@ export function architectHabitatPageHtml(): string {
     }
     async function call(path, opts) {
       var headers = Object.assign({}, opts.headers || {});
-      var res = await fetch(path, Object.assign({}, opts, { headers: headers }));
+      var res = await fetch(path, Object.assign({ credentials: "same-origin" }, opts, { headers: headers }));
       var body = await res.json().catch(function () { return {}; });
       if (!res.ok) {
         throw new Error(body.error || body.message || String(res.status));
@@ -439,40 +443,16 @@ export function architectHabitatPageHtml(): string {
         subscriptionPoll = null;
       }
     }
-    function parseGlmCallback(raw) {
-      if (!raw) return null;
-      function fromSearch(search) {
-        var q = search.charAt(0) === "?" || search.charAt(0) === "#" ? search.slice(1) : search;
-        var params = new URLSearchParams(q);
-        var st = (params.get("state") || "").trim();
-        var code = (params.get("code") || params.get("authCode") || "").trim();
-        if (st && code) return { state: st, code: code };
-        var redirect = params.get("redirect");
-        if (redirect) return parseGlmCallback(redirect);
-        return null;
-      }
-      try {
-        var url = new URL(raw);
-        return fromSearch(url.search) || (url.hash ? fromSearch(url.hash) : null);
-      } catch (err) {
-        return fromSearch(raw);
-      }
-    }
-    function takeGlmIntercept(parsed) {
-      if (!parsed || !state.glmState || parsed.state !== state.glmState) return false;
-      state.glmCode = parsed.code;
-      return true;
-    }
-    function interceptGlmFromLocation() {
-      return takeGlmIntercept(parseGlmCallback(String(window.location && window.location.href || "")));
-    }
-    function interceptGlmFromPopup() {
-      if (!state.glmPopup || state.glmPopup.closed) return false;
-      try {
-        return takeGlmIntercept(parseGlmCallback(String(state.glmPopup.location.href || "")));
-      } catch (err) {
-        return false;
-      }
+    async function wizardSignIn() {
+      var secret = document.getElementById("architect-sign-in").value.trim();
+      if (!secret) throw new Error("Architect sign-in required");
+      await call("/architect/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ secret: secret }),
+      });
+      document.getElementById("architect-sign-in").value = "";
+      status("signed in");
     }
     async function wizardStartSubscription() {
       var provider = selectedProvider();
@@ -495,19 +475,10 @@ export function architectHabitatPageHtml(): string {
       document.getElementById("subscription-auth-progress").hidden = false;
       status("sign-in started; complete it at the official vendor URL");
       if (provider.getAttribute("data-provider") === "sub-glm") {
-        try {
-          state.glmState = new URL(started.verificationUri).searchParams.get("state") || "";
-        } catch (err) {
-          state.glmState = "";
-        }
-        state.glmCode = "";
-        interceptGlmFromLocation();
         state.glmPopup = window.open(started.verificationUri);
       }
       stopSubscriptionPoll();
       subscriptionPoll = setInterval(function () {
-        interceptGlmFromLocation();
-        interceptGlmFromPopup();
         wizardCompleteSubscription().catch(function (err) { status(err.message); });
       }, 2000);
     }
@@ -515,17 +486,10 @@ export function architectHabitatPageHtml(): string {
       if (!state.subscriptionAuthId || subscriptionCompleting) return;
       subscriptionCompleting = true;
       try {
-        interceptGlmFromLocation();
-        interceptGlmFromPopup();
-        var body = { authId: state.subscriptionAuthId };
-        if (state.glmCode && state.glmState) {
-          body.code = state.glmCode;
-          body.state = state.glmState;
-        }
         var done = await call("/architect/complete-subscription-auth", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ authId: state.subscriptionAuthId }),
         });
         if (done.status === "authorization_pending") {
           status("waiting for sign-in");
@@ -534,8 +498,6 @@ export function architectHabitatPageHtml(): string {
         stopSubscriptionPoll();
         state.models.push(done.modelId);
         state.subscriptionAuthId = "";
-        state.glmState = "";
-        state.glmCode = "";
         if (state.glmPopup && !state.glmPopup.closed) state.glmPopup.close();
         state.glmPopup = null;
         document.getElementById("subscription-auth-progress").hidden = true;
@@ -743,9 +705,17 @@ export function architectHabitatPageHtml(): string {
       });
       status("aggregator saved");
     }
+    document.getElementById("session-sign-in").addEventListener("click", function () {
+      wizardSignIn().then(function () {
+        document.getElementById("surface-switch").hidden = false;
+        showStep("attach-model");
+      }).catch(function (err) { status(err.message); });
+    });
     document.getElementById("session-continue").addEventListener("click", function () {
-      document.getElementById("surface-switch").hidden = false;
-      showStep("attach-model");
+      loadSeat().then(function () {
+        document.getElementById("surface-switch").hidden = false;
+        showStep("attach-model");
+      }).catch(function (err) { status(err.message); });
     });
     document.getElementById("mode-subscription").addEventListener("click", function () {
       state.mode = "subscription";
@@ -824,8 +794,6 @@ export function architectHabitatPageHtml(): string {
     document.getElementById("admin-write-aggregator").addEventListener("click", function () {
       adminWriteAggregator().catch(function (err) { status(err.message); });
     });
-    window.addEventListener("hashchange", function () { interceptGlmFromLocation(); });
-    interceptGlmFromLocation();
     showStep("session");
   </script>
 </body>

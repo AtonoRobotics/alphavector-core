@@ -117,12 +117,68 @@ export function resetGlmAuthorizationHolds(): void {
   glmHoldNow = () => Date.now();
 }
 
-/** Habitat / tests / hop intercept receive official callback `code`/`authCode` for a held state. */
-export function receiveGlmAuthorizationCode(state: string, code: string): void {
+/** Internal mailbox. Product receive is ingestOfficialGlmHop, not a test hook. */
+function receiveGlmAuthorizationCode(state: string, code: string): void {
   const held = state.trim();
   const issued = code.trim();
   if (!held || !issued) return;
   glmAuthCodes.set(held, { code: issued, expiresAtMs: glmHoldNow() + GLM_HOLD_TTL_MS });
+}
+
+/**
+ * Habitat-visible official hop. Parses zcode://oauth/callback or the HTTPS
+ * zcode.z.ai hop (query or hop HTML before scheme handoff). Does not invent
+ * oauth/cli/init. Never returns the vendor session.
+ */
+export async function ingestOfficialGlmHop(
+  raw: string,
+): Promise<{ state: string; code: string } | undefined> {
+  const direct = parseGlmAuthorizationCallback(raw);
+  if (direct) {
+    receiveGlmAuthorizationCode(direct.state, direct.code);
+    return direct;
+  }
+  const fromPage = await fetchOfficialGlmHopPage(raw);
+  if (!fromPage) return undefined;
+  receiveGlmAuthorizationCode(fromPage.state, fromPage.code);
+  return fromPage;
+}
+
+function officialGlmHopUrl(raw: string): URL | undefined {
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== "https:" || url.hostname !== "zcode.z.ai") return undefined;
+    if (url.pathname !== "/app/oauth/login") return undefined;
+    return url;
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchOfficialGlmHopPage(raw: string): Promise<{ state: string; code: string } | undefined> {
+  const url = officialGlmHopUrl(raw);
+  if (!url) return undefined;
+  let res: Response;
+  try {
+    res = await vendorFetch(url.toString(), { method: "GET", headers: { accept: "text/html" } });
+  } catch {
+    return undefined;
+  }
+  let html = "";
+  try {
+    html = await res.text();
+  } catch {
+    return undefined;
+  }
+  const extracted = extractZcodeCallbackFromHopHtml(html);
+  return extracted ? parseGlmAuthorizationCallback(extracted) : undefined;
+}
+
+function extractZcodeCallbackFromHopHtml(html: string): string | undefined {
+  const href = html.match(/href\s*=\s*["'](zcode:\/\/oauth\/callback[^"']*)["']/i);
+  if (href?.[1]) return href[1].replace(/&amp;/g, "&");
+  const bare = html.match(/zcode:\/\/oauth\/callback\?[^\s"'<>]+/i);
+  return bare?.[0];
 }
 
 /**

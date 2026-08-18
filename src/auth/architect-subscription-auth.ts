@@ -5,11 +5,7 @@ import {
   startSubscriptionLogin,
   type OfficialLoginPollHandle,
 } from "../habitat/subscription-auth.js";
-import {
-  GLM_HOLD_TTL_MS,
-  glmHoldNowMs,
-  receiveGlmAuthorizationCode,
-} from "../habitat/vendor-login.js";
+import { GLM_HOLD_TTL_MS, glmHoldNowMs } from "../habitat/vendor-login.js";
 import { findProvider, modelIdForBind } from "../http/architect-habitat-wizard.js";
 import { architectBindAdapter } from "./architect-adapter-bind.js";
 import { architectWriteAdapterCredentials } from "./architect-adapter-credentials.js";
@@ -92,11 +88,11 @@ export async function architectStartSubscriptionAuth(input: {
   providerId: string;
   computerBaseDir: string;
   architectToken?: string;
-  allowHeldSeat?: boolean;
+  sessionVerified?: boolean;
   hold: SubscriptionAuthHold;
 }): Promise<SubscriptionAuthStarted> {
   requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
-    allowHeldSeat: input.allowHeldSeat,
+    sessionVerified: input.sessionVerified,
   });
   const provider = findProvider(input.providerId);
   if (!provider || provider.mode !== "subscription" || provider.fields.subscriptionAuth !== "guided") {
@@ -135,14 +131,11 @@ export async function architectCompleteSubscriptionAuth(input: {
   authId: string;
   computerBaseDir: string;
   architectToken?: string;
-  allowHeldSeat?: boolean;
+  sessionVerified?: boolean;
   hold: SubscriptionAuthHold;
-  code?: string;
-  authCode?: string;
-  state?: string;
 }): Promise<SubscriptionAuthPending | SubscriptionAuthBound> {
   requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken, {
-    allowHeldSeat: input.allowHeldSeat,
+    sessionVerified: input.sessionVerified,
   });
   const authId = input.authId.trim();
   if (!authId) {
@@ -151,14 +144,6 @@ export async function architectCompleteSubscriptionAuth(input: {
   const session = input.hold.get(authId);
   if (!session || session.tenantId !== input.tenantId) {
     throw new AvError("SUBSCRIPTION_AUTH_REQUIRED", "Guided subscription auth must be started first");
-  }
-  const intercepted = (input.code ?? input.authCode ?? "").trim();
-  const interceptedState = (input.state ?? "").trim();
-  if (intercepted && interceptedState) {
-    if (session.poll.kind === "glm-auth-code" && interceptedState !== session.poll.state) {
-      throw new AvError("SUBSCRIPTION_AUTH_REJECTED", "ZCode official login state did not match");
-    }
-    receiveGlmAuthorizationCode(interceptedState, intercepted);
   }
   let polled: Awaited<ReturnType<typeof pollSubscriptionLogin>>;
   try {
@@ -175,7 +160,7 @@ export async function architectCompleteSubscriptionAuth(input: {
     modelId: session.modelId,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
-    allowHeldSeat: input.allowHeldSeat,
+    sessionVerified: input.sessionVerified,
   });
   architectWriteAdapterCredentials({
     tenantId: input.tenantId,
@@ -183,7 +168,7 @@ export async function architectCompleteSubscriptionAuth(input: {
     refreshToken: polled.refreshToken,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
-    allowHeldSeat: input.allowHeldSeat,
+    sessionVerified: input.sessionVerified,
   });
   input.hold.drop(authId);
   return {
