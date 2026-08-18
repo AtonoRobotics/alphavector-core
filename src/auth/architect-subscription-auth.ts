@@ -86,7 +86,7 @@ export async function architectStartSubscriptionAuth(input: {
   if (!provider || provider.mode !== "subscription" || provider.fields.subscriptionAuth !== "guided") {
     throw new AvError(
       "SUBSCRIPTION_PROVIDER_REQUIRED",
-      "Guided subscription auth is only Codex Subscription. Grok and GLM publish API keys, not public subscription OAuth.",
+      "Guided subscription auth is only Codex Subscription. Grok and GLM are labeled API key attach.",
     );
   }
   const modelId = modelIdForBind(provider, "");

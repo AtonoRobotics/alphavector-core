@@ -1,6 +1,6 @@
 export type AttachMode = "subscription" | "api";
 export type FieldNeed = "required" | "optional" | "hidden" | "guided";
-export type GlmPlanId = "coding" | "general";
+export type GlmPlanId = "coding" | "payg";
 
 export type WizardStepId =
   | "session"
@@ -52,12 +52,12 @@ const HIDDEN_TYPED_URL: ProviderFields = {
   glmPlan: "hidden",
 };
 
-const KEY_PASTE_SUB: ProviderFields = {
+const API_KEY_OFFICIAL_BASE: ProviderFields = {
   subscriptionAuth: "hidden",
   startUrl: "hidden",
   apiKey: "required",
   vendorBaseUrl: "hidden",
-  modelId: "hidden",
+  modelId: "required",
   glmPlan: "hidden",
 };
 
@@ -74,21 +74,19 @@ const API_KEY_OPTIONAL_URL: ProviderFields = {
 export const GROK_OFFICIAL_API_BASE = "https://api.x.ai/v1";
 export const GROK_OFFICIAL_CONSOLE_URL = "https://console.x.ai";
 
-/** Official Z.ai bases. Coding Plan vs general are not interchangeable. */
+/** Official Z.ai bases. Coding Plan vs PAYG are not interchangeable. */
 export const GLM_CODING_PLAN_BASE = "https://api.z.ai/api/coding/paas/v4";
-export const GLM_GENERAL_API_BASE = "https://api.z.ai/api/paas/v4";
+export const GLM_PAYG_API_BASE = "https://api.z.ai/api/paas/v4";
 export const GLM_OFFICIAL_KEY_URL = "https://z.ai/manage-apikey/apikey-list";
 
-export const GLM_PLANS: Record<GlmPlanId, { label: string; officialBaseUrl: string; bindModelId: string }> = {
+export const GLM_PLANS: Record<GlmPlanId, { label: string; officialBaseUrl: string }> = {
   coding: {
     label: "Coding Plan",
     officialBaseUrl: GLM_CODING_PLAN_BASE,
-    bindModelId: "glm-coding-plan",
   },
-  general: {
-    label: "General",
-    officialBaseUrl: GLM_GENERAL_API_BASE,
-    bindModelId: "glm-subscription",
+  payg: {
+    label: "PAYG",
+    officialBaseUrl: GLM_PAYG_API_BASE,
   },
 };
 
@@ -117,32 +115,6 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     },
   },
   {
-    id: "sub-grok",
-    label: "Grok Subscription",
-    mode: "subscription",
-    bindModelId: "grok-subscription",
-    officialBaseUrl: GROK_OFFICIAL_API_BASE,
-    officialKeyUrl: GROK_OFFICIAL_CONSOLE_URL,
-    billingNote: "usage-billed. xAI publishes API keys, not public SuperGrok session OAuth.",
-    fields: KEY_PASTE_SUB,
-  },
-  {
-    id: "sub-glm",
-    label: "GLM subscription",
-    mode: "subscription",
-    bindModelId: "glm-subscription",
-    officialKeyUrl: GLM_OFFICIAL_KEY_URL,
-    billingNote: "Official is API key only. Coding Plan and general use different official base URLs.",
-    fields: {
-      subscriptionAuth: "hidden",
-      startUrl: "hidden",
-      apiKey: "required",
-      vendorBaseUrl: "hidden",
-      modelId: "hidden",
-      glmPlan: "required",
-    },
-  },
-  {
     id: "api-claude",
     label: "Claude",
     mode: "api",
@@ -158,7 +130,10 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     id: "api-grok",
     label: "Grok",
     mode: "api",
-    fields: API_KEY_OPTIONAL_URL,
+    officialBaseUrl: GROK_OFFICIAL_API_BASE,
+    officialKeyUrl: GROK_OFFICIAL_CONSOLE_URL,
+    billingNote: "API key. xAI publishes no public subscription OAuth.",
+    fields: API_KEY_OFFICIAL_BASE,
   },
   {
     id: "api-kimi",
@@ -170,7 +145,16 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     id: "api-glm",
     label: "GLM",
     mode: "api",
-    fields: API_KEY_OPTIONAL_URL,
+    officialKeyUrl: GLM_OFFICIAL_KEY_URL,
+    billingNote: "API key. Coding Plan vs PAYG use different official documented base URLs.",
+    fields: {
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "hidden",
+      modelId: "required",
+      glmPlan: "required",
+    },
   },
   {
     id: "api-generic-openai",
@@ -218,21 +202,17 @@ export function visibleAttachFields(mode: AttachMode, providerId: string): Provi
 }
 
 export function isGlmPlanId(value: string): value is GlmPlanId {
-  return value === "coding" || value === "general";
+  return value === "coding" || value === "payg";
 }
 
-export function modelIdForBind(provider: ProviderChoice, typedModelId: string, glmPlan?: string): string {
-  if (provider.id === "sub-glm") {
-    const plan = glmPlan && isGlmPlanId(glmPlan) ? GLM_PLANS[glmPlan] : undefined;
-    return plan?.bindModelId ?? provider.bindModelId ?? provider.id;
-  }
+export function modelIdForBind(provider: ProviderChoice, typedModelId: string): string {
   const typed = typedModelId.trim();
   if (provider.fields.modelId !== "hidden") return typed;
   return provider.bindModelId ?? provider.id;
 }
 
 export function officialBaseUrlForBind(provider: ProviderChoice, glmPlan?: string): string | undefined {
-  if (provider.id === "sub-glm") {
+  if (provider.fields.glmPlan === "required") {
     if (!glmPlan || !isGlmPlanId(glmPlan)) return undefined;
     return GLM_PLANS[glmPlan].officialBaseUrl;
   }

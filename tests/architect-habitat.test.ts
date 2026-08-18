@@ -36,8 +36,8 @@ import {
 import { architectHabitatPageHtml } from "../src/http/architect-habitat-page.js";
 import {
   GLM_CODING_PLAN_BASE,
-  GLM_GENERAL_API_BASE,
   GLM_OFFICIAL_KEY_URL,
+  GLM_PAYG_API_BASE,
   GROK_OFFICIAL_API_BASE,
   GROK_OFFICIAL_CONSOLE_URL,
   HABITAT_CONNECTORS,
@@ -753,8 +753,7 @@ describe("Architect habitat bind wizard", () => {
     expect(html).toMatch(/\/architect\/bind-connector/);
     expect(html).toMatch(/\/architect\/edit-connector-bind/);
     expect(html).toMatch(/Codex Subscription/);
-    expect(html).toMatch(/Grok Subscription/);
-    expect(html).toMatch(/GLM subscription/);
+    expect(html).not.toMatch(/Grok Subscription|GLM subscription/);
     expect(html).toMatch(/Generic OpenAI \(vLLM \/ Ollama\)/);
     expect(html).toMatch(/>Claude</);
     expect(html).toMatch(/>Codex</);
@@ -791,7 +790,10 @@ describe("Architect habitat bind wizard", () => {
     expect(html).toMatch(GROK_OFFICIAL_CONSOLE_URL);
     expect(html).toMatch(GLM_OFFICIAL_KEY_URL);
     expect(html).toMatch(GLM_CODING_PLAN_BASE);
-    expect(html).toMatch(GLM_GENERAL_API_BASE);
+    expect(html).toMatch(GLM_PAYG_API_BASE);
+    expect(html).toMatch(/PAYG/);
+    expect(html).toMatch(/API key\. xAI publishes no public subscription OAuth/);
+    expect(html).toMatch(/API key\. Coding Plan vs PAYG/);
     expect(html).toMatch(/GitHub OAuth App client id/);
     expect(html).not.toMatch(/b1a00492|client_P8X5CMWmla|178c6fc778ccc68e1d6a|chat\.z\.ai|auth\.x\.ai\/oauth2/);
     expect(html).not.toMatch(/id="subscription-start-url"/);
@@ -815,8 +817,6 @@ describe("Architect habitat bind wizard", () => {
     expect(HABITAT_PROVIDERS.map((row) => row.label)).toEqual(
       expect.arrayContaining([
         "Codex Subscription",
-        "Grok Subscription",
-        "GLM subscription",
         "Claude",
         "Codex",
         "Grok",
@@ -825,6 +825,9 @@ describe("Architect habitat bind wizard", () => {
         "Generic OpenAI (vLLM / Ollama)",
       ]),
     );
+    expect(HABITAT_PROVIDERS.filter((row) => row.mode === "subscription").map((row) => row.id)).toEqual([
+      "sub-codex",
+    ]);
     const sub = visibleAttachFields("subscription", "sub-codex");
     expect(sub).toEqual({
       subscriptionAuth: "guided",
@@ -834,32 +837,33 @@ describe("Architect habitat bind wizard", () => {
       modelId: "hidden",
       glmPlan: "hidden",
     });
-    const grokSub = visibleAttachFields("subscription", "sub-grok");
-    expect(grokSub).toEqual({
+    const grokApi = visibleAttachFields("api", "api-grok");
+    expect(grokApi).toEqual({
       subscriptionAuth: "hidden",
       startUrl: "hidden",
       apiKey: "required",
       vendorBaseUrl: "hidden",
-      modelId: "hidden",
+      modelId: "required",
       glmPlan: "hidden",
     });
-    const glmSub = visibleAttachFields("subscription", "sub-glm");
-    expect(glmSub).toEqual({
+    const glmApi = visibleAttachFields("api", "api-glm");
+    expect(glmApi).toEqual({
       subscriptionAuth: "hidden",
       startUrl: "hidden",
       apiKey: "required",
       vendorBaseUrl: "hidden",
-      modelId: "hidden",
+      modelId: "required",
       glmPlan: "required",
     });
-    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "sub-grok")!)).toBe(
+    expect(visibleAttachFields("subscription", "api-grok").apiKey).toBe("hidden");
+    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "api-grok")!)).toBe(
       GROK_OFFICIAL_API_BASE,
     );
-    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "sub-glm")!, "coding")).toBe(
+    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "api-glm")!, "coding")).toBe(
       GLM_CODING_PLAN_BASE,
     );
-    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "sub-glm")!, "general")).toBe(
-      GLM_GENERAL_API_BASE,
+    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "api-glm")!, "payg")).toBe(
+      GLM_PAYG_API_BASE,
     );
     const api = visibleAttachFields("api", "api-claude");
     expect(api).toEqual({
@@ -1263,7 +1267,7 @@ describe("Architect habitat official subscription attach", () => {
     expect(bound.apiKey).toBeUndefined();
     expect(bound.access_token).toBeUndefined();
 
-    for (const providerId of ["sub-grok", "sub-glm"]) {
+    for (const providerId of ["api-grok", "api-glm", "sub-grok", "sub-glm"]) {
       const rejected = await fetch(`${live.url}/architect/start-subscription-auth`, {
         method: "POST",
         headers: auth,
@@ -1276,7 +1280,7 @@ describe("Architect habitat official subscription attach", () => {
     const grokBind = await fetch(`${live.url}/architect/bind-adapter`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ modelId: "grok-subscription", vendorBaseUrl: GROK_OFFICIAL_API_BASE }),
+      body: JSON.stringify({ modelId: "grok-3", vendorBaseUrl: GROK_OFFICIAL_API_BASE }),
     });
     expect(grokBind.status).toBe(201);
     await fetch(`${live.url}/architect/set-adapter-credentials`, {
@@ -1288,15 +1292,15 @@ describe("Architect habitat official subscription attach", () => {
     const glmCoding = await fetch(`${live.url}/architect/bind-adapter`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ modelId: "glm-coding-plan", vendorBaseUrl: GLM_CODING_PLAN_BASE }),
+      body: JSON.stringify({ modelId: "glm-5", vendorBaseUrl: GLM_CODING_PLAN_BASE }),
     });
     expect(glmCoding.status).toBe(201);
-    const glmGeneral = await fetch(`${live.url}/architect/bind-adapter`, {
+    const glmPayg = await fetch(`${live.url}/architect/bind-adapter`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({ modelId: "glm-subscription", vendorBaseUrl: GLM_GENERAL_API_BASE }),
+      body: JSON.stringify({ modelId: "glm-5-payg", vendorBaseUrl: GLM_PAYG_API_BASE }),
     });
-    expect(glmGeneral.status).toBe(201);
+    expect(glmPayg.status).toBe(201);
     await fetch(`${live.url}/architect/set-adapter-credentials`, {
       method: "POST",
       headers: auth,
@@ -1306,13 +1310,11 @@ describe("Architect habitat official subscription attach", () => {
     const paths = computerRoot(live.computerBaseDir, live.tenantId);
     const store = loadAdapterBindStore(paths.adapterBindFile);
     expect(store.models.map((row) => row.modelId).sort()).toEqual(
-      ["codex-subscription", "glm-coding-plan", "glm-subscription", "grok-subscription"].sort(),
+      ["codex-subscription", "glm-5", "glm-5-payg", "grok-3"].sort(),
     );
-    expect(store.models.find((row) => row.modelId === "grok-subscription")?.vendorBaseUrl).toBe(
-      GROK_OFFICIAL_API_BASE,
-    );
-    expect(store.models.find((row) => row.modelId === "glm-coding-plan")?.vendorBaseUrl).toBe(GLM_CODING_PLAN_BASE);
-    expect(store.models.find((row) => row.modelId === "glm-subscription")?.vendorBaseUrl).toBe(GLM_GENERAL_API_BASE);
+    expect(store.models.find((row) => row.modelId === "grok-3")?.vendorBaseUrl).toBe(GROK_OFFICIAL_API_BASE);
+    expect(store.models.find((row) => row.modelId === "glm-5")?.vendorBaseUrl).toBe(GLM_CODING_PLAN_BASE);
+    expect(store.models.find((row) => row.modelId === "glm-5-payg")?.vendorBaseUrl).toBe(GLM_PAYG_API_BASE);
     expect(store.models.every((row) => row.boundBy === "architect")).toBe(true);
     expect(store.models.every((row) => !("apiKey" in row))).toBe(true);
     const creds = loadAdapterCredentials(paths.adapterCredentialsFile)!;

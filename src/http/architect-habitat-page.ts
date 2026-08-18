@@ -1,7 +1,7 @@
 import { GLASS, PRODUCT } from "../identity.js";
 import {
   GLM_CODING_PLAN_BASE,
-  GLM_GENERAL_API_BASE,
+  GLM_PAYG_API_BASE,
   GLM_OFFICIAL_KEY_URL,
   GLM_PLANS,
   HABITAT_CONNECTORS,
@@ -160,9 +160,9 @@ export function architectHabitatPageHtml(): string {
           <p id="official-key-link" class="lead"></p>
         </div>
         <div id="glm-plan-field" class="field" hidden>
-          <p class="lead">Official is API key only. Coding Plan and general use different official base URLs. Architect does not type an issuer.</p>
+          <p class="lead">API key. Coding Plan vs PAYG use official documented base URLs. Architect does not type a host.</p>
           <label for="glm-plan-coding"><input id="glm-plan-coding" type="radio" name="glm-plan" checked /> ${GLM_PLANS.coding.label} (${GLM_CODING_PLAN_BASE})</label>
-          <label for="glm-plan-general"><input id="glm-plan-general" type="radio" name="glm-plan" /> ${GLM_PLANS.general.label} (${GLM_GENERAL_API_BASE})</label>
+          <label for="glm-plan-payg"><input id="glm-plan-payg" type="radio" name="glm-plan" /> ${GLM_PLANS.payg.label} (${GLM_PAYG_API_BASE})</label>
         </div>
         <div id="model-id-field" class="field" hidden>
           <label for="model-id">model id</label>
@@ -182,10 +182,10 @@ export function architectHabitatPageHtml(): string {
 
       <section class="band step" data-wizard-step="attach-connector" hidden aria-label="Attach connector">
         <h2>3. Attach connector</h2>
-        <p class="lead">Named connectors use vendor OAuth with this habitat's registration. Generic / private MCP is an Architect-typed server URL.</p>
+        <p class="lead">Named connector OAuth only when that app publishes it. Generic / private MCP is an Architect-typed server URL.</p>
         <div id="connector-choices">${connectorChoices}</div>
         <div id="connector-guided-auth" class="field" hidden>
-          <p class="lead">GitHub device OAuth with this habitat's OAuth App. Paste that client id. Core uses GitHub's published device endpoints. Not OpenAI's catalog.</p>
+          <p class="lead">GitHub publishes device OAuth. Paste this habitat's GitHub OAuth App client id. Not OpenAI's catalog.</p>
           <label for="github-client-id">GitHub OAuth App client id</label>
           <input id="github-client-id" autocomplete="off" spellcheck="false" />
           <button id="connector-sign-in" type="button">Sign in</button>
@@ -300,8 +300,8 @@ export function architectHabitatPageHtml(): string {
       ),
     )};
     var GLM_PLAN_BASES = ${JSON.stringify({
-      coding: { officialBaseUrl: GLM_CODING_PLAN_BASE, bindModelId: GLM_PLANS.coding.bindModelId, keyUrl: GLM_OFFICIAL_KEY_URL },
-      general: { officialBaseUrl: GLM_GENERAL_API_BASE, bindModelId: GLM_PLANS.general.bindModelId, keyUrl: GLM_OFFICIAL_KEY_URL },
+      coding: { officialBaseUrl: GLM_CODING_PLAN_BASE, keyUrl: GLM_OFFICIAL_KEY_URL },
+      payg: { officialBaseUrl: GLM_PAYG_API_BASE, keyUrl: GLM_OFFICIAL_KEY_URL },
     })};
     var state = { step: "session", panel: "wizard", mode: "", provider: "", connector: "", models: [], connectors: [], subscriptionAuthId: "", connectorAuthId: "" };
     var subscriptionPoll = null;
@@ -406,16 +406,12 @@ export function architectHabitatPageHtml(): string {
     }
     function selectedGlmPlan() {
       var coding = document.getElementById("glm-plan-coding");
-      return coding && coding.checked ? "coding" : "general";
+      return coding && coding.checked ? "coding" : "payg";
     }
     function wizardModelId() {
       var provider = selectedProvider();
       if (!provider) return "";
-      var providerId = provider.getAttribute("data-provider");
-      var spec = FIELDS[providerId];
-      if (providerId === "sub-glm") {
-        return GLM_PLAN_BASES[selectedGlmPlan()].bindModelId;
-      }
+      var spec = FIELDS[provider.getAttribute("data-provider")];
       if (spec && spec.modelId !== "hidden") {
         return document.getElementById("model-id").value.trim();
       }
@@ -424,8 +420,8 @@ export function architectHabitatPageHtml(): string {
     function wizardOfficialBaseUrl() {
       var provider = selectedProvider();
       if (!provider) return "";
-      var providerId = provider.getAttribute("data-provider");
-      if (providerId === "sub-glm") return GLM_PLAN_BASES[selectedGlmPlan()].officialBaseUrl;
+      var spec = FIELDS[provider.getAttribute("data-provider")];
+      if (spec && spec.glmPlan === "required") return GLM_PLAN_BASES[selectedGlmPlan()].officialBaseUrl;
       return provider.getAttribute("data-official-base-url") || "";
     }
     async function wizardBindAdapter() {

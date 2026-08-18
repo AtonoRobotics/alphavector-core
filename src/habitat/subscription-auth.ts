@@ -21,7 +21,7 @@ export function assertNamedSubscription(providerId: string): NamedSubscriptionId
   if (!isNamedSubscriptionId(providerId)) {
     throw new AvError(
       "SUBSCRIPTION_PROVIDER_REQUIRED",
-      "Guided subscription auth is only Codex Subscription. Grok and GLM publish API keys, not public subscription OAuth.",
+      "Guided subscription auth is only Codex Subscription. Grok and GLM are labeled API key attach.",
     );
   }
   return providerId;
