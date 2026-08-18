@@ -4,8 +4,9 @@ import { AvError, SurfaceViolationError } from "../errors.js";
 /**
  * Architect write gate. Same class as field-token issue/revoke and adapter bind.
  * Shell is not Architect. A field token cannot pass.
- * Habitat HTTP accepts a verified Architect credential or a checked session
- * cookie issued after Architect sign-in. An open listen is not a seat.
+ * Habitat HTTP accepts a verified Architect credential (CLI / Bearer — not a
+ * wizard paste of the deploy-held token) or a checked session cookie issued
+ * after password sign-in. An open listen is not a seat.
  */
 export function requireArchitect(
   tenantId: string,

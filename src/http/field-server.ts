@@ -32,6 +32,12 @@ import {
   architectSessionCookieHeader,
   readArchitectSessionCookie,
 } from "../auth/architect-session.js";
+import {
+  ensureArchitectBootstrap,
+  hasArchitectPassword,
+  setArchitectPassword,
+  verifyArchitectPassword,
+} from "../auth/architect-password.js";
 import { AuthorizationRequiredError, AvError, DeployIncompleteError, SurfaceViolationError } from "../errors.js";
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
@@ -61,7 +67,7 @@ const CORS = {
 } as const;
 
 const CONFIG_PATH =
-  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|adapter-router|adapter-aggregator|bind-adapter|set-adapter-credentials|set-adapter-router|set-adapter-aggregator|edit-adapter-bind|edit-connector-bind|bind-connector|set-connector-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message|router|aggregator|subscription-auth|start-subscription|complete-subscription|start-connector-auth|complete-connector-auth/i;
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|adapter-router|adapter-aggregator|bind-adapter|set-adapter-credentials|set-adapter-router|set-adapter-aggregator|edit-adapter-bind|edit-connector-bind|bind-connector|set-connector-credentials|set-password|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message|router|aggregator|subscription-auth|start-subscription|complete-subscription|start-connector-auth|complete-connector-auth/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -100,6 +106,7 @@ export class FieldHttpServer {
     });
     const addr = server.address() as AddressInfo;
     const url = `http://${host}:${addr.port}`;
+    this.ensureHostBootstrap();
     void registerHabitatZcodeCallback(`${url}/architect/glm-callback`);
     return { port: addr.port, url };
   }
@@ -142,8 +149,16 @@ export class FieldHttpServer {
         await this.routeArchitectGlmCallback(req, res, url);
         return;
       }
+      if (req.method === "GET" && path === "/architect/login") {
+        this.routeArchitectLoginStatus(req, res);
+        return;
+      }
       if (req.method === "POST" && path === "/architect/login") {
         await this.routeArchitectLogin(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/set-password") {
+        await this.routeArchitectSetPassword(req, res);
         return;
       }
       if (req.method === "POST" && path === "/architect/bind-adapter") {
@@ -1090,39 +1105,82 @@ export class FieldHttpServer {
   }
 
   /**
-   * Architect sign-in. Verifies a presented Architect credential against the
-   * deploy-held book and sets a checked session cookie. Never returns the secret.
+   * Whether a habitat password exists. No secrets. Field Bearer is 403.
+   * The deploy-held Architect credential is not a seat signal.
+   */
+  private routeArchitectLoginStatus(req: IncomingMessage, res: ServerResponse): void {
+    if (this.refuseFieldArchitectSeat(req, res, "A field token cannot sit in the habitat")) return;
+    const computerBaseDir = this.opts.core.fieldTokens.baseDir();
+    this.json(res, 200, {
+      passwordSet: computerBaseDir ? hasArchitectPassword(computerBaseDir, this.opts.tenantId) : false,
+    });
+  }
+
+  /**
+   * Architect sign-in. Verifies the password the Architect set, then sets a
+   * checked session cookie. The deploy-held Architect credential is not accepted
+   * here (no body.secret lookup, no Bearer Architect login). Never returns the
+   * password, bootstrap code, session secret, or deploy token.
    */
   private async routeArchitectLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const header = req.headers.authorization;
-    let presented: string | undefined;
-    if (header?.startsWith("Bearer ")) {
-      presented = header.slice("Bearer ".length).trim();
-    } else {
-      const body = (await readJson(req)) as { secret?: string };
-      presented = typeof body.secret === "string" ? body.secret.trim() : undefined;
+    if (this.refuseFieldArchitectSeat(req, res, "A field token cannot sit in the habitat")) return;
+    if (this.presentedArchitectBearer(req)) {
+      this.json(res, 401, {
+        error: "UNAUTHORIZED",
+        message: "Deploy-held Architect credential is not habitat sign-in",
+      });
+      return;
     }
-    if (presented) {
-      const principal = this.opts.core.fieldTokens.lookup(presented, this.opts.tenantId);
-      if (principal === "field") {
-        this.json(res, 403, { error: "SURFACE_VIOLATION", message: "A field token cannot sit in the habitat" });
-        return;
-      }
-      if (principal !== "architect") {
-        this.json(res, 401, { error: "UNAUTHORIZED", message: "Unknown or revoked Architect credential" });
-        return;
-      }
-    } else if (!this.architectSessions.lookup(this.opts.tenantId, readArchitectSessionCookie(req.headers.cookie))) {
+    const body = (await readJson(req)) as { password?: string; secret?: string };
+    if (typeof body.secret === "string" && body.secret.trim()) {
+      this.json(res, 401, {
+        error: "UNAUTHORIZED",
+        message: "Architect sign-in is the password, not the deploy-held credential",
+      });
+      return;
+    }
+    const password = typeof body.password === "string" ? body.password : "";
+    const computerBaseDir = this.architectComputerDir();
+    if (!verifyArchitectPassword(computerBaseDir, this.opts.tenantId, password)) {
       this.json(res, 401, { error: "UNAUTHORIZED", message: "Architect sign-in required" });
       return;
     }
+    this.issueArchitectSession(res);
+  }
+
+  /**
+   * First-run password create. Requires the unused host bootstrap code written
+   * beside field-tokens.json. Consumes that code. Not allowHeldSeat. Not a
+   * deploy-token paste. Issues the same av_architect cookie as later sign-in.
+   */
+  private async routeArchitectSetPassword(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.refuseFieldArchitectSeat(req, res, "A field token cannot sit in the habitat")) return;
+    if (this.presentedArchitectBearer(req)) {
+      this.json(res, 401, {
+        error: "UNAUTHORIZED",
+        message: "Deploy-held Architect credential is not habitat sign-in",
+      });
+      return;
+    }
+    const body = (await readJson(req)) as { bootstrap?: string; password?: string; confirm?: string };
+    setArchitectPassword({
+      tenantId: this.opts.tenantId,
+      computerBaseDir: this.architectComputerDir(),
+      bootstrap: typeof body.bootstrap === "string" ? body.bootstrap : undefined,
+      password: typeof body.password === "string" ? body.password : undefined,
+      confirm: typeof body.confirm === "string" ? body.confirm : undefined,
+    });
+    this.issueArchitectSession(res);
+  }
+
+  private issueArchitectSession(res: ServerResponse): void {
     const issued = this.architectSessions.issue(this.opts.tenantId);
     this.json(res, 200, { ok: true }, { "set-cookie": architectSessionCookieHeader(issued.cookie, issued.maxAgeSec) });
   }
 
   /** Static inert wizard shell. Does not read, mint, or write any credential. */
   private writeArchitectHabitatHtmlShell(res: ServerResponse): void {
-    this.write(res, 200, architectHabitatPageHtml(), {
+    this.write(res, 200, architectHabitatPageHtml({ tenantId: this.opts.tenantId }), {
       "content-type": "text/html; charset=utf-8",
       ...CORS,
     });
@@ -1130,8 +1188,9 @@ export class FieldHttpServer {
 
   /**
    * Architect HTTP gate. Field is 403. Presented Architect credential is verified
-   * against the deploy-held book. A checked session cookie from Architect sign-in
-   * also passes. An open listen is not a seat. HTTP never returns the session secret.
+   * against the deploy-held book (CLI / Bearer — not a wizard paste). A checked
+   * session cookie from password sign-in also passes. An open listen is not a seat.
+   * HTTP never returns the session secret.
    */
   private architectGate(
     req: IncomingMessage,
@@ -1176,6 +1235,35 @@ export class FieldHttpServer {
     return computerBaseDir;
   }
 
+  /**
+   * Write the one-time host bootstrap when no password exists yet.
+   * Path: tenants/<tenantId>/architect-bootstrap.json beside field-tokens.json.
+   */
+  private ensureHostBootstrap(): void {
+    const computerBaseDir = this.opts.core.fieldTokens.baseDir();
+    if (!computerBaseDir) return;
+    ensureArchitectBootstrap(computerBaseDir, this.opts.tenantId);
+  }
+
+  private refuseFieldArchitectSeat(
+    req: IncomingMessage,
+    res: ServerResponse,
+    message: string,
+  ): boolean {
+    if (this.principalOf(req) !== "field") return false;
+    this.json(res, 403, { error: "SURFACE_VIOLATION", message });
+    return true;
+  }
+
+  /** Deploy-held Architect Bearer is not habitat sign-in. */
+  private presentedArchitectBearer(req: IncomingMessage): boolean {
+    const header = req.headers.authorization;
+    if (!header?.startsWith("Bearer ")) return false;
+    const token = header.slice("Bearer ".length).trim();
+    if (!token) return false;
+    return this.opts.core.fieldTokens.lookup(token, this.opts.tenantId) === "architect";
+  }
+
   private principalOf(req: IncomingMessage): PrincipalKind | undefined {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) return undefined;
@@ -1211,6 +1299,8 @@ export class FieldHttpServer {
           err.code === "RECORD_NOT_FOUND" ||
           err.code === "RECORD_ATTRIBUTE_NOT_FOUND"
           ? 404
+          : err.code === "UNAUTHORIZED"
+            ? 401
           : err.code === "POLICY_DENIED" ||
               err.code === "DENY_IS_TERMINAL" ||
               err.code === "PREDICATE_CLOSED"
@@ -1231,7 +1321,9 @@ export class FieldHttpServer {
                 err.code === "MAIL_STORE_CORRUPT" ||
                 err.code === "DEADLINE_STORE_CORRUPT" ||
                 err.code === "CONNECTOR_STORE_CORRUPT" ||
-                err.code === "DEPLOY_STORE_CORRUPT"
+                err.code === "DEPLOY_STORE_CORRUPT" ||
+                err.code === "ARCHITECT_PASSWORD_CORRUPT" ||
+                err.code === "ARCHITECT_BOOTSTRAP_CORRUPT"
               ? 500
               : 400;
       this.json(res, status, { error: err.code, message: err.message });

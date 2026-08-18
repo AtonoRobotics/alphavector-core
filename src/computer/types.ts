@@ -13,6 +13,16 @@ export interface ComputerPaths {
   grantsFile: string;
   /** Tenant-issued field and Architect credentials. Beside secrets and cards, never inside disk/. */
   fieldTokensFile: string;
+  /**
+   * One-time first-run Architect host code. Same class as field-tokens.json:
+   * host-only, beside the disk, never inside the bind-mounted /home, never HTML.
+   */
+  architectBootstrapFile: string;
+  /**
+   * Architect habitat password hash (not the password). Same class as
+   * field-tokens.json: host-only, beside the disk, never a wizard dump.
+   */
+  architectPasswordFile: string;
   /** Generic tenant facts for pack predicates. Beside cards and tokens, never inside disk/. */
   factsFile: string;
   /** Generic subject records facts attach to. Beside facts, cards, and tokens, never inside disk/. */

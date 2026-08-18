@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readArchitectBootstrapCode } from "../src/auth/architect-password.js";
 import { computerRoot } from "../src/computer/paths.js";
 import { CORE_SCHEMA_SQL } from "../src/data/sql.js";
 import { FactBook } from "../src/facts/book.js";
@@ -388,6 +389,7 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/tools",
       "/field/bind-adapter",
       "/field/set-adapter-credentials",
+      "/field/set-password",
       "/field/start-subscription-auth",
       "/field/start-connector-auth",
       "/field/complete-connector-auth",
@@ -435,6 +437,107 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       const res = await fetch(`${url}${path}`, { method: "POST", headers });
       expect(res.status).toBe(404);
     }
+  });
+
+  it("Architect habitat writes stay 401 unauthenticated and 403 for Field; login is not the deploy token", async () => {
+    const { url, tokens, tenantId, computerBaseDir } = await liveField("architect-password");
+    const unauthBind = await fetch(`${url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "ci-field-http" }),
+    });
+    expect(unauthBind.status).toBe(401);
+    expect(unauthBind.status).not.toBe(201);
+    const unauthStart = await fetch(`${url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerId: "sub-codex" }),
+    });
+    expect(unauthStart.status).toBe(401);
+    expect(unauthStart.status).not.toBe(201);
+
+    for (const route of [
+      "/architect/login",
+      "/architect/set-password",
+      "/architect/bind-adapter",
+      "/architect/start-subscription-auth",
+    ]) {
+      const denied = await fetch(`${url}${route}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${tokens.field}`, "content-type": "application/json" },
+        body: JSON.stringify({ modelId: "ci-field-http", providerId: "sub-codex" }),
+      });
+      expect(denied.status).toBe(403);
+      expect(((await denied.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+    }
+    const fieldHabitat = await fetch(`${url}/architect/habitat`, {
+      headers: { authorization: `Bearer ${tokens.field}`, accept: "application/json" },
+    });
+    expect(fieldHabitat.status).toBe(403);
+    expect(((await fieldHabitat.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+
+    const deployLogin = await fetch(`${url}/architect/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ secret: tokens.architect }),
+    });
+    expect(deployLogin.status).toBe(401);
+    const deployBody = (await deployLogin.json()) as Record<string, unknown>;
+    expect(deployBody.error).toBe("UNAUTHORIZED");
+    expect(deployBody).not.toHaveProperty("session");
+    expect(deployBody).not.toHaveProperty("token");
+    expect(deployBody).not.toHaveProperty("apiKey");
+    expect(deployBody).not.toHaveProperty("access_token");
+    expect(JSON.stringify(deployBody)).not.toContain(tokens.architect);
+
+    const password = "field-http-architect-password";
+    const missingBootstrap = await fetch(`${url}/architect/set-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password, confirm: password }),
+    });
+    expect(missingBootstrap.status).toBe(401);
+
+    const bootstrap = readArchitectBootstrapCode(computerBaseDir, tenantId);
+    expect(bootstrap).toBeTruthy();
+    const set = await fetch(`${url}/architect/set-password`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bootstrap, password, confirm: password }),
+    });
+    expect(set.status).toBe(200);
+    const setBody = (await set.json()) as Record<string, unknown>;
+    expect(setBody).toEqual({ ok: true });
+    expect(JSON.stringify(setBody)).not.toContain(password);
+    expect(JSON.stringify(setBody)).not.toContain(bootstrap!);
+
+    const reused = await fetch(`${url}/architect/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password: bootstrap }),
+    });
+    expect(reused.status).toBe(401);
+
+    const login = await fetch(`${url}/architect/login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    expect(login.status).toBe(200);
+    const loginBody = (await login.json()) as Record<string, unknown>;
+    expect(loginBody).toEqual({ ok: true });
+    expect(loginBody).not.toHaveProperty("session");
+    expect(loginBody).not.toHaveProperty("token");
+    expect(loginBody).not.toHaveProperty("apiKey");
+    expect(loginBody).not.toHaveProperty("access_token");
+    const setCookie = login.headers.get("set-cookie") ?? "";
+    expect(setCookie).toMatch(/^av_architect=/);
+    const cookieValue = setCookie.split(";")[0]!.slice("av_architect=".length);
+    expect(cookieValue).not.toBe(password);
+    expect(cookieValue).not.toBe(tokens.architect);
+    expect(JSON.stringify(loginBody)).not.toContain(password);
+    expect(JSON.stringify(loginBody)).not.toContain(tokens.architect);
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 
   it("serves a Linux-openable field client that can complete a journey and a card", async () => {

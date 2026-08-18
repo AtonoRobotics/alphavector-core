@@ -10,8 +10,9 @@ export interface ArchitectSessionHold {
 }
 
 /**
- * Checked Architect browser session. Issued only after a verified Architect
- * credential. Cookie value is a random session secret, not the deploy-held token.
+ * Checked Architect browser session. Issued after a verified habitat password
+ * (or first-run set-password). Cookie value is a random session secret — not
+ * the password and not the deploy-held Architect credential.
  */
 export class MemoryArchitectSessionHold implements ArchitectSessionHold {
   private readonly sessions = new Map<string, { tenantId: string; hash: string; expiresAtMs: number }>();
