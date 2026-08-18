@@ -373,7 +373,13 @@ describe("HK-082 Architect sits in the habitat", () => {
     expect(fieldBody.error).toBe("SURFACE_VIOLATION");
 
     const missing = await fetch(`${live.url}/architect/habitat`);
-    expect(missing.status).toBe(401);
+    expect(missing.status).toBe(200);
+    const held = (await missing.json()) as { org?: unknown[]; token?: string; apiKey?: string };
+    expect(Array.isArray(held.org)).toBe(true);
+    expect(held.token).toBeUndefined();
+    expect(held.apiKey).toBeUndefined();
+    expect(JSON.stringify(held)).not.toContain(live.architectToken);
+    expect(JSON.stringify(held)).not.toContain(live.fieldToken);
 
     const fieldHome = await fetch(`${live.url}/field/home`, {
       headers: { authorization: `Bearer ${live.fieldToken}` },
@@ -425,6 +431,8 @@ describe("HK-082 Architect sits in the habitat", () => {
     expect(htmlRes.headers.get("content-type")).toMatch(/text\/html/);
     const html = await htmlRes.text();
     expect(html).toMatch(/Architect sits in the habitat/);
+    expect(html).toMatch(/deploy-held Architect session/);
+    expect(html).not.toMatch(/id="token"|Issued Architect credential|Load seat/);
     expect(html).toMatch(/id="model-id"/);
     expect(html).toMatch(/\/architect\/bind-adapter/);
     expect(html).not.toMatch(/Architect Desktop|Architect IDE|Architect Studio|Architect App/i);
