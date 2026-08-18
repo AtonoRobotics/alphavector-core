@@ -4,15 +4,25 @@ import type { AddressInfo } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentRecord } from "../agents/types.js";
 import type { PendingProgressRecord } from "../auth/types.js";
-import { architectBindAdapter } from "../auth/architect-adapter-bind.js";
+import { architectBindAdapter, architectEditAdapterBind } from "../auth/architect-adapter-bind.js";
+import { architectWriteAdapterAggregator } from "../auth/architect-adapter-aggregator.js";
 import { architectWriteAdapterCredentials } from "../auth/architect-adapter-credentials.js";
-import { architectBindConnector, architectWriteConnectorCredentials } from "../auth/architect-connectors.js";
+import { architectWriteAdapterRouter } from "../auth/architect-adapter-router.js";
+import {
+  architectBindConnector,
+  architectEditConnectorBind,
+  architectWriteConnectorCredentials,
+} from "../auth/architect-connectors.js";
 import { architectDeploy, fieldDeploy } from "../auth/architect-deploy.js";
 import { architectSit } from "../auth/architect-habitat.js";
 import { architectDeliverMessage } from "../auth/architect-message.js";
 import { AuthorizationRequiredError, AvError, DeployIncompleteError, SurfaceViolationError } from "../errors.js";
 import type { AlphaVectorCore } from "../kernel.js";
 import type { LoadedPack, PrincipalKind } from "../packs/types.js";
+import { readTenantAdapterAggregator } from "../habitat/adapter-aggregator.js";
+import { readTenantAdapterBinds } from "../habitat/adapter-bind.js";
+import { readTenantAdapterRouter } from "../habitat/adapter-router.js";
+import { readTenantConnectorBinds } from "../habitat/connector-bind.js";
 import { architectHabitatPageHtml, wantsArchitectHabitatHtml } from "./architect-habitat-page.js";
 import { fieldLinuxPagePath } from "./field-boot.js";
 import type {
@@ -33,7 +43,7 @@ const CORS = {
 } as const;
 
 const CONFIG_PATH =
-  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|bind-adapter|set-adapter-credentials|bind-connector|set-connector-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message/i;
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|adapter-router|adapter-aggregator|bind-adapter|set-adapter-credentials|set-adapter-router|set-adapter-aggregator|edit-adapter-bind|edit-connector-bind|bind-connector|set-connector-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message|router|aggregator/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -112,8 +122,40 @@ export class FieldHttpServer {
         await this.routeArchitectSetAdapterCredentials(req, res);
         return;
       }
+      if (req.method === "POST" && path === "/architect/edit-adapter-bind") {
+        await this.routeArchitectEditAdapterBind(req, res);
+        return;
+      }
+      if (req.method === "GET" && path === "/architect/adapter-bind") {
+        this.routeArchitectReadAdapterBind(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/set-adapter-router") {
+        await this.routeArchitectSetAdapterRouter(req, res);
+        return;
+      }
+      if (req.method === "GET" && path === "/architect/adapter-router") {
+        this.routeArchitectReadAdapterRouter(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/set-adapter-aggregator") {
+        await this.routeArchitectSetAdapterAggregator(req, res);
+        return;
+      }
+      if (req.method === "GET" && path === "/architect/adapter-aggregator") {
+        this.routeArchitectReadAdapterAggregator(req, res);
+        return;
+      }
       if (req.method === "POST" && path === "/architect/bind-connector") {
         await this.routeArchitectBindConnector(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/edit-connector-bind") {
+        await this.routeArchitectEditConnectorBind(req, res);
+        return;
+      }
+      if (req.method === "GET" && path === "/architect/connector-bind") {
+        this.routeArchitectReadConnectorBind(req, res);
         return;
       }
       if (req.method === "POST" && path === "/architect/set-connector-credentials") {
@@ -619,6 +661,117 @@ export class FieldHttpServer {
   }
 
   /**
+   * Admin edit of an already-bound adapter. Same writer as bind-adapter.
+   * Unbound modelId is ADAPTER_NOT_BOUND — add stays on the wizard.
+   */
+  private async routeArchitectEditAdapterBind(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { modelId?: string; vendorBaseUrl?: string };
+    const bound = architectEditAdapterBind({
+      tenantId: this.opts.tenantId,
+      modelId: String(body.modelId ?? ""),
+      vendorBaseUrl: typeof body.vendorBaseUrl === "string" ? body.vendorBaseUrl : undefined,
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+    });
+    this.json(res, 201, bound);
+  }
+
+  /** Architect-gated read of adapter-bind.json. Never returns credentials. */
+  private routeArchitectReadAdapterBind(req: IncomingMessage, res: ServerResponse): void {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const store = readTenantAdapterBinds(this.architectComputerDir(), this.opts.tenantId);
+    this.json(res, 200, {
+      models: store.models.map((row) => ({
+        tenantId: row.tenantId,
+        modelId: row.modelId,
+        boundBy: row.boundBy,
+        boundAt: row.boundAt,
+        ...(row.vendorBaseUrl ? { vendorBaseUrl: row.vendorBaseUrl } : {}),
+      })),
+    });
+  }
+
+  /**
+   * Architect router write. Calls architectWriteAdapterRouter.
+   * Field token is 403 SURFACE_VIOLATION.
+   */
+  private async routeArchitectSetAdapterRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { rules?: string };
+    const written = architectWriteAdapterRouter({
+      tenantId: this.opts.tenantId,
+      rules: String(body.rules ?? ""),
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+    });
+    this.json(res, 201, { ok: true, tenantId: written.tenantId, boundBy: written.boundBy, rules: written.rules });
+  }
+
+  private routeArchitectReadAdapterRouter(req: IncomingMessage, res: ServerResponse): void {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const record = readTenantAdapterRouter(this.architectComputerDir(), this.opts.tenantId);
+    this.json(res, 200, record ? { rules: record.rules, boundBy: record.boundBy } : { rules: "" });
+  }
+
+  /**
+   * Architect aggregator write. Calls architectWriteAdapterAggregator.
+   * Field token is 403 SURFACE_VIOLATION.
+   */
+  private async routeArchitectSetAdapterAggregator(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { combine?: string };
+    const written = architectWriteAdapterAggregator({
+      tenantId: this.opts.tenantId,
+      combine: String(body.combine ?? ""),
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+    });
+    this.json(res, 201, {
+      ok: true,
+      tenantId: written.tenantId,
+      boundBy: written.boundBy,
+      combine: written.combine,
+    });
+  }
+
+  private routeArchitectReadAdapterAggregator(req: IncomingMessage, res: ServerResponse): void {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const record = readTenantAdapterAggregator(this.architectComputerDir(), this.opts.tenantId);
+    this.json(res, 200, record ? { combine: record.combine, boundBy: record.boundBy } : { combine: "" });
+  }
+
+  /**
    * Architect connector bind. Calls architectBindConnector. Same file as CLI.
    * Field token is 403 SURFACE_VIOLATION. Not a /field route.
    */
@@ -648,6 +801,60 @@ export class FieldHttpServer {
       connectorId: bound.connectorId,
       boundBy: bound.boundBy,
       ...(bound.baseUrl ? { baseUrl: bound.baseUrl } : {}),
+    });
+  }
+
+  /**
+   * Admin edit of an already-bound connector. Same writer as bind-connector.
+   * Unbound connectorId is CONNECTOR_UNBOUND — add stays on the wizard.
+   */
+  private async routeArchitectEditConnectorBind(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as {
+      connectorId?: string;
+      baseUrl?: string;
+      requiresCredentials?: boolean;
+    };
+    const bound = architectEditConnectorBind({
+      tenantId: this.opts.tenantId,
+      connectorId: String(body.connectorId ?? ""),
+      requiresCredentials: body.requiresCredentials === true,
+      baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : undefined,
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+    });
+    this.json(res, 201, {
+      ok: true,
+      tenantId: bound.tenantId,
+      connectorId: bound.connectorId,
+      boundBy: bound.boundBy,
+      ...(bound.baseUrl ? { baseUrl: bound.baseUrl } : {}),
+    });
+  }
+
+  /** Architect-gated read of connector-bind.json. Never returns secrets. */
+  private routeArchitectReadConnectorBind(req: IncomingMessage, res: ServerResponse): void {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const store = readTenantConnectorBinds(this.architectComputerDir(), this.opts.tenantId);
+    this.json(res, 200, {
+      connectors: store.connectors.map((row) => ({
+        tenantId: row.tenantId,
+        connectorId: row.connectorId,
+        boundBy: row.boundBy,
+        boundAt: row.boundAt,
+        requiresCredentials: row.requiresCredentials,
+        ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
+      })),
     });
   }
 
@@ -770,6 +977,8 @@ export class FieldHttpServer {
                 err.code === "MEMORY_STORE_CORRUPT" ||
                 err.code === "ADAPTER_BIND_CORRUPT" ||
                 err.code === "ADAPTER_CREDENTIALS_CORRUPT" ||
+                err.code === "ADAPTER_ROUTER_CORRUPT" ||
+                err.code === "ADAPTER_AGGREGATOR_CORRUPT" ||
                 err.code === "ROUTINE_STORE_CORRUPT" ||
                 err.code === "MAIL_STORE_CORRUPT" ||
                 err.code === "DEADLINE_STORE_CORRUPT" ||

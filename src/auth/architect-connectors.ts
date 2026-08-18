@@ -55,6 +55,33 @@ export function architectBindConnector(input: {
 }
 
 /**
+ * Admin edit of an already-bound connector. Same writer and file as architectBindConnector.
+ * Refuses a connectorId that is not already on connector-bind.json — add stays on the wizard.
+ */
+export function architectEditConnectorBind(input: {
+  tenantId: string;
+  connectorId: string;
+  computerBaseDir: string;
+  architectToken?: string;
+  requiresCredentials?: boolean;
+  baseUrl?: string;
+}): ConnectorBindRecord {
+  const connectorId = input.connectorId.trim();
+  if (!connectorId) {
+    throw new AvError("CONNECTOR_ID_REQUIRED", "Architect connector bind requires a connector id");
+  }
+  requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  const current = readTenantConnectorBinds(input.computerBaseDir, input.tenantId);
+  if (!findStoredConnectorBind(current, input.tenantId, connectorId)) {
+    throw new AvError(
+      "CONNECTOR_UNBOUND",
+      "Admin can edit a bound connector only; attach a connector in the wizard",
+    );
+  }
+  return architectBindConnector(input);
+}
+
+/**
  * Architect writes tenants/{id}/connector-credentials.json.
  * Same write gate as adapter-credentials and connector-bind. Shell is not Architect.
  * Field SHALL NOT set, see, or edit. Not a /field route. Not on connector-bind.json.

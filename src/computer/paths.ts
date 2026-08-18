@@ -43,6 +43,10 @@ export function computerRoot(baseDir: string, tenantId: string): ComputerPaths {
     adapterBindFile: path.join(root, "adapter-bind.json"),
     // Provider credentials. Same class as field-tokens: not on bind, not on disk/, not a pack.
     adapterCredentialsFile: path.join(root, "adapter-credentials.json"),
+    // Architect model router. Same class as adapter-bind: not field UI, not on disk/, not a pack.
+    adapterRouterFile: path.join(root, "adapter-router.json"),
+    // Architect multi-model aggregator. Same class as adapter-bind: not field UI, not on disk/, not a pack.
+    adapterAggregatorFile: path.join(root, "adapter-aggregator.json"),
     // Architect- or pack-written routines. Same class as adapter-bind: not field UI, not on disk/.
     routinesFile: path.join(root, "routines.json"),
     // Habitat inter-agent mail. Same class as routines / adapter-bind: not field UI, not on disk/.
