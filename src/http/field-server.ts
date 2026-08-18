@@ -33,6 +33,10 @@ import { readTenantAdapterAggregator } from "../habitat/adapter-aggregator.js";
 import { readTenantAdapterBinds } from "../habitat/adapter-bind.js";
 import { readTenantAdapterRouter } from "../habitat/adapter-router.js";
 import { readTenantConnectorBinds } from "../habitat/connector-bind.js";
+import {
+  parseGlmAuthorizationCallback,
+  receiveGlmAuthorizationCode,
+} from "../habitat/vendor-login.js";
 import { architectHabitatPageHtml, wantsArchitectHabitatHtml } from "./architect-habitat-page.js";
 import { fieldLinuxPagePath } from "./field-boot.js";
 import type {
@@ -123,7 +127,12 @@ export class FieldHttpServer {
       }
 
       if (req.method === "GET" && path === "/architect/habitat") {
+        this.interceptGlmCallbackQuery(url);
         this.routeArchitectHabitat(req, res);
+        return;
+      }
+      if (req.method === "GET" && path === "/architect/glm-callback") {
+        this.routeArchitectGlmCallback(req, res, url);
         return;
       }
       if (req.method === "POST" && path === "/architect/bind-adapter") {
@@ -733,7 +742,12 @@ export class FieldHttpServer {
       "A field token cannot bind, see, or edit the adapter or connectors",
     );
     if (!gate) return;
-    const body = (await readJson(req)) as { authId?: string };
+    const body = (await readJson(req)) as {
+      authId?: string;
+      code?: string;
+      authCode?: string;
+      state?: string;
+    };
     const result = await architectCompleteSubscriptionAuth({
       tenantId: this.opts.tenantId,
       authId: String(body.authId ?? ""),
@@ -741,6 +755,9 @@ export class FieldHttpServer {
       architectToken: gate.presented,
       allowHeldSeat: gate.allowHeldSeat,
       hold: this.subscriptionHold,
+      code: body.code,
+      authCode: body.authCode,
+      state: body.state,
     });
     this.json(res, result.status === "bound" ? 201 : 200, result);
   }
@@ -1030,6 +1047,34 @@ export class FieldHttpServer {
       connectorId: written.connectorId,
       writtenBy: written.writtenBy,
     });
+  }
+
+  /**
+   * Official Continue with Z.ai hop / zcode:// intercept. Mailboxes code+state.
+   * Never returns the session. Field is 403.
+   */
+  private routeArchitectGlmCallback(req: IncomingMessage, res: ServerResponse, url: URL): void {
+    const gate = this.architectGate(req, res, "A field token cannot sit in the habitat");
+    if (!gate) return;
+    const parsed = parseGlmAuthorizationCallback(url.toString());
+    if (!parsed) {
+      this.json(res, 400, { error: "SUBSCRIPTION_AUTH_REQUIRED", message: "ZCode official login must return state and code" });
+      return;
+    }
+    receiveGlmAuthorizationCode(parsed.state, parsed.code);
+    if (wantsArchitectHabitatHtml(req.headers.accept)) {
+      this.write(res, 200, "<!DOCTYPE html><html><body><p>Continue with Z.ai received.</p></body></html>", {
+        "content-type": "text/html; charset=utf-8",
+        ...CORS,
+      });
+      return;
+    }
+    this.json(res, 200, { status: "received" });
+  }
+
+  private interceptGlmCallbackQuery(url: URL): void {
+    const parsed = parseGlmAuthorizationCallback(url.toString());
+    if (parsed) receiveGlmAuthorizationCode(parsed.state, parsed.code);
   }
 
   /** Static inert wizard shell. Does not read, mint, or write any credential. */

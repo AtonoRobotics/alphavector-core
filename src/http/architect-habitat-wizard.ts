@@ -129,7 +129,7 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     bindModelId: "glm-subscription",
     guidedActionLabel: "Continue with Z.ai",
     guidedLead:
-      "Continue with Z.ai starts official ZCode desktop authorize. Core owns the first-party client and redirect. Architect does not type an issuer. Login only.",
+      "Continue with Z.ai opens official ZCode desktop authorize. Core owns the first-party client and redirect. Architect does not type an issuer. Login only.",
     fields: GUIDED_SUB,
   },
   {

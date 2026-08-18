@@ -35,9 +35,13 @@ import {
   GLM_ACCOUNT_LOGIN_URL,
   GLM_AUTHORIZE_URL,
   GLM_CLIENT_ID,
+  GLM_HOLD_TTL_MS,
   GLM_REDIRECT_URI,
   GLM_TOKEN_URL,
+  parseGlmAuthorizationCallback,
   receiveGlmAuthorizationCode,
+  resetGlmAuthorizationHolds,
+  setGlmHoldClock,
   GROK_CLIENT_ID,
   GROK_DEVICE_GRANT,
   GROK_DEVICE_PATH,
@@ -76,6 +80,7 @@ const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
   resetVendorFetch();
+  resetGlmAuthorizationHolds();
   reapHeldCoders();
   while (servers.length) {
     await servers.pop()?.close();
@@ -819,6 +824,10 @@ describe("Architect habitat bind wizard", () => {
     expect(html).toMatch(/Grok Subscription/);
     expect(html).toMatch(/GLM Subscription/);
     expect(html).toMatch(/Continue with Z\.ai/);
+    expect(html).toMatch(/Continue with Z\.ai opens official ZCode desktop authorize/);
+    expect(html).toMatch(/window\.open\(started\.verificationUri\)/);
+    expect(html).toMatch(/function parseGlmCallback/);
+    expect(html).toMatch(/zcode:\/\/oauth\/callback|authCode/);
     expect(html).toMatch(/SuperGrok session/);
     expect(html).toMatch(/Generic OpenAI \(vLLM \/ Ollama\)/);
     expect(html).toMatch(/>Claude</);
@@ -1236,6 +1245,9 @@ function installOfficialVendorMocks(opts?: { codexUsercodeStatus?: number; grokD
       expect(body.code).toMatch(/\S/);
       expect(body.redirect_uri).toBe(GLM_REDIRECT_URI);
       expect(body.state).toMatch(/\S/);
+      expect(body).not.toHaveProperty("code_verifier");
+      expect(body).not.toHaveProperty("code_challenge");
+      expect(JSON.stringify(body)).not.toMatch(/code_verifier|code_challenge|PKCE/i);
       expect(JSON.stringify(body)).not.toBe("{}");
       seq += 1;
       return jsonResponse(200, {
@@ -1627,7 +1639,135 @@ describe("Architect habitat official subscription attach", () => {
     expect(mocks.seen.filter((row) => row.includes("chat.z.ai"))).toEqual([]);
   });
 
-  it("password dump and Architect-typed POST {} issuer are gone; Codex/Grok 404 and GLM authorize fail closed", async () => {
+  it("GLM Continue with Z.ai opens official authorize, intercepts hop or zcode://, holds 300s, and never returns the session", async () => {
+    expect(parseGlmAuthorizationCallback(`${GLM_CALLBACK_URI}?code=hop-code&state=hop-state`)).toEqual({
+      state: "hop-state",
+      code: "hop-code",
+    });
+    expect(
+      parseGlmAuthorizationCallback(`${GLM_CALLBACK_URI}?authCode=alias-code&state=hop-state`),
+    ).toEqual({ state: "hop-state", code: "alias-code" });
+    expect(
+      parseGlmAuthorizationCallback(
+        `${GLM_REDIRECT_URI}&code=hop-code&state=hop-state`,
+      ),
+    ).toEqual({ state: "hop-state", code: "hop-code" });
+    expect(
+      parseGlmAuthorizationCallback(
+        `https://zcode.z.ai/app/oauth/login?redirect=${encodeURIComponent(`${GLM_CALLBACK_URI}?code=nested&state=nested-state`)}`,
+      ),
+    ).toEqual({ state: "nested-state", code: "nested" });
+    expect(parseGlmAuthorizationCallback("https://example.invalid/nope")).toBeUndefined();
+
+    const html = architectHabitatPageHtml();
+    expect(html).toMatch(/window\.open\(started\.verificationUri\)/);
+    expect(html).toMatch(/function parseGlmCallback/);
+    expect(html).not.toMatch(/id="token"|Issued Architect credential|Load seat/);
+    expect(html).not.toMatch(/data-provider="api-codex"|data-provider="api-grok"|data-provider="api-glm"/);
+    expect(html).not.toMatch(/id="subscription-start-url"/);
+
+    const live = await liveHttp("glm-intercept");
+    const mocks = installOfficialVendorMocks();
+    const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
+    const started = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ providerId: "sub-glm", startUrl: "https://architect-typed.example/start" }),
+    });
+    expect(started.status).toBe(201);
+    const pending = (await started.json()) as {
+      authId: string;
+      verificationUri: string;
+      startUrl?: string;
+      apiKey?: string;
+    };
+    expect(pending.startUrl).toBeUndefined();
+    expect(pending.apiKey).toBeUndefined();
+    const authorize = new URL(pending.verificationUri);
+    expect(`${authorize.origin}${authorize.pathname}`).toBe(GLM_AUTHORIZE_URL);
+    expect(authorize.searchParams.get("code_challenge")).toBeNull();
+    const state = authorize.searchParams.get("state") ?? "";
+    expect(state).toMatch(/^[0-9a-f]{64}$/);
+
+    const intercepted = await fetch(`${live.url}/architect/complete-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ authId: pending.authId, code: "glm_intercept_code", state }),
+    });
+    expect(intercepted.status).toBe(201);
+    const bound = (await intercepted.json()) as {
+      status: string;
+      modelId: string;
+      apiKey?: string;
+      access_token?: string;
+    };
+    expect(bound.status).toBe("bound");
+    expect(bound.modelId).toBe("glm-subscription");
+    expect(bound.apiKey).toBeUndefined();
+    expect(bound.access_token).toBeUndefined();
+    expect(JSON.stringify(bound)).not.toMatch(/glm_session_|zai_oauth_/);
+
+    const hop = await liveHttp("glm-hop");
+    installOfficialVendorMocks();
+    const hopAuth = { authorization: `Bearer ${hop.architectToken}`, "content-type": "application/json" };
+    const hopStart = await fetch(`${hop.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: hopAuth,
+      body: JSON.stringify({ providerId: "sub-glm" }),
+    });
+    const hopPending = (await hopStart.json()) as { authId: string; verificationUri: string };
+    const hopState = new URL(hopPending.verificationUri).searchParams.get("state") ?? "";
+    const fieldHop = await fetch(
+      `${hop.url}/architect/glm-callback?code=field-must-not&state=${encodeURIComponent(hopState)}`,
+      { headers: { authorization: `Bearer ${hop.fieldToken}` } },
+    );
+    expect(fieldHop.status).toBe(403);
+    const received = await fetch(
+      `${hop.url}/architect/glm-callback?code=glm_hop_code&state=${encodeURIComponent(hopState)}`,
+      { headers: { accept: "application/json" } },
+    );
+    expect(received.status).toBe(200);
+    const receivedBody = (await received.json()) as { status: string; apiKey?: string; access_token?: string };
+    expect(receivedBody.status).toBe("received");
+    expect(receivedBody.apiKey).toBeUndefined();
+    expect(receivedBody.access_token).toBeUndefined();
+    expect(JSON.stringify(receivedBody)).not.toContain(hop.architectToken);
+    const hopDone = await fetch(`${hop.url}/architect/complete-subscription-auth`, {
+      method: "POST",
+      headers: hopAuth,
+      body: JSON.stringify({ authId: hopPending.authId }),
+    });
+    expect(hopDone.status).toBe(201);
+    expect(((await hopDone.json()) as { modelId: string }).modelId).toBe("glm-subscription");
+
+    const expired = await liveHttp("glm-hold-ttl");
+    installOfficialVendorMocks();
+    const expiredAuth = {
+      authorization: `Bearer ${expired.architectToken}`,
+      "content-type": "application/json",
+    };
+    const expiredStart = await fetch(`${expired.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: expiredAuth,
+      body: JSON.stringify({ providerId: "sub-glm" }),
+    });
+    const expiredPending = (await expiredStart.json()) as { authId: string; verificationUri: string };
+    const expiredState = new URL(expiredPending.verificationUri).searchParams.get("state") ?? "";
+    const origin = Date.now();
+    setGlmHoldClock(() => origin + GLM_HOLD_TTL_MS + 1);
+    receiveGlmAuthorizationCode(expiredState, "too-late");
+    const expiredDone = await fetch(`${expired.url}/architect/complete-subscription-auth`, {
+      method: "POST",
+      headers: expiredAuth,
+      body: JSON.stringify({ authId: expiredPending.authId, code: "too-late", state: expiredState }),
+    });
+    expect(expiredDone.status).toBe(400);
+    expect(((await expiredDone.json()) as { error: string }).error).toBe("SUBSCRIPTION_AUTH_REQUIRED");
+    expect(mocks.seen.filter((row) => row.includes(GLM_TOKEN_URL)).length).toBeGreaterThan(0);
+    expect(GLM_HOLD_TTL_MS).toBe(300_000);
+  });
+
+  it("password dump and Architect-typed POST {} issuer are gone; Codex/Grok 404 stay login-only", async () => {
     const html = architectHabitatPageHtml();
     expect(html).not.toMatch(/subscription auth is required/);
     expect(html).not.toMatch(/id="subscription-auth"/);
@@ -1752,6 +1892,7 @@ describe("Architect habitat official subscription attach", () => {
     expect(vendorSrc).toContain(GLM_CLIENT_ID);
     expect(vendorSrc).toContain(GLM_AUTHORIZE_URL);
     expect(vendorSrc).toContain(GLM_TOKEN_URL);
+    expect(vendorSrc).toMatch(/GLM_HOLD_TTL_MS = 300_000/);
     expect(vendorSrc).toMatch(/response_type:\s*"code"/);
     expect(vendorSrc).toMatch(/kind:\s*"glm-auth-code"/);
     expect(vendorSrc).toMatch(/SUBSCRIPTION_AUTH_NOT_ENABLED/);

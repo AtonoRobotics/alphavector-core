@@ -288,7 +288,7 @@ export function architectHabitatPageHtml(): string {
       ),
     )};
     var SUBSCRIPTION_MODELS = ["codex-subscription", "grok-subscription", "glm-subscription"];
-    var state = { step: "session", panel: "wizard", mode: "", provider: "", connector: "", models: [], connectors: [], subscriptionAuthId: "", connectorAuthId: "" };
+    var state = { step: "session", panel: "wizard", mode: "", provider: "", connector: "", models: [], connectors: [], subscriptionAuthId: "", connectorAuthId: "", glmState: "", glmCode: "", glmPopup: null };
     var subscriptionPoll = null;
     var subscriptionCompleting = false;
     var connectorPoll = null;
@@ -439,6 +439,41 @@ export function architectHabitatPageHtml(): string {
         subscriptionPoll = null;
       }
     }
+    function parseGlmCallback(raw) {
+      if (!raw) return null;
+      function fromSearch(search) {
+        var q = search.charAt(0) === "?" || search.charAt(0) === "#" ? search.slice(1) : search;
+        var params = new URLSearchParams(q);
+        var st = (params.get("state") || "").trim();
+        var code = (params.get("code") || params.get("authCode") || "").trim();
+        if (st && code) return { state: st, code: code };
+        var redirect = params.get("redirect");
+        if (redirect) return parseGlmCallback(redirect);
+        return null;
+      }
+      try {
+        var url = new URL(raw);
+        return fromSearch(url.search) || (url.hash ? fromSearch(url.hash) : null);
+      } catch (err) {
+        return fromSearch(raw);
+      }
+    }
+    function takeGlmIntercept(parsed) {
+      if (!parsed || !state.glmState || parsed.state !== state.glmState) return false;
+      state.glmCode = parsed.code;
+      return true;
+    }
+    function interceptGlmFromLocation() {
+      return takeGlmIntercept(parseGlmCallback(String(window.location && window.location.href || "")));
+    }
+    function interceptGlmFromPopup() {
+      if (!state.glmPopup || state.glmPopup.closed) return false;
+      try {
+        return takeGlmIntercept(parseGlmCallback(String(state.glmPopup.location.href || "")));
+      } catch (err) {
+        return false;
+      }
+    }
     async function wizardStartSubscription() {
       var provider = selectedProvider();
       if (!provider) throw new Error("Choose a provider");
@@ -459,8 +494,20 @@ export function architectHabitatPageHtml(): string {
         "open: " + started.verificationUri;
       document.getElementById("subscription-auth-progress").hidden = false;
       status("sign-in started; complete it at the official vendor URL");
+      if (provider.getAttribute("data-provider") === "sub-glm") {
+        try {
+          state.glmState = new URL(started.verificationUri).searchParams.get("state") || "";
+        } catch (err) {
+          state.glmState = "";
+        }
+        state.glmCode = "";
+        interceptGlmFromLocation();
+        state.glmPopup = window.open(started.verificationUri);
+      }
       stopSubscriptionPoll();
       subscriptionPoll = setInterval(function () {
+        interceptGlmFromLocation();
+        interceptGlmFromPopup();
         wizardCompleteSubscription().catch(function (err) { status(err.message); });
       }, 2000);
     }
@@ -468,7 +515,13 @@ export function architectHabitatPageHtml(): string {
       if (!state.subscriptionAuthId || subscriptionCompleting) return;
       subscriptionCompleting = true;
       try {
+        interceptGlmFromLocation();
+        interceptGlmFromPopup();
         var body = { authId: state.subscriptionAuthId };
+        if (state.glmCode && state.glmState) {
+          body.code = state.glmCode;
+          body.state = state.glmState;
+        }
         var done = await call("/architect/complete-subscription-auth", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -481,6 +534,10 @@ export function architectHabitatPageHtml(): string {
         stopSubscriptionPoll();
         state.models.push(done.modelId);
         state.subscriptionAuthId = "";
+        state.glmState = "";
+        state.glmCode = "";
+        if (state.glmPopup && !state.glmPopup.closed) state.glmPopup.close();
+        state.glmPopup = null;
         document.getElementById("subscription-auth-progress").hidden = true;
         status("subscription attached");
       } finally {
@@ -767,6 +824,8 @@ export function architectHabitatPageHtml(): string {
     document.getElementById("admin-write-aggregator").addEventListener("click", function () {
       adminWriteAggregator().catch(function (err) { status(err.message); });
     });
+    window.addEventListener("hashchange", function () { interceptGlmFromLocation(); });
+    interceptGlmFromLocation();
     showStep("session");
   </script>
 </body>

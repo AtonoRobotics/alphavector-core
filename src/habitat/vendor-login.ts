@@ -80,8 +80,10 @@ export const GROK_SCOPES = [
 
 /**
  * First-party ZCode desktop Z.ai client. Same class as grok-build `CLIENT_ID`.
- * Source: official ZCode 3.7.7 `out/host/index.js` `$G` / `createZaiProviderRuntimeConfig`
- * / `ZaiProviderAdapter.buildAuthorizeUrl`.
+ * Source: official ZCode 3.7.7 AppImage (SHA matched latest.yml)
+ * `out/host/index.js` / `chunk-L5EAZUIY.js` `createZaiProviderRuntimeConfig` /
+ * `resolveZaiOAuthClientId` / `ZaiProviderAdapter` / `ZaiBusinessTokenResolver`.
+ * No PKCE. Hold is 300s. Does not copy a host ZCode credentials file.
  */
 export const GLM_CLIENT_ID = "client_P8X5CMWmlaRO9gyO-KSqtg";
 export const GLM_AUTHORIZE_URL = "https://chat.z.ai/api/oauth/authorize";
@@ -96,22 +98,72 @@ export const GLM_CALLBACK_URI = "zcode://oauth/callback";
 export const GLM_REDIRECT_URI = `https://zcode.z.ai/app/oauth/login?redirect=${GLM_CALLBACK_URI}`;
 /** Official Z.ai business-login exchange after auth-code token (`ZaiBusinessTokenResolver`). */
 export const GLM_ACCOUNT_LOGIN_URL = "https://api.z.ai/api/auth/z/login";
+/** In-flight Continue with Z.ai hold. Unguessable state is valid for this long. */
+export const GLM_HOLD_TTL_MS = 300_000;
 
-const glmAuthCodes = new Map<string, string>();
+const glmAuthCodes = new Map<string, { code: string; expiresAtMs: number }>();
+let glmHoldNow = () => Date.now();
 
-/** Habitat / tests receive the official callback `code`/`authCode` for a held state. */
+export function glmHoldNowMs(): number {
+  return glmHoldNow();
+}
+
+export function setGlmHoldClock(now: () => number): void {
+  glmHoldNow = now;
+}
+
+export function resetGlmAuthorizationHolds(): void {
+  glmAuthCodes.clear();
+  glmHoldNow = () => Date.now();
+}
+
+/** Habitat / tests / hop intercept receive official callback `code`/`authCode` for a held state. */
 export function receiveGlmAuthorizationCode(state: string, code: string): void {
   const held = state.trim();
   const issued = code.trim();
   if (!held || !issued) return;
-  glmAuthCodes.set(held, issued);
+  glmAuthCodes.set(held, { code: issued, expiresAtMs: glmHoldNow() + GLM_HOLD_TTL_MS });
+}
+
+/**
+ * Parse official hop or `zcode://oauth/callback` for matching state+code.
+ * Accepts `code` or `authCode`. Does not invent PKCE.
+ */
+export function parseGlmAuthorizationCallback(raw: string): { state: string; code: string } | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const fromParams = (params: URLSearchParams): { state: string; code: string } | undefined => {
+    const state = params.get("state")?.trim() ?? "";
+    const code = (params.get("code") ?? params.get("authCode") ?? "").trim();
+    if (state && code) return { state, code };
+    const redirect = params.get("redirect");
+    if (redirect) return parseGlmAuthorizationCallback(redirect);
+    return undefined;
+  };
+  try {
+    const url = new URL(trimmed);
+    const direct = fromParams(url.searchParams);
+    if (direct) return direct;
+    if (url.hash.length > 1) {
+      const hashed = fromParams(new URLSearchParams(url.hash.replace(/^#/, "")));
+      if (hashed) return hashed;
+    }
+  } catch {
+    const query = trimmed.replace(/^[?#]/, "");
+    if (query.includes("=")) return fromParams(new URLSearchParams(query));
+  }
+  return undefined;
 }
 
 function takeGlmAuthorizationCode(state: string): string | undefined {
-  const code = glmAuthCodes.get(state);
-  if (!code) return undefined;
+  const held = glmAuthCodes.get(state);
+  if (!held) return undefined;
+  if (glmHoldNow() > held.expiresAtMs) {
+    glmAuthCodes.delete(state);
+    return undefined;
+  }
   glmAuthCodes.delete(state);
-  return code;
+  return held.code;
 }
 
 export function isNamedSubscriptionId(value: string): value is NamedSubscriptionId {
