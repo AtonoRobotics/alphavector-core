@@ -122,6 +122,17 @@ export interface ArchitectSetAdapterCredentialsBody {
   apiKey: string;
 }
 
+/** Architect habitat wizard → architectStartSubscriptionAuth. */
+export interface ArchitectStartSubscriptionAuthBody {
+  providerId: string;
+  startUrl?: string;
+}
+
+/** Architect habitat wizard → architectCompleteSubscriptionAuth. */
+export interface ArchitectCompleteSubscriptionAuthBody {
+  authId: string;
+}
+
 /** Architect habitat wizard → architectBindConnector. Same JSON as CLI. */
 export interface ArchitectBindConnectorBody {
   connectorId: string;

@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -421,6 +423,8 @@ describe("HK-082 Architect sits in the habitat", () => {
     for (const route of [
       "/architect/bind-adapter",
       "/architect/set-adapter-credentials",
+      "/architect/start-subscription-auth",
+      "/architect/complete-subscription-auth",
       "/architect/bind-connector",
       "/architect/set-connector-credentials",
     ]) {
@@ -635,6 +639,13 @@ describe("HK-082 Architect sits in the habitat", () => {
     });
     expect(fieldWrite.status).toBe(403);
     expect(((await fieldWrite.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
+    const fieldSub = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${live.fieldToken}`, "content-type": "application/json" },
+      body: JSON.stringify({ providerId: "sub-codex", startUrl: "https://architect-typed.example/start" }),
+    });
+    expect(fieldSub.status).toBe(403);
+    expect(((await fieldSub.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
 
     const writeMissing = await fetch(`${live.url}/architect/bind-adapter`, {
       method: "POST",
@@ -739,8 +750,19 @@ describe("Architect habitat bind wizard", () => {
     expect(html).toMatch(/async function adminEditConnector\([\s\S]*\/architect\/edit-connector-bind/);
     expect(html).toMatch(/async function wizardBindAdapter\([\s\S]*\/architect\/bind-adapter/);
     expect(html).toMatch(/async function wizardBindConnector\([\s\S]*\/architect\/bind-connector/);
+    expect(html).toMatch(/async function wizardStartSubscription\([\s\S]*\/architect\/start-subscription-auth/);
+    expect(html).toMatch(/async function wizardCompleteSubscription\([\s\S]*\/architect\/complete-subscription-auth/);
+    expect(html).toMatch(/id="subscription-guided-auth"/);
+    expect(html).toMatch(/id="subscription-sign-in"/);
+    expect(html).toMatch(/id="subscription-complete"/);
+    expect(html).toMatch(/>Sign in</);
+    expect(html).not.toMatch(/id="subscription-auth"/);
+    expect(html).not.toMatch(/label for="subscription-auth"/);
+    expect(html).not.toMatch(/subscription auth is required/);
+    expect(html).not.toMatch(/type="password"[^>]*id="subscription-auth"|id="subscription-auth"[^>]*type="password"/);
     expect(html).not.toMatch(/async function adminEditAdapter\([\s\S]*\/architect\/bind-adapter/);
     expect(html).not.toMatch(/async function adminEditConnector\([\s\S]*\/architect\/bind-connector/);
+    expect(adminMarkup).not.toMatch(/start-subscription-auth|complete-subscription-auth|subscription-sign-in/);
     expect(isAdminAddPath("admin", "add-model")).toBe(false);
     expect(isAdminAddPath("admin", "add-connector")).toBe(false);
     expect(isAdminAddPath("wizard", "add-model")).toBe(true);
@@ -763,7 +785,8 @@ describe("Architect habitat bind wizard", () => {
     );
     const sub = visibleAttachFields("subscription", "sub-codex");
     expect(sub).toEqual({
-      subscriptionAuth: "required",
+      subscriptionAuth: "guided",
+      startUrl: "required",
       apiKey: "hidden",
       vendorBaseUrl: "hidden",
       modelId: "hidden",
@@ -771,6 +794,7 @@ describe("Architect habitat bind wizard", () => {
     const api = visibleAttachFields("api", "api-claude");
     expect(api).toEqual({
       subscriptionAuth: "hidden",
+      startUrl: "hidden",
       apiKey: "required",
       vendorBaseUrl: "optional",
       modelId: "required",
@@ -778,6 +802,7 @@ describe("Architect habitat bind wizard", () => {
     const generic = visibleAttachFields("api", "api-generic-openai");
     expect(generic).toEqual({
       subscriptionAuth: "hidden",
+      startUrl: "hidden",
       apiKey: "optional",
       vendorBaseUrl: "required",
       modelId: "required",
@@ -905,6 +930,8 @@ describe("Architect habitat bind wizard", () => {
       "/architect/set-adapter-aggregator",
       "/architect/edit-adapter-bind",
       "/architect/edit-connector-bind",
+      "/architect/start-subscription-auth",
+      "/architect/complete-subscription-auth",
     ]) {
       const denied = await fetch(`${live.url}${route}`, {
         method: "POST",
@@ -959,5 +986,329 @@ describe("Architect habitat bind wizard", () => {
     });
     expect(inProcess.rules).toBe("capability match entered by Architect");
     expect(inProcess.boundBy).toBe("architect");
+
+    const addSubscriptionViaAdmin = await fetch(`${live.url}/architect/edit-adapter-bind`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "codex-subscription" }),
+    });
+    expect(addSubscriptionViaAdmin.status).toBe(400);
+    expect(((await addSubscriptionViaAdmin.json()) as { error: string }).error).toBe("ADAPTER_NOT_BOUND");
+  });
+});
+
+const SUBSCRIPTION_CHOICES = [
+  { providerId: "sub-codex", modelId: "codex-subscription", label: "Codex Subscription" },
+  { providerId: "sub-grok", modelId: "grok-subscription", label: "Grok Subscription" },
+  { providerId: "sub-glm", modelId: "glm-subscription", label: "GLM subscription" },
+] as const;
+
+function startSubscriptionIssuer() {
+  const devices = new Map<
+    string,
+    { userCode: string; approved: boolean; token: string }
+  >();
+  let seq = 0;
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://issuer.example");
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => {
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    });
+    req.on("end", () => {
+      let body: Record<string, unknown> = {};
+      const raw = Buffer.concat(chunks).toString("utf8").trim();
+      if (raw) {
+        try {
+          body = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          body = {};
+        }
+      }
+      const json = (status: number, payload: unknown) => {
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(payload));
+      };
+      if (req.method === "POST" && url.pathname === "/device/start") {
+        seq += 1;
+        const deviceCode = `device_${seq}`;
+        const userCode = `USER-${seq}`;
+        const token = `session_${seq}`;
+        devices.set(deviceCode, { userCode, approved: false, token });
+        const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+        json(200, {
+          device_code: deviceCode,
+          user_code: userCode,
+          verification_uri: `${origin}/device/verify`,
+          token_uri: `${origin}/device/token`,
+          interval: 1,
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/device/approve") {
+        const userCode = String(body.user_code ?? "");
+        for (const row of devices.values()) {
+          if (row.userCode === userCode) {
+            row.approved = true;
+            json(200, { ok: true });
+            return;
+          }
+        }
+        json(404, { error: "unknown_user_code" });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/device/token") {
+        const deviceCode = String(body.device_code ?? "");
+        const row = devices.get(deviceCode);
+        if (!row) {
+          json(400, { error: "expired_token" });
+          return;
+        }
+        if (!row.approved) {
+          json(400, { error: "authorization_pending" });
+          return;
+        }
+        json(200, { access_token: row.token, token_type: "bearer" });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/device/verify") {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("sign in");
+        return;
+      }
+      json(404, { error: "not_found" });
+    });
+  });
+  return {
+    async listen() {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
+      const port = (server.address() as AddressInfo).port;
+      return {
+        startUrl: `http://127.0.0.1:${port}/device/start`,
+        origin: `http://127.0.0.1:${port}`,
+      };
+    },
+    async approve(userCode: string) {
+      const port = (server.address() as AddressInfo).port;
+      const res = await fetch(`http://127.0.0.1:${port}/device/approve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ user_code: userCode }),
+      });
+      if (!res.ok) throw new Error("issuer approve failed");
+    },
+    async close() {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    },
+  };
+}
+
+describe("Architect habitat guided subscription attach", () => {
+  it("choosing a subscription starts guided auth and completing it binds through the existing writers", async () => {
+    const live = await liveHttp("sub-attach");
+    const issuer = startSubscriptionIssuer();
+    const { startUrl, origin } = await issuer.listen();
+    const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
+
+    try {
+      for (const choice of SUBSCRIPTION_CHOICES) {
+        const started = await fetch(`${live.url}/architect/start-subscription-auth`, {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ providerId: choice.providerId, startUrl }),
+        });
+        expect(started.status).toBe(201);
+        const pending = (await started.json()) as {
+          authId: string;
+          providerId: string;
+          modelId: string;
+          userCode: string;
+          verificationUri: string;
+          status: string;
+          access_token?: string;
+          apiKey?: string;
+          device_code?: string;
+        };
+        expect(pending.providerId).toBe(choice.providerId);
+        expect(pending.modelId).toBe(choice.modelId);
+        expect(pending.status).toBe("pending");
+        expect(pending.userCode).toMatch(/^USER-/);
+        expect(pending.verificationUri).toBe(`${origin}/device/verify`);
+        expect(pending.access_token).toBeUndefined();
+        expect(pending.apiKey).toBeUndefined();
+        expect(pending.device_code).toBeUndefined();
+        expect(JSON.stringify(pending)).not.toMatch(/session_|device_/);
+
+        const waiting = await fetch(`${live.url}/architect/complete-subscription-auth`, {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ authId: pending.authId }),
+        });
+        expect(waiting.status).toBe(200);
+        expect(((await waiting.json()) as { status: string }).status).toBe("authorization_pending");
+        expect(
+          loadAdapterBind(computerRoot(live.computerBaseDir, live.tenantId).adapterBindFile)?.modelId,
+        ).not.toBe(choice.modelId);
+
+        await issuer.approve(pending.userCode);
+        const done = await fetch(`${live.url}/architect/complete-subscription-auth`, {
+          method: "POST",
+          headers: auth,
+          body: JSON.stringify({ authId: pending.authId }),
+        });
+        expect(done.status).toBe(201);
+        const bound = (await done.json()) as {
+          status: string;
+          modelId: string;
+          boundBy: string;
+          apiKey?: string;
+          access_token?: string;
+        };
+        expect(bound.status).toBe("bound");
+        expect(bound.modelId).toBe(choice.modelId);
+        expect(bound.boundBy).toBe("architect");
+        expect(bound.apiKey).toBeUndefined();
+        expect(bound.access_token).toBeUndefined();
+      }
+
+      const paths = computerRoot(live.computerBaseDir, live.tenantId);
+      const store = loadAdapterBindStore(paths.adapterBindFile);
+      expect(store.models.map((row) => row.modelId).sort()).toEqual(
+        ["codex-subscription", "glm-subscription", "grok-subscription"].sort(),
+      );
+      expect(store.models.every((row) => row.boundBy === "architect")).toBe(true);
+      expect(store.models.every((row) => !("apiKey" in row))).toBe(true);
+      const creds = loadAdapterCredentials(paths.adapterCredentialsFile)!;
+      expect(creds.writtenBy).toBe("architect");
+      expect(creds.apiKey.startsWith("session_")).toBe(true);
+      expect(statSync(paths.adapterBindFile).mode & 0o777).toBe(0o600);
+      expect(statSync(paths.adapterCredentialsFile).mode & 0o777).toBe(0o600);
+      expect(existsSync(path.join(paths.disk, "adapter-bind.json"))).toBe(false);
+      expect(existsSync(path.join(paths.disk, "adapter-credentials.json"))).toBe(false);
+    } finally {
+      await issuer.close();
+    }
+  });
+
+  it("password-only subscription auth is gone; missing start URL does not invent a vendor host", async () => {
+    const html = architectHabitatPageHtml();
+    expect(html).not.toMatch(/subscription auth is required/);
+    expect(html).not.toMatch(/id="subscription-auth"/);
+    expect(html).toMatch(/wizardStartSubscription/);
+    expect(html).toMatch(/Sign in to attach this subscription/);
+    expect(html).toMatch(/Subscription attach starts a guided sign-in; a token dump is not the product path/);
+
+    const live = await liveHttp("sub-no-host");
+    const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
+    const missing = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ providerId: "sub-codex" }),
+    });
+    expect(missing.status).toBe(400);
+    const missingBody = (await missing.json()) as { error: string; message: string };
+    expect(missingBody.error).toBe("SUBSCRIPTION_START_URL_REQUIRED");
+    expect(missingBody.message).toMatch(/does not invent a vendor host/);
+    expect(JSON.stringify(missingBody)).not.toMatch(
+      /api\.openai\.com|auth\.openai\.com|x\.ai|z\.ai|localhost|127\.0\.0\.1/,
+    );
+
+    const apiProvider = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        providerId: "api-generic-openai",
+        startUrl: "https://architect-typed.example/start",
+      }),
+    });
+    expect(apiProvider.status).toBe(400);
+    expect(((await apiProvider.json()) as { error: string }).error).toBe("SUBSCRIPTION_PROVIDER_REQUIRED");
+
+    const unauthenticated = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerId: "sub-codex", startUrl: "https://architect-typed.example/start" }),
+    });
+    expect(unauthenticated.status).toBe(401);
+
+    const files = [
+      "src/http/architect-habitat-page.ts",
+      "src/http/architect-habitat-wizard.ts",
+      "src/http/field-server.ts",
+      "src/auth/architect-subscription-auth.ts",
+      "src/habitat/subscription-auth.ts",
+    ];
+    for (const rel of files) {
+      const src = readFileSync(path.join(process.cwd(), rel), "utf8");
+      expect(src).not.toMatch(/api\.openai\.com|auth\.openai\.com|chatgpt\.com/);
+      expect(src).not.toMatch(/api\.x\.ai|x\.ai\/|chat\.z\.ai|api\.z\.ai|open\.bigmodel\.cn/);
+      expect(src).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY|sk-/);
+      expect(src).not.toMatch(/startUrl\s*=\s*["'`]https?:\/\/(localhost|127\.0\.0\.1|api\.)/);
+    }
+  });
+
+  it("API and Generic OpenAI paths stay key/URL bind; start URL on an Architect-owned bind can start auth", async () => {
+    const live = await liveHttp("sub-reuse");
+    const issuer = startSubscriptionIssuer();
+    const { startUrl } = await issuer.listen();
+    const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
+
+    try {
+      const apiBind = await fetch(`${live.url}/architect/bind-adapter`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({
+          modelId: "architect-typed-model",
+          vendorBaseUrl: "https://architect-typed.example/vllm",
+        }),
+      });
+      expect(apiBind.status).toBe(201);
+      const apiKey = await fetch(`${live.url}/architect/set-adapter-credentials`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ apiKey: "av-api-still-works" }),
+      });
+      expect(apiKey.status).toBe(201);
+
+      const seed = await fetch(`${live.url}/architect/bind-adapter`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ modelId: "grok-subscription", vendorBaseUrl: startUrl }),
+      });
+      expect(seed.status).toBe(201);
+      const started = await fetch(`${live.url}/architect/start-subscription-auth`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ providerId: "sub-grok" }),
+      });
+      expect(started.status).toBe(201);
+      const pending = (await started.json()) as { authId: string; userCode: string; modelId: string };
+      expect(pending.modelId).toBe("grok-subscription");
+      await issuer.approve(pending.userCode);
+      const done = await fetch(`${live.url}/architect/complete-subscription-auth`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ authId: pending.authId }),
+      });
+      expect(done.status).toBe(201);
+
+      const paths = computerRoot(live.computerBaseDir, live.tenantId);
+      const store = loadAdapterBindStore(paths.adapterBindFile);
+      expect(store.models.map((row) => row.modelId).sort()).toEqual(
+        ["architect-typed-model", "grok-subscription"].sort(),
+      );
+      expect(store.models.find((row) => row.modelId === "architect-typed-model")?.vendorBaseUrl).toBe(
+        "https://architect-typed.example/vllm",
+      );
+      const creds = loadAdapterCredentials(paths.adapterCredentialsFile)!;
+      expect(creds.writtenBy).toBe("architect");
+      expect(creds.apiKey.startsWith("session_")).toBe(true);
+    } finally {
+      await issuer.close();
+    }
   });
 });

@@ -7,6 +7,11 @@ import type { PendingProgressRecord } from "../auth/types.js";
 import { architectBindAdapter, architectEditAdapterBind } from "../auth/architect-adapter-bind.js";
 import { architectWriteAdapterAggregator } from "../auth/architect-adapter-aggregator.js";
 import { architectWriteAdapterCredentials } from "../auth/architect-adapter-credentials.js";
+import {
+  architectCompleteSubscriptionAuth,
+  architectStartSubscriptionAuth,
+  MemorySubscriptionAuthHold,
+} from "../auth/architect-subscription-auth.js";
 import { architectWriteAdapterRouter } from "../auth/architect-adapter-router.js";
 import {
   architectBindConnector,
@@ -43,7 +48,7 @@ const CORS = {
 } as const;
 
 const CONFIG_PATH =
-  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|adapter-router|adapter-aggregator|bind-adapter|set-adapter-credentials|set-adapter-router|set-adapter-aggregator|edit-adapter-bind|edit-connector-bind|bind-connector|set-connector-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message|router|aggregator/i;
+  /model|prompt|temporal|tool|adapter-bind|adapter-credentials|adapter-router|adapter-aggregator|bind-adapter|set-adapter-credentials|set-adapter-router|set-adapter-aggregator|edit-adapter-bind|edit-connector-bind|bind-connector|set-connector-credentials|credential|api-?key|routines?|mail|deadlines?|connectors?|skills?|proposals?|promote|memory|vendor-base-url|base-?url|trust-?anchors?|anchors|machine|hypervisor|images?|computer|desktop|vnc|namespace|networking|brokerage|deploy|architect[_-]?message|router|aggregator|subscription-auth|start-subscription|complete-subscription/i;
 
 type PendingProgress = PendingProgressRecord;
 
@@ -64,6 +69,7 @@ export interface FieldHttpServerOptions {
 export class FieldHttpServer {
   private server?: http.Server;
   private readonly pending = new Map<string, PendingProgress>();
+  private readonly subscriptionHold = new MemorySubscriptionAuthHold();
   private restored = false;
 
   constructor(private readonly opts: FieldHttpServerOptions) {}
@@ -120,6 +126,14 @@ export class FieldHttpServer {
       }
       if (req.method === "POST" && path === "/architect/set-adapter-credentials") {
         await this.routeArchitectSetAdapterCredentials(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/start-subscription-auth") {
+        await this.routeArchitectStartSubscriptionAuth(req, res);
+        return;
+      }
+      if (req.method === "POST" && path === "/architect/complete-subscription-auth") {
+        await this.routeArchitectCompleteSubscriptionAuth(req, res);
         return;
       }
       if (req.method === "POST" && path === "/architect/edit-adapter-bind") {
@@ -658,6 +672,57 @@ export class FieldHttpServer {
       architectToken: token,
     });
     this.json(res, 201, { ok: true, tenantId: written.tenantId, writtenBy: written.writtenBy });
+  }
+
+  /**
+   * Guided subscription sign-in start. Wizard holds the in-flight session.
+   * Complete writes through architectBindAdapter + architectWriteAdapterCredentials.
+   */
+  private async routeArchitectStartSubscriptionAuth(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { providerId?: string; startUrl?: string };
+    const started = await architectStartSubscriptionAuth({
+      tenantId: this.opts.tenantId,
+      providerId: String(body.providerId ?? ""),
+      startUrl: typeof body.startUrl === "string" ? body.startUrl : undefined,
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+      hold: this.subscriptionHold,
+    });
+    this.json(res, 201, started);
+  }
+
+  /**
+   * Poll/complete guided subscription sign-in. Binds through the existing writers.
+   * Never returns the vendor session secret.
+   */
+  private async routeArchitectCompleteSubscriptionAuth(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const token = this.architectBearer(
+      req,
+      res,
+      "A field token cannot bind, see, or edit the adapter or connectors",
+    );
+    if (!token) return;
+    const body = (await readJson(req)) as { authId?: string };
+    const result = await architectCompleteSubscriptionAuth({
+      tenantId: this.opts.tenantId,
+      authId: String(body.authId ?? ""),
+      computerBaseDir: this.architectComputerDir(),
+      architectToken: token,
+      hold: this.subscriptionHold,
+    });
+    this.json(res, result.status === "bound" ? 201 : 200, result);
   }
 
   /**

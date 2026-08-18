@@ -1,5 +1,5 @@
 export type AttachMode = "subscription" | "api";
-export type FieldNeed = "required" | "optional" | "hidden";
+export type FieldNeed = "required" | "optional" | "hidden" | "guided";
 
 export type WizardStepId =
   | "session"
@@ -11,6 +11,7 @@ export type WizardStepId =
 
 export interface ProviderFields {
   subscriptionAuth: FieldNeed;
+  startUrl: FieldNeed;
   apiKey: FieldNeed;
   vendorBaseUrl: FieldNeed;
   modelId: FieldNeed;
@@ -40,57 +41,111 @@ export const HABITAT_PROVIDERS: readonly ProviderChoice[] = [
     label: "Codex Subscription",
     mode: "subscription",
     bindModelId: "codex-subscription",
-    fields: { subscriptionAuth: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
+    fields: {
+      subscriptionAuth: "guided",
+      startUrl: "required",
+      apiKey: "hidden",
+      vendorBaseUrl: "hidden",
+      modelId: "hidden",
+    },
   },
   {
     id: "sub-grok",
     label: "Grok Subscription",
     mode: "subscription",
     bindModelId: "grok-subscription",
-    fields: { subscriptionAuth: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
+    fields: {
+      subscriptionAuth: "guided",
+      startUrl: "required",
+      apiKey: "hidden",
+      vendorBaseUrl: "hidden",
+      modelId: "hidden",
+    },
   },
   {
     id: "sub-glm",
     label: "GLM subscription",
     mode: "subscription",
     bindModelId: "glm-subscription",
-    fields: { subscriptionAuth: "required", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" },
+    fields: {
+      subscriptionAuth: "guided",
+      startUrl: "required",
+      apiKey: "hidden",
+      vendorBaseUrl: "hidden",
+      modelId: "hidden",
+    },
   },
   {
     id: "api-claude",
     label: "Claude",
     mode: "api",
-    fields: { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+    fields: {
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "optional",
+      modelId: "required",
+    },
   },
   {
     id: "api-codex",
     label: "Codex",
     mode: "api",
-    fields: { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+    fields: {
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "optional",
+      modelId: "required",
+    },
   },
   {
     id: "api-grok",
     label: "Grok",
     mode: "api",
-    fields: { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+    fields: {
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "optional",
+      modelId: "required",
+    },
   },
   {
     id: "api-kimi",
     label: "Kimi",
     mode: "api",
-    fields: { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+    fields: {
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "optional",
+      modelId: "required",
+    },
   },
   {
     id: "api-glm",
     label: "GLM",
     mode: "api",
-    fields: { subscriptionAuth: "hidden", apiKey: "required", vendorBaseUrl: "optional", modelId: "required" },
+    fields: {
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "optional",
+      modelId: "required",
+    },
   },
   {
     id: "api-generic-openai",
     label: "Generic OpenAI (vLLM / Ollama)",
     mode: "api",
-    fields: { subscriptionAuth: "hidden", apiKey: "optional", vendorBaseUrl: "required", modelId: "required" },
+    fields: {
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "optional",
+      vendorBaseUrl: "required",
+      modelId: "required",
+    },
   },
 ];
 
@@ -105,7 +160,13 @@ export function findProvider(id: string): ProviderChoice | undefined {
 export function visibleAttachFields(mode: AttachMode, providerId: string): ProviderFields {
   const provider = findProvider(providerId);
   if (!provider || provider.mode !== mode) {
-    return { subscriptionAuth: "hidden", apiKey: "hidden", vendorBaseUrl: "hidden", modelId: "hidden" };
+    return {
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "hidden",
+      vendorBaseUrl: "hidden",
+      modelId: "hidden",
+    };
   }
   return provider.fields;
 }
