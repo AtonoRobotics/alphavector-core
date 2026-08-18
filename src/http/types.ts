@@ -125,11 +125,22 @@ export interface ArchitectSetAdapterCredentialsBody {
 /** Architect habitat wizard → architectStartSubscriptionAuth. */
 export interface ArchitectStartSubscriptionAuthBody {
   providerId: string;
-  startUrl?: string;
 }
 
 /** Architect habitat wizard → architectCompleteSubscriptionAuth. */
 export interface ArchitectCompleteSubscriptionAuthBody {
+  authId: string;
+}
+
+/** Architect habitat wizard → architectStartConnectorAuth. */
+export interface ArchitectStartConnectorAuthBody {
+  connectorId: string;
+  /** Habitat GitHub OAuth App client id. Not the GitHub CLI client. */
+  clientId?: string;
+}
+
+/** Architect habitat wizard → architectCompleteConnectorAuth. */
+export interface ArchitectCompleteConnectorAuthBody {
   authId: string;
 }
 

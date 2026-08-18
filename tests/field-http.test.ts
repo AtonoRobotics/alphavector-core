@@ -389,6 +389,8 @@ describe("field HTTP surface against pinned alphavector-re", () => {
       "/field/bind-adapter",
       "/field/set-adapter-credentials",
       "/field/start-subscription-auth",
+      "/field/start-connector-auth",
+      "/field/complete-connector-auth",
       "/field/complete-subscription-auth",
       "/field/subscription-auth",
       "/field/edit-adapter-bind",

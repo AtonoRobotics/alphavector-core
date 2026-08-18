@@ -1,8 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,13 +15,44 @@ import { loadAdapterAggregator } from "../src/habitat/adapter-aggregator.js";
 import { loadAdapterBind, loadAdapterBindStore } from "../src/habitat/adapter-bind.js";
 import { loadAdapterCredentials } from "../src/habitat/adapter-credentials.js";
 import { loadAdapterRouter } from "../src/habitat/adapter-router.js";
+import {
+  GITHUB_DEVICE_GRANT,
+  GITHUB_DEVICE_URL,
+  GITHUB_TOKEN_URL,
+} from "../src/habitat/connector-auth.js";
 import { loadConnectorBindStore } from "../src/habitat/connector-bind.js";
 import { loadConnectorCredentialsStore } from "../src/habitat/connector-credentials.js";
+import { resetVendorFetch, setVendorFetch } from "../src/habitat/vendor-fetch.js";
+import {
+  CODEX_CLIENT_ID,
+  CODEX_DEVICE_REDIRECT_URI,
+  CODEX_ISSUER,
+  CODEX_OAUTH_TOKEN_PATH,
+  CODEX_TOKEN_POLL_PATH,
+  CODEX_USERCODE_PATH,
+  CODEX_VERIFICATION_PATH,
+  CODEX_VERIFICATION_URI,
+  GLM_ACCOUNT_LOGIN_URL,
+  GROK_CLIENT_ID,
+  GROK_DEVICE_GRANT,
+  GROK_DEVICE_PATH,
+  GROK_ISSUER,
+  GROK_REFERRER,
+  GROK_SCOPES,
+  GROK_TOKEN_PATH,
+} from "../src/habitat/vendor-login.js";
 import { architectHabitatPageHtml } from "../src/http/architect-habitat-page.js";
 import {
+  GLM_CODING_PLAN_BASE,
+  GLM_OFFICIAL_KEY_URL,
+  GLM_PAYG_API_BASE,
+  GROK_OFFICIAL_API_BASE,
+  GROK_OFFICIAL_CONSOLE_URL,
+  HABITAT_CONNECTORS,
   HABITAT_PROVIDERS,
   isAdminAddPath,
   modelIdForBind,
+  officialBaseUrlForBind,
   visibleAttachFields,
 } from "../src/http/architect-habitat-wizard.js";
 import { reapHeldCoders } from "../src/habitat/index.js";
@@ -41,6 +70,7 @@ const RE_PIN = "5091328a2a5d4a9429ec65fef6da5683ede1cac9";
 const servers: FieldHttpServer[] = [];
 
 afterEach(async () => {
+  resetVendorFetch();
   reapHeldCoders();
   while (servers.length) {
     await servers.pop()?.close();
@@ -425,6 +455,8 @@ describe("HK-082 Architect sits in the habitat", () => {
       "/architect/set-adapter-credentials",
       "/architect/start-subscription-auth",
       "/architect/complete-subscription-auth",
+      "/architect/start-connector-auth",
+      "/architect/complete-connector-auth",
       "/architect/bind-connector",
       "/architect/set-connector-credentials",
     ]) {
@@ -642,7 +674,7 @@ describe("HK-082 Architect sits in the habitat", () => {
     const fieldSub = await fetch(`${live.url}/architect/start-subscription-auth`, {
       method: "POST",
       headers: { authorization: `Bearer ${live.fieldToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ providerId: "sub-codex", startUrl: "https://architect-typed.example/start" }),
+      body: JSON.stringify({ providerId: "sub-codex" }),
     });
     expect(fieldSub.status).toBe(403);
     expect(((await fieldSub.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
@@ -730,7 +762,9 @@ describe("Architect habitat bind wizard", () => {
     expect(html).toMatch(/\/architect\/edit-connector-bind/);
     expect(html).toMatch(/Codex Subscription/);
     expect(html).toMatch(/Grok Subscription/);
-    expect(html).toMatch(/GLM subscription/);
+    expect(html).toMatch(/GLM Subscription/);
+    expect(html).toMatch(/Continue with Z\.ai/);
+    expect(html).toMatch(/SuperGrok session/);
     expect(html).toMatch(/Generic OpenAI \(vLLM \/ Ollama\)/);
     expect(html).toMatch(/>Claude</);
     expect(html).toMatch(/>Codex</);
@@ -752,17 +786,38 @@ describe("Architect habitat bind wizard", () => {
     expect(html).toMatch(/async function wizardBindConnector\([\s\S]*\/architect\/bind-connector/);
     expect(html).toMatch(/async function wizardStartSubscription\([\s\S]*\/architect\/start-subscription-auth/);
     expect(html).toMatch(/async function wizardCompleteSubscription\([\s\S]*\/architect\/complete-subscription-auth/);
+    expect(html).toMatch(/async function wizardStartConnector\([\s\S]*\/architect\/start-connector-auth/);
+    expect(html).toMatch(/async function wizardCompleteConnector\([\s\S]*\/architect\/complete-connector-auth/);
     expect(html).toMatch(/id="subscription-guided-auth"/);
     expect(html).toMatch(/id="subscription-sign-in"/);
     expect(html).toMatch(/id="subscription-complete"/);
+    expect(html).toMatch(/id="connector-guided-auth"/);
+    expect(html).toMatch(/id="connector-sign-in"/);
+    expect(html).toMatch(/id="connector-complete"/);
+    expect(html).toMatch(/>GitHub</);
+    expect(html).toMatch(/Generic \/ private MCP/);
     expect(html).toMatch(/>Sign in</);
+    expect(html).toMatch(/usage-billed/);
+    expect(html).toMatch(GROK_OFFICIAL_CONSOLE_URL);
+    expect(html).toMatch(GLM_OFFICIAL_KEY_URL);
+    expect(html).toMatch(GLM_CODING_PLAN_BASE);
+    expect(html).toMatch(GLM_PAYG_API_BASE);
+    expect(html).toMatch(/PAYG/);
+    expect(html).toMatch(/API key \(usage-billed\)\. SuperGrok session is the Grok Subscription choice/);
+    expect(html).toMatch(/API key \(usage-billed\)\. Coding Plan vs PAYG/);
+    expect(html).toMatch(/GitHub OAuth App client id/);
+    expect(html).not.toMatch(/client_P8X5CMWmla|178c6fc778ccc68e1d6a|chat\.z\.ai|oauth\/cli\/init/);
+    expect(html).not.toMatch(/id="subscription-start-url"/);
+    expect(html).not.toMatch(/label for="subscription-start-url"/);
     expect(html).not.toMatch(/id="subscription-auth"/);
     expect(html).not.toMatch(/label for="subscription-auth"/);
     expect(html).not.toMatch(/subscription auth is required/);
     expect(html).not.toMatch(/type="password"[^>]*id="subscription-auth"|id="subscription-auth"[^>]*type="password"/);
     expect(html).not.toMatch(/async function adminEditAdapter\([\s\S]*\/architect\/bind-adapter/);
     expect(html).not.toMatch(/async function adminEditConnector\([\s\S]*\/architect\/bind-connector/);
-    expect(adminMarkup).not.toMatch(/start-subscription-auth|complete-subscription-auth|subscription-sign-in/);
+    expect(adminMarkup).not.toMatch(
+      /start-subscription-auth|complete-subscription-auth|subscription-sign-in|start-connector-auth|complete-connector-auth|connector-sign-in/,
+    );
     expect(isAdminAddPath("admin", "add-model")).toBe(false);
     expect(isAdminAddPath("admin", "add-connector")).toBe(false);
     expect(isAdminAddPath("wizard", "add-model")).toBe(true);
@@ -774,7 +829,7 @@ describe("Architect habitat bind wizard", () => {
       expect.arrayContaining([
         "Codex Subscription",
         "Grok Subscription",
-        "GLM subscription",
+        "GLM Subscription",
         "Claude",
         "Codex",
         "Grok",
@@ -783,14 +838,66 @@ describe("Architect habitat bind wizard", () => {
         "Generic OpenAI (vLLM / Ollama)",
       ]),
     );
+    expect(HABITAT_PROVIDERS.filter((row) => row.mode === "subscription").map((row) => row.id)).toEqual([
+      "sub-codex",
+      "sub-grok",
+      "sub-glm",
+    ]);
     const sub = visibleAttachFields("subscription", "sub-codex");
     expect(sub).toEqual({
       subscriptionAuth: "guided",
-      startUrl: "required",
+      startUrl: "hidden",
       apiKey: "hidden",
       vendorBaseUrl: "hidden",
       modelId: "hidden",
+      glmPlan: "hidden",
     });
+    const grokSub = visibleAttachFields("subscription", "sub-grok");
+    expect(grokSub).toEqual({
+      subscriptionAuth: "guided",
+      startUrl: "hidden",
+      apiKey: "hidden",
+      vendorBaseUrl: "hidden",
+      modelId: "hidden",
+      glmPlan: "hidden",
+    });
+    const glmSub = visibleAttachFields("subscription", "sub-glm");
+    expect(glmSub).toEqual({
+      subscriptionAuth: "guided",
+      startUrl: "hidden",
+      apiKey: "hidden",
+      vendorBaseUrl: "hidden",
+      modelId: "hidden",
+      glmPlan: "hidden",
+    });
+    const grokApi = visibleAttachFields("api", "api-grok");
+    expect(grokApi).toEqual({
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "hidden",
+      modelId: "required",
+      glmPlan: "hidden",
+    });
+    const glmApi = visibleAttachFields("api", "api-glm");
+    expect(glmApi).toEqual({
+      subscriptionAuth: "hidden",
+      startUrl: "hidden",
+      apiKey: "required",
+      vendorBaseUrl: "hidden",
+      modelId: "required",
+      glmPlan: "required",
+    });
+    expect(visibleAttachFields("subscription", "api-grok").apiKey).toBe("hidden");
+    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "api-grok")!)).toBe(
+      GROK_OFFICIAL_API_BASE,
+    );
+    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "api-glm")!, "coding")).toBe(
+      GLM_CODING_PLAN_BASE,
+    );
+    expect(officialBaseUrlForBind(HABITAT_PROVIDERS.find((row) => row.id === "api-glm")!, "payg")).toBe(
+      GLM_PAYG_API_BASE,
+    );
     const api = visibleAttachFields("api", "api-claude");
     expect(api).toEqual({
       subscriptionAuth: "hidden",
@@ -798,6 +905,7 @@ describe("Architect habitat bind wizard", () => {
       apiKey: "required",
       vendorBaseUrl: "optional",
       modelId: "required",
+      glmPlan: "hidden",
     });
     const generic = visibleAttachFields("api", "api-generic-openai");
     expect(generic).toEqual({
@@ -806,12 +914,19 @@ describe("Architect habitat bind wizard", () => {
       apiKey: "optional",
       vendorBaseUrl: "required",
       modelId: "required",
+      glmPlan: "hidden",
     });
     expect(visibleAttachFields("api", "sub-codex").modelId).toBe("hidden");
     const genericChoice = HABITAT_PROVIDERS.find((row) => row.id === "api-generic-openai")!;
     expect(modelIdForBind(genericChoice, "local-llama")).toBe("local-llama");
     const subChoice = HABITAT_PROVIDERS.find((row) => row.id === "sub-codex")!;
     expect(modelIdForBind(subChoice, "")).toBe("codex-subscription");
+    expect(modelIdForBind(HABITAT_PROVIDERS.find((row) => row.id === "sub-grok")!, "")).toBe(
+      "grok-subscription",
+    );
+    expect(modelIdForBind(HABITAT_PROVIDERS.find((row) => row.id === "sub-glm")!, "")).toBe(
+      "glm-subscription",
+    );
   });
 
   it("wizard can bind more than one model and write Architect-entered router and aggregator", async () => {
@@ -932,6 +1047,8 @@ describe("Architect habitat bind wizard", () => {
       "/architect/edit-connector-bind",
       "/architect/start-subscription-auth",
       "/architect/complete-subscription-auth",
+      "/architect/start-connector-auth",
+      "/architect/complete-connector-auth",
     ]) {
       const denied = await fetch(`${live.url}${route}`, {
         method: "POST",
@@ -997,233 +1114,426 @@ describe("Architect habitat bind wizard", () => {
   });
 });
 
-const SUBSCRIPTION_CHOICES = [
-  { providerId: "sub-codex", modelId: "codex-subscription", label: "Codex Subscription" },
-  { providerId: "sub-grok", modelId: "grok-subscription", label: "Grok Subscription" },
-  { providerId: "sub-glm", modelId: "glm-subscription", label: "GLM subscription" },
-] as const;
+const HABITAT_GITHUB_CLIENT_ID = "av-gh-oauth-app";
 
-function startSubscriptionIssuer() {
-  const devices = new Map<
-    string,
-    { userCode: string; approved: boolean; token: string }
-  >();
-  let seq = 0;
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://issuer.example");
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk) => {
-      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-    });
-    req.on("end", () => {
-      let body: Record<string, unknown> = {};
-      const raw = Buffer.concat(chunks).toString("utf8").trim();
-      if (raw) {
-        try {
-          body = JSON.parse(raw) as Record<string, unknown>;
-        } catch {
-          body = {};
-        }
-      }
-      const json = (status: number, payload: unknown) => {
-        res.writeHead(status, { "content-type": "application/json" });
-        res.end(JSON.stringify(payload));
-      };
-      if (req.method === "POST" && url.pathname === "/device/start") {
-        seq += 1;
-        const deviceCode = `device_${seq}`;
-        const userCode = `USER-${seq}`;
-        const token = `session_${seq}`;
-        devices.set(deviceCode, { userCode, approved: false, token });
-        const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-        json(200, {
-          device_code: deviceCode,
-          user_code: userCode,
-          verification_uri: `${origin}/device/verify`,
-          token_uri: `${origin}/device/token`,
-          interval: 1,
-        });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/device/approve") {
-        const userCode = String(body.user_code ?? "");
-        for (const row of devices.values()) {
-          if (row.userCode === userCode) {
-            row.approved = true;
-            json(200, { ok: true });
-            return;
-          }
-        }
-        json(404, { error: "unknown_user_code" });
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/device/token") {
-        const deviceCode = String(body.device_code ?? "");
-        const row = devices.get(deviceCode);
-        if (!row) {
-          json(400, { error: "expired_token" });
-          return;
-        }
-        if (!row.approved) {
-          json(400, { error: "authorization_pending" });
-          return;
-        }
-        json(200, { access_token: row.token, token_type: "bearer" });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/device/verify") {
-        res.writeHead(200, { "content-type": "text/plain" });
-        res.end("sign in");
-        return;
-      }
-      json(404, { error: "not_found" });
-    });
+function jsonResponse(status: number, payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "content-type": "application/json" },
   });
+}
+
+async function readVendorBody(init?: RequestInit): Promise<Record<string, string>> {
+  const raw = typeof init?.body === "string" ? init.body : "";
+  const contentType = String(
+    init?.headers && typeof init.headers === "object" && "content-type" in init.headers
+      ? (init.headers as Record<string, string>)["content-type"]
+      : "",
+  );
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    return Object.fromEntries(new URLSearchParams(raw).entries());
+  }
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function installOfficialVendorMocks(opts?: { codexUsercodeStatus?: number; grokDeviceStatus?: number }) {
+  const seen: string[] = [];
+  const github = new Map<string, { userCode: string; approved: boolean; token: string }>();
+  const codex = new Map<string, { userCode: string; approved: boolean; token: string }>();
+  const grok = new Map<string, { userCode: string; approved: boolean; token: string; refresh: string }>();
+  let seq = 0;
+
+  setVendorFetch(async (input, init) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const method = (init?.method ?? "GET").toUpperCase();
+    seen.push(`${method} ${url}`);
+    const body = await readVendorBody(init);
+
+    if (url.includes("chat.z.ai") || url.includes("zcode.z.ai") || url.includes("oauth/cli/init")) {
+      throw new Error("invented GLM OAuth / retired CLI init must not be the product path");
+    }
+    if (url === GLM_ACCOUNT_LOGIN_URL) {
+      throw new Error("GLM account login exchange must not be started without an issued token");
+    }
+
+    if (url === `${CODEX_ISSUER}${CODEX_USERCODE_PATH}`) {
+      expect(body.client_id).toBe(CODEX_CLIENT_ID);
+      expect(JSON.stringify(body)).not.toBe("{}");
+      if (opts?.codexUsercodeStatus === 404) {
+        return new Response("", { status: 404 });
+      }
+      seq += 1;
+      const userCode = `CODEX-${seq}`;
+      const deviceAuthId = `codex_auth_${seq}`;
+      codex.set(deviceAuthId, { userCode, approved: false, token: `codex_session_${seq}` });
+      return jsonResponse(200, {
+        device_auth_id: deviceAuthId,
+        user_code: userCode,
+        interval: "1",
+      });
+    }
+    if (url === `${CODEX_ISSUER}${CODEX_TOKEN_POLL_PATH}`) {
+      const row = codex.get(String(body.device_auth_id ?? ""));
+      if (!row || row.userCode !== body.user_code) return jsonResponse(404, { error: "not_found" });
+      if (!row.approved) return new Response("", { status: 403 });
+      return jsonResponse(200, {
+        authorization_code: `codex_code_${row.userCode}`,
+        code_verifier: `codex_verifier_${row.userCode}`,
+        code_challenge: `codex_challenge_${row.userCode}`,
+      });
+    }
+    if (url === `${CODEX_ISSUER}${CODEX_OAUTH_TOKEN_PATH}`) {
+      expect(body.grant_type).toBe("authorization_code");
+      expect(body.client_id).toBe(CODEX_CLIENT_ID);
+      expect(body.redirect_uri).toBe(CODEX_DEVICE_REDIRECT_URI);
+      const row = [...codex.values()].find((item) => `codex_code_${item.userCode}` === body.code);
+      if (!row) return jsonResponse(400, { error: "invalid_grant" });
+      return jsonResponse(200, {
+        access_token: row.token,
+        refresh_token: `refresh_${row.token}`,
+        id_token: `id_${row.token}`,
+      });
+    }
+
+    if (url === `${GROK_ISSUER}${GROK_DEVICE_PATH}`) {
+      expect(body.client_id).toBe(GROK_CLIENT_ID);
+      expect(body.scope).toBe(GROK_SCOPES.join(" "));
+      expect(body.referrer).toBe(GROK_REFERRER);
+      expect(JSON.stringify(body)).not.toBe("{}");
+      if (opts?.grokDeviceStatus === 404) {
+        return new Response("", { status: 404 });
+      }
+      seq += 1;
+      const userCode = `GROK-${seq}`;
+      const deviceCode = `grok_device_${seq}`;
+      grok.set(deviceCode, {
+        userCode,
+        approved: false,
+        token: `grok_session_${seq}`,
+        refresh: `grok_refresh_${seq}`,
+      });
+      return jsonResponse(200, {
+        device_code: deviceCode,
+        user_code: userCode,
+        verification_uri: "https://auth.x.ai/device",
+        expires_in: 900,
+        interval: 1,
+      });
+    }
+    if (url === `${GROK_ISSUER}${GROK_TOKEN_PATH}`) {
+      expect(body.grant_type).toBe(GROK_DEVICE_GRANT);
+      expect(body.client_id).toBe(GROK_CLIENT_ID);
+      const row = grok.get(String(body.device_code ?? ""));
+      if (!row) return jsonResponse(400, { error: "expired_token" });
+      if (!row.approved) return jsonResponse(400, { error: "authorization_pending" });
+      return jsonResponse(200, { access_token: row.token, refresh_token: row.refresh, token_type: "bearer" });
+    }
+
+    if (url === GITHUB_DEVICE_URL) {
+      expect(body.client_id).toBe(HABITAT_GITHUB_CLIENT_ID);
+      seq += 1;
+      const deviceCode = `gh_device_${seq}`;
+      const userCode = `GH-${seq}`;
+      github.set(deviceCode, { userCode, approved: false, token: `gh_session_${seq}` });
+      return jsonResponse(200, {
+        device_code: deviceCode,
+        user_code: userCode,
+        verification_uri: "https://github.com/login/device",
+        expires_in: 900,
+        interval: 1,
+      });
+    }
+    if (url === GITHUB_TOKEN_URL) {
+      expect(body.grant_type).toBe(GITHUB_DEVICE_GRANT);
+      expect(body.client_id).toBe(HABITAT_GITHUB_CLIENT_ID);
+      const row = github.get(String(body.device_code ?? ""));
+      if (!row) return jsonResponse(400, { error: "expired_token" });
+      if (!row.approved) return jsonResponse(400, { error: "authorization_pending" });
+      return jsonResponse(200, { access_token: row.token, token_type: "bearer" });
+    }
+
+    throw new Error(`unexpected vendor fetch ${method} ${url}`);
+  });
+
   return {
-    async listen() {
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", () => resolve());
-      });
-      const port = (server.address() as AddressInfo).port;
-      return {
-        startUrl: `http://127.0.0.1:${port}/device/start`,
-        origin: `http://127.0.0.1:${port}`,
-      };
+    seen,
+    approveCodex(userCode: string) {
+      for (const row of codex.values()) {
+        if (row.userCode === userCode) row.approved = true;
+      }
     },
-    async approve(userCode: string) {
-      const port = (server.address() as AddressInfo).port;
-      const res = await fetch(`http://127.0.0.1:${port}/device/approve`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ user_code: userCode }),
-      });
-      if (!res.ok) throw new Error("issuer approve failed");
+    approveGithub(userCode: string) {
+      for (const row of github.values()) {
+        if (row.userCode === userCode) row.approved = true;
+      }
     },
-    async close() {
-      await new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      });
+    approveGrok(userCode: string) {
+      for (const row of grok.values()) {
+        if (row.userCode === userCode) row.approved = true;
+      }
     },
   };
 }
 
-describe("Architect habitat guided subscription attach", () => {
-  it("choosing a subscription starts guided auth and completing it binds through the existing writers", async () => {
+describe("Architect habitat official subscription attach", () => {
+  it("Codex and Grok first-party device-code bind through existing writers; GLM account authorize fails closed", async () => {
     const live = await liveHttp("sub-attach");
-    const issuer = startSubscriptionIssuer();
-    const { startUrl, origin } = await issuer.listen();
+    const mocks = installOfficialVendorMocks();
     const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
 
-    try {
-      for (const choice of SUBSCRIPTION_CHOICES) {
-        const started = await fetch(`${live.url}/architect/start-subscription-auth`, {
-          method: "POST",
-          headers: auth,
-          body: JSON.stringify({ providerId: choice.providerId, startUrl }),
-        });
-        expect(started.status).toBe(201);
-        const pending = (await started.json()) as {
-          authId: string;
-          providerId: string;
-          modelId: string;
-          userCode: string;
-          verificationUri: string;
-          status: string;
-          access_token?: string;
-          apiKey?: string;
-          device_code?: string;
-        };
-        expect(pending.providerId).toBe(choice.providerId);
-        expect(pending.modelId).toBe(choice.modelId);
-        expect(pending.status).toBe("pending");
-        expect(pending.userCode).toMatch(/^USER-/);
-        expect(pending.verificationUri).toBe(`${origin}/device/verify`);
-        expect(pending.access_token).toBeUndefined();
-        expect(pending.apiKey).toBeUndefined();
-        expect(pending.device_code).toBeUndefined();
-        expect(JSON.stringify(pending)).not.toMatch(/session_|device_/);
+    const started = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ providerId: "sub-codex" }),
+    });
+    expect(started.status).toBe(201);
+    const pending = (await started.json()) as {
+      authId: string;
+      providerId: string;
+      modelId: string;
+      userCode?: string;
+      verificationUri: string;
+      status: string;
+      access_token?: string;
+      apiKey?: string;
+      device_code?: string;
+      startUrl?: string;
+    };
+    expect(pending.providerId).toBe("sub-codex");
+    expect(pending.modelId).toBe("codex-subscription");
+    expect(pending.status).toBe("pending");
+    expect(pending.userCode).toMatch(/^CODEX-/);
+    expect(pending.verificationUri).toBe(CODEX_VERIFICATION_URI);
+    expect(pending.verificationUri).toBe(`${CODEX_ISSUER}${CODEX_VERIFICATION_PATH}`);
+    expect(pending.access_token).toBeUndefined();
+    expect(pending.apiKey).toBeUndefined();
+    expect(pending.device_code).toBeUndefined();
+    expect(pending.startUrl).toBeUndefined();
+    expect(JSON.stringify(pending)).not.toMatch(/session_|device_/);
+    expect(mocks.seen.some((row) => row.includes(`${CODEX_ISSUER}${CODEX_USERCODE_PATH}`))).toBe(true);
 
-        const waiting = await fetch(`${live.url}/architect/complete-subscription-auth`, {
-          method: "POST",
-          headers: auth,
-          body: JSON.stringify({ authId: pending.authId }),
-        });
-        expect(waiting.status).toBe(200);
-        expect(((await waiting.json()) as { status: string }).status).toBe("authorization_pending");
-        expect(
-          loadAdapterBind(computerRoot(live.computerBaseDir, live.tenantId).adapterBindFile)?.modelId,
-        ).not.toBe(choice.modelId);
+    const waiting = await fetch(`${live.url}/architect/complete-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ authId: pending.authId }),
+    });
+    expect(waiting.status).toBe(200);
+    expect(((await waiting.json()) as { status: string }).status).toBe("authorization_pending");
+    expect(loadAdapterBind(computerRoot(live.computerBaseDir, live.tenantId).adapterBindFile)).toBeUndefined();
 
-        await issuer.approve(pending.userCode);
-        const done = await fetch(`${live.url}/architect/complete-subscription-auth`, {
-          method: "POST",
-          headers: auth,
-          body: JSON.stringify({ authId: pending.authId }),
-        });
-        expect(done.status).toBe(201);
-        const bound = (await done.json()) as {
-          status: string;
-          modelId: string;
-          boundBy: string;
-          apiKey?: string;
-          access_token?: string;
-        };
-        expect(bound.status).toBe("bound");
-        expect(bound.modelId).toBe(choice.modelId);
-        expect(bound.boundBy).toBe("architect");
-        expect(bound.apiKey).toBeUndefined();
-        expect(bound.access_token).toBeUndefined();
-      }
+    mocks.approveCodex(pending.userCode ?? "");
+    const done = await fetch(`${live.url}/architect/complete-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ authId: pending.authId }),
+    });
+    expect(done.status).toBe(201);
+    const bound = (await done.json()) as {
+      status: string;
+      modelId: string;
+      boundBy: string;
+      apiKey?: string;
+      access_token?: string;
+    };
+    expect(bound.status).toBe("bound");
+    expect(bound.modelId).toBe("codex-subscription");
+    expect(bound.boundBy).toBe("architect");
+    expect(bound.apiKey).toBeUndefined();
+    expect(bound.access_token).toBeUndefined();
 
-      const paths = computerRoot(live.computerBaseDir, live.tenantId);
-      const store = loadAdapterBindStore(paths.adapterBindFile);
-      expect(store.models.map((row) => row.modelId).sort()).toEqual(
-        ["codex-subscription", "glm-subscription", "grok-subscription"].sort(),
-      );
-      expect(store.models.every((row) => row.boundBy === "architect")).toBe(true);
-      expect(store.models.every((row) => !("apiKey" in row))).toBe(true);
-      const creds = loadAdapterCredentials(paths.adapterCredentialsFile)!;
-      expect(creds.writtenBy).toBe("architect");
-      expect(creds.apiKey.startsWith("session_")).toBe(true);
-      expect(statSync(paths.adapterBindFile).mode & 0o777).toBe(0o600);
-      expect(statSync(paths.adapterCredentialsFile).mode & 0o777).toBe(0o600);
-      expect(existsSync(path.join(paths.disk, "adapter-bind.json"))).toBe(false);
-      expect(existsSync(path.join(paths.disk, "adapter-credentials.json"))).toBe(false);
-    } finally {
-      await issuer.close();
+    for (const providerId of ["api-grok", "api-glm"]) {
+      const rejected = await fetch(`${live.url}/architect/start-subscription-auth`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify({ providerId, startUrl: "https://architect-typed.example/start" }),
+      });
+      expect(rejected.status).toBe(400);
+      expect(((await rejected.json()) as { error: string }).error).toBe("SUBSCRIPTION_PROVIDER_REQUIRED");
     }
+
+    const grokStarted = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ providerId: "sub-grok" }),
+    });
+    expect(grokStarted.status).toBe(201);
+    const grokPending = (await grokStarted.json()) as {
+      authId: string;
+      providerId: string;
+      modelId: string;
+      userCode?: string;
+      verificationUri: string;
+      access_token?: string;
+      refresh_token?: string;
+      device_code?: string;
+      startUrl?: string;
+    };
+    expect(grokPending.providerId).toBe("sub-grok");
+    expect(grokPending.modelId).toBe("grok-subscription");
+    expect(grokPending.userCode).toMatch(/^GROK-/);
+    expect(grokPending.verificationUri).toBe("https://auth.x.ai/device");
+    expect(grokPending.access_token).toBeUndefined();
+    expect(grokPending.refresh_token).toBeUndefined();
+    expect(grokPending.device_code).toBeUndefined();
+    expect(grokPending.startUrl).toBeUndefined();
+    expect(JSON.stringify(grokPending)).not.toMatch(/session_|device_|refresh_/);
+    expect(mocks.seen.some((row) => row === `POST ${GROK_ISSUER}${GROK_DEVICE_PATH}`)).toBe(true);
+
+    mocks.approveGrok(grokPending.userCode ?? "");
+    const grokDone = await fetch(`${live.url}/architect/complete-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ authId: grokPending.authId }),
+    });
+    expect(grokDone.status).toBe(201);
+    const grokBound = (await grokDone.json()) as {
+      status: string;
+      modelId: string;
+      apiKey?: string;
+      access_token?: string;
+      refresh_token?: string;
+    };
+    expect(grokBound.status).toBe("bound");
+    expect(grokBound.modelId).toBe("grok-subscription");
+    expect(grokBound.apiKey).toBeUndefined();
+    expect(grokBound.access_token).toBeUndefined();
+    expect(grokBound.refresh_token).toBeUndefined();
+
+    const grokCreds = loadAdapterCredentials(
+      computerRoot(live.computerBaseDir, live.tenantId).adapterCredentialsFile,
+    )!;
+    expect(grokCreds.writtenBy).toBe("architect");
+    expect(grokCreds.apiKey).toMatch(/^grok_session_/);
+    expect(grokCreds.refreshToken).toMatch(/^grok_refresh_/);
+
+    const glmStart = await fetch(`${live.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ providerId: "sub-glm" }),
+    });
+    expect(glmStart.status).toBe(400);
+    const glmBody = (await glmStart.json()) as { error: string; message?: string };
+    expect(glmBody.error).toBe("SUBSCRIPTION_AUTH_NOT_ENABLED");
+    expect(`${glmBody.error} ${glmBody.message ?? ""}`).toMatch(/Continue with Z\.ai/);
+    expect(`${glmBody.message ?? ""}`).toMatch(/client_id|issuer/i);
+    expect(glmBody.message ?? "").toMatch(/Do not paste an API key on this choice/);
+
+    const grokBind = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "grok-3", vendorBaseUrl: GROK_OFFICIAL_API_BASE }),
+    });
+    expect(grokBind.status).toBe(201);
+    await fetch(`${live.url}/architect/set-adapter-credentials`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ apiKey: "grok-console-key" }),
+    });
+
+    const glmCoding = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "glm-5", vendorBaseUrl: GLM_CODING_PLAN_BASE }),
+    });
+    expect(glmCoding.status).toBe(201);
+    const glmPayg = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ modelId: "glm-5-payg", vendorBaseUrl: GLM_PAYG_API_BASE }),
+    });
+    expect(glmPayg.status).toBe(201);
+    await fetch(`${live.url}/architect/set-adapter-credentials`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ apiKey: "glm-plan-key" }),
+    });
+
+    const paths = computerRoot(live.computerBaseDir, live.tenantId);
+    const store = loadAdapterBindStore(paths.adapterBindFile);
+    expect(store.models.map((row) => row.modelId).sort()).toEqual(
+      ["codex-subscription", "glm-5", "glm-5-payg", "grok-3", "grok-subscription"].sort(),
+    );
+    expect(store.models.find((row) => row.modelId === "grok-subscription")?.vendorBaseUrl).toBeUndefined();
+    expect(store.models.find((row) => row.modelId === "grok-3")?.vendorBaseUrl).toBe(GROK_OFFICIAL_API_BASE);
+    expect(store.models.find((row) => row.modelId === "glm-5")?.vendorBaseUrl).toBe(GLM_CODING_PLAN_BASE);
+    expect(store.models.find((row) => row.modelId === "glm-5-payg")?.vendorBaseUrl).toBe(GLM_PAYG_API_BASE);
+    expect(store.models.every((row) => row.boundBy === "architect")).toBe(true);
+    expect(store.models.every((row) => !("apiKey" in row))).toBe(true);
+    const creds = loadAdapterCredentials(paths.adapterCredentialsFile)!;
+    expect(creds.writtenBy).toBe("architect");
+    expect(creds.apiKey).toBe("glm-plan-key");
+    expect(statSync(paths.adapterBindFile).mode & 0o777).toBe(0o600);
+    expect(statSync(paths.adapterCredentialsFile).mode & 0o777).toBe(0o600);
+    expect(existsSync(path.join(paths.disk, "adapter-bind.json"))).toBe(false);
+    expect(existsSync(path.join(paths.disk, "adapter-credentials.json"))).toBe(false);
+    expect(mocks.seen.join("\n")).toMatch(`${GROK_ISSUER}${GROK_DEVICE_PATH}`);
+    expect(mocks.seen.join("\n")).not.toMatch(/chat\.z\.ai|zcode\.z\.ai|oauth\/cli\/init|api\.z\.ai\/api\/auth\/z\/login/);
   });
 
-  it("password-only subscription auth is gone; missing start URL does not invent a vendor host", async () => {
+  it("password dump and Architect-typed POST {} issuer are gone; Codex/Grok 404 and GLM authorize fail closed", async () => {
     const html = architectHabitatPageHtml();
     expect(html).not.toMatch(/subscription auth is required/);
     expect(html).not.toMatch(/id="subscription-auth"/);
+    expect(html).not.toMatch(/id="subscription-start-url"/);
     expect(html).toMatch(/wizardStartSubscription/);
-    expect(html).toMatch(/Sign in to attach this subscription/);
+    expect(html).toMatch(/Architect does not type an issuer URL/);
     expect(html).toMatch(/Subscription attach starts a guided sign-in; a token dump is not the product path/);
+    expect(html).toMatch(/usage-billed/);
+    expect(html).toMatch(GROK_OFFICIAL_CONSOLE_URL);
+    expect(html).toMatch(GLM_OFFICIAL_KEY_URL);
 
     const live = await liveHttp("sub-no-host");
+    const mocks = installOfficialVendorMocks();
     const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
     const missing = await fetch(`${live.url}/architect/start-subscription-auth`, {
       method: "POST",
       headers: auth,
       body: JSON.stringify({ providerId: "sub-codex" }),
     });
-    expect(missing.status).toBe(400);
-    const missingBody = (await missing.json()) as { error: string; message: string };
-    expect(missingBody.error).toBe("SUBSCRIPTION_START_URL_REQUIRED");
-    expect(missingBody.message).toMatch(/does not invent a vendor host/);
-    expect(JSON.stringify(missingBody)).not.toMatch(
-      /api\.openai\.com|auth\.openai\.com|x\.ai|z\.ai|localhost|127\.0\.0\.1/,
-    );
+    expect(missing.status).toBe(201);
+    const started = (await missing.json()) as { verificationUri: string; userCode: string };
+    expect(started.verificationUri).toBe(CODEX_VERIFICATION_URI);
+    expect(started.userCode).toMatch(/^CODEX-/);
+    expect(mocks.seen.some((row) => row === `POST ${CODEX_ISSUER}${CODEX_USERCODE_PATH}`)).toBe(true);
+
+    const gated = await liveHttp("sub-gated");
+    installOfficialVendorMocks({ codexUsercodeStatus: 404 });
+    const gatedAuth = { authorization: `Bearer ${gated.architectToken}`, "content-type": "application/json" };
+    const gatedStart = await fetch(`${gated.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: gatedAuth,
+      body: JSON.stringify({ providerId: "sub-codex" }),
+    });
+    expect(gatedStart.status).toBe(400);
+    const gatedBody = (await gatedStart.json()) as { error: string; message?: string };
+    expect(gatedBody.error).toBe("SUBSCRIPTION_AUTH_NOT_ENABLED");
+    expect(`${gatedBody.error} ${gatedBody.message ?? ""}`).toMatch(/usage-billed|API key/i);
+
+    const grokGated = await liveHttp("sub-grok-gated");
+    installOfficialVendorMocks({ grokDeviceStatus: 404 });
+    const grokGatedAuth = {
+      authorization: `Bearer ${grokGated.architectToken}`,
+      "content-type": "application/json",
+    };
+    const grokGatedStart = await fetch(`${grokGated.url}/architect/start-subscription-auth`, {
+      method: "POST",
+      headers: grokGatedAuth,
+      body: JSON.stringify({ providerId: "sub-grok" }),
+    });
+    expect(grokGatedStart.status).toBe(400);
+    const grokGatedBody = (await grokGatedStart.json()) as { error: string; message?: string };
+    expect(grokGatedBody.error).toBe("SUBSCRIPTION_AUTH_NOT_ENABLED");
+    expect(`${grokGatedBody.message ?? ""}`).toMatch(/usage-billed|API key/i);
 
     const apiProvider = await fetch(`${live.url}/architect/start-subscription-auth`, {
       method: "POST",
       headers: auth,
-      body: JSON.stringify({
-        providerId: "api-generic-openai",
-        startUrl: "https://architect-typed.example/start",
-      }),
+      body: JSON.stringify({ providerId: "api-generic-openai" }),
     });
     expect(apiProvider.status).toBe(400);
     expect(((await apiProvider.json()) as { error: string }).error).toBe("SUBSCRIPTION_PROVIDER_REQUIRED");
@@ -1231,7 +1541,7 @@ describe("Architect habitat guided subscription attach", () => {
     const unauthenticated = await fetch(`${live.url}/architect/start-subscription-auth`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ providerId: "sub-codex", startUrl: "https://architect-typed.example/start" }),
+      body: JSON.stringify({ providerId: "sub-codex" }),
     });
     expect(unauthenticated.status).toBe(401);
 
@@ -1241,74 +1551,194 @@ describe("Architect habitat guided subscription attach", () => {
       "src/http/field-server.ts",
       "src/auth/architect-subscription-auth.ts",
       "src/habitat/subscription-auth.ts",
+      "src/habitat/vendor-login.ts",
+      "src/habitat/connector-auth.ts",
     ];
     for (const rel of files) {
       const src = readFileSync(path.join(process.cwd(), rel), "utf8");
-      expect(src).not.toMatch(/api\.openai\.com|auth\.openai\.com|chatgpt\.com/);
-      expect(src).not.toMatch(/api\.x\.ai|x\.ai\/|chat\.z\.ai|api\.z\.ai|open\.bigmodel\.cn/);
       expect(src).not.toMatch(/OPENAI_API_KEY|ANTHROPIC_API_KEY|sk-/);
       expect(src).not.toMatch(/startUrl\s*=\s*["'`]https?:\/\/(localhost|127\.0\.0\.1|api\.)/);
+      expect(src).not.toMatch(/JSON\.stringify\(\{\}\)/);
+      expect(src).not.toMatch(/~\/\.codex\/auth\.json|~\/\.grok\/auth\.json|~\/\.zcode\//);
+      expect(src).not.toMatch(/chat\.z\.ai|client_P8X5CMWmla|178c6fc778ccc68e1d6a/);
+      if (rel !== "src/habitat/vendor-login.ts") {
+        expect(src).not.toMatch(/b1a00492/);
+        expect(src).not.toMatch(/oauth\/cli\/init/);
+      }
     }
+    const vendorSrc = readFileSync(path.join(process.cwd(), "src/habitat/vendor-login.ts"), "utf8");
+    expect(vendorSrc).toMatch(/auth\.openai\.com/);
+    expect(vendorSrc).toMatch(/deviceauth\/usercode/);
+    expect(vendorSrc).toMatch(/deviceauth\/token/);
+    expect(vendorSrc).toContain(CODEX_CLIENT_ID);
+    expect(vendorSrc).toContain(GROK_CLIENT_ID);
+    expect(vendorSrc).toMatch(/auth\.x\.ai/);
+    expect(vendorSrc).toMatch(/oauth2\/device\/code/);
+    expect(vendorSrc).toMatch(/urn:ietf:params:oauth:grant-type:device_code/);
+    expect(vendorSrc).toContain(GLM_ACCOUNT_LOGIN_URL);
+    expect(vendorSrc).toMatch(/SUBSCRIPTION_AUTH_NOT_ENABLED/);
+    expect(vendorSrc).toMatch(/oauth\/cli\/init is 404/);
+    expect(vendorSrc).not.toMatch(/chat\.z\.ai|client_P8X5CMWmla/);
   });
 
-  it("API and Generic OpenAI paths stay key/URL bind; start URL on an Architect-owned bind can start auth", async () => {
-    const live = await liveHttp("sub-reuse");
-    const issuer = startSubscriptionIssuer();
-    const { startUrl } = await issuer.listen();
+  it("API and Generic OpenAI paths stay key/URL bind without localhost defaults", async () => {
+    const live = await liveHttp("sub-api");
+    const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
+    const apiBind = await fetch(`${live.url}/architect/bind-adapter`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        modelId: "architect-typed-model",
+        vendorBaseUrl: "https://architect-typed.example/vllm",
+      }),
+    });
+    expect(apiBind.status).toBe(201);
+    const apiKey = await fetch(`${live.url}/architect/set-adapter-credentials`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ apiKey: "av-api-still-works" }),
+    });
+    expect(apiKey.status).toBe(201);
+
+    const paths = computerRoot(live.computerBaseDir, live.tenantId);
+    const store = loadAdapterBindStore(paths.adapterBindFile);
+    expect(store.models.map((row) => row.modelId)).toEqual(["architect-typed-model"]);
+    expect(store.models[0]?.vendorBaseUrl).toBe("https://architect-typed.example/vllm");
+    const creds = loadAdapterCredentials(paths.adapterCredentialsFile)!;
+    expect(creds.writtenBy).toBe("architect");
+    expect(creds.apiKey).toBe("av-api-still-works");
+
+    const html = architectHabitatPageHtml();
+    expect(html).not.toMatch(/localhost|:11434|:8000|127\.0\.0\.1:11434|127\.0\.0\.1:8000/);
+    const generic = visibleAttachFields("api", "api-generic-openai");
+    expect(generic.vendorBaseUrl).toBe("required");
+    expect(generic.apiKey).toBe("optional");
+  });
+});
+
+describe("Architect habitat official connector attach", () => {
+  it("GitHub OAuth with our registration writes connector-bind + credentials; generic MCP is Architect-typed URL", async () => {
+    const live = await liveHttp("conn-attach");
+    const mocks = installOfficialVendorMocks();
     const auth = { authorization: `Bearer ${live.architectToken}`, "content-type": "application/json" };
 
-    try {
-      const apiBind = await fetch(`${live.url}/architect/bind-adapter`, {
-        method: "POST",
-        headers: auth,
-        body: JSON.stringify({
-          modelId: "architect-typed-model",
-          vendorBaseUrl: "https://architect-typed.example/vllm",
-        }),
-      });
-      expect(apiBind.status).toBe(201);
-      const apiKey = await fetch(`${live.url}/architect/set-adapter-credentials`, {
-        method: "POST",
-        headers: auth,
-        body: JSON.stringify({ apiKey: "av-api-still-works" }),
-      });
-      expect(apiKey.status).toBe(201);
+    expect(HABITAT_CONNECTORS.map((row) => row.label)).toEqual(["GitHub", "Generic / private MCP"]);
 
-      const seed = await fetch(`${live.url}/architect/bind-adapter`, {
-        method: "POST",
-        headers: auth,
-        body: JSON.stringify({ modelId: "grok-subscription", vendorBaseUrl: startUrl }),
-      });
-      expect(seed.status).toBe(201);
-      const started = await fetch(`${live.url}/architect/start-subscription-auth`, {
-        method: "POST",
-        headers: auth,
-        body: JSON.stringify({ providerId: "sub-grok" }),
-      });
-      expect(started.status).toBe(201);
-      const pending = (await started.json()) as { authId: string; userCode: string; modelId: string };
-      expect(pending.modelId).toBe("grok-subscription");
-      await issuer.approve(pending.userCode);
-      const done = await fetch(`${live.url}/architect/complete-subscription-auth`, {
-        method: "POST",
-        headers: auth,
-        body: JSON.stringify({ authId: pending.authId }),
-      });
-      expect(done.status).toBe(201);
+    const missingClient = await fetch(`${live.url}/architect/start-connector-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ connectorId: "github" }),
+    });
+    expect(missingClient.status).toBe(400);
+    expect(((await missingClient.json()) as { error: string }).error).toBe("CONNECTOR_CLIENT_REQUIRED");
 
-      const paths = computerRoot(live.computerBaseDir, live.tenantId);
-      const store = loadAdapterBindStore(paths.adapterBindFile);
-      expect(store.models.map((row) => row.modelId).sort()).toEqual(
-        ["architect-typed-model", "grok-subscription"].sort(),
-      );
-      expect(store.models.find((row) => row.modelId === "architect-typed-model")?.vendorBaseUrl).toBe(
-        "https://architect-typed.example/vllm",
-      );
-      const creds = loadAdapterCredentials(paths.adapterCredentialsFile)!;
-      expect(creds.writtenBy).toBe("architect");
-      expect(creds.apiKey.startsWith("session_")).toBe(true);
-    } finally {
-      await issuer.close();
+    const started = await fetch(`${live.url}/architect/start-connector-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ connectorId: "github", clientId: HABITAT_GITHUB_CLIENT_ID }),
+    });
+    expect(started.status).toBe(201);
+    const pending = (await started.json()) as {
+      authId: string;
+      connectorId: string;
+      userCode: string;
+      verificationUri: string;
+      status: string;
+      access_token?: string;
+      secret?: string;
+    };
+    expect(pending.connectorId).toBe("github");
+    expect(pending.status).toBe("pending");
+    expect(pending.userCode).toMatch(/^GH-/);
+    expect(pending.verificationUri).toBe("https://github.com/login/device");
+    expect(pending.access_token).toBeUndefined();
+    expect(pending.secret).toBeUndefined();
+    expect(mocks.seen.some((row) => row === `POST ${GITHUB_DEVICE_URL}`)).toBe(true);
+
+    const waiting = await fetch(`${live.url}/architect/complete-connector-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ authId: pending.authId }),
+    });
+    expect(waiting.status).toBe(200);
+    expect(((await waiting.json()) as { status: string }).status).toBe("authorization_pending");
+
+    mocks.approveGithub(pending.userCode);
+    const done = await fetch(`${live.url}/architect/complete-connector-auth`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ authId: pending.authId }),
+    });
+    expect(done.status).toBe(201);
+    const bound = (await done.json()) as {
+      status: string;
+      connectorId: string;
+      boundBy: string;
+      secret?: string;
+      access_token?: string;
+    };
+    expect(bound.status).toBe("bound");
+    expect(bound.connectorId).toBe("github");
+    expect(bound.boundBy).toBe("architect");
+    expect(bound.secret).toBeUndefined();
+    expect(bound.access_token).toBeUndefined();
+
+    const generic = await fetch(`${live.url}/architect/bind-connector`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({
+        connectorId: "private-mcp",
+        baseUrl: "https://architect-typed.example/mcp",
+        requiresCredentials: true,
+      }),
+    });
+    expect(generic.status).toBe(201);
+    await fetch(`${live.url}/architect/set-connector-credentials`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ connectorId: "private-mcp", secret: "av-mcp-secret" }),
+    });
+
+    const fieldAuth = { authorization: `Bearer ${live.fieldToken}`, "content-type": "application/json" };
+    for (const route of ["/architect/start-connector-auth", "/architect/complete-connector-auth"]) {
+      const denied = await fetch(`${live.url}${route}`, {
+        method: "POST",
+        headers: fieldAuth,
+        body: JSON.stringify({ connectorId: "github", authId: pending.authId, clientId: HABITAT_GITHUB_CLIENT_ID }),
+      });
+      expect(denied.status).toBe(403);
+      expect(((await denied.json()) as { error: string }).error).toBe("SURFACE_VIOLATION");
     }
+
+    const addViaAdmin = await fetch(`${live.url}/architect/edit-connector-bind`, {
+      method: "POST",
+      headers: auth,
+      body: JSON.stringify({ connectorId: "brand-new-oauth" }),
+    });
+    expect(addViaAdmin.status).toBe(400);
+    expect(((await addViaAdmin.json()) as { error: string }).error).toBe("CONNECTOR_UNBOUND");
+
+    const paths = computerRoot(live.computerBaseDir, live.tenantId);
+    const store = loadConnectorBindStore(paths.connectorBindFile);
+    expect(store.connectors.map((row) => row.connectorId).sort()).toEqual(["github", "private-mcp"]);
+    expect(store.connectors.find((row) => row.connectorId === "private-mcp")?.baseUrl).toBe(
+      "https://architect-typed.example/mcp",
+    );
+    expect(store.connectors.every((row) => row.boundBy === "architect")).toBe(true);
+    expect(store.connectors.every((row) => !("secret" in row))).toBe(true);
+    const creds = loadConnectorCredentialsStore(paths.connectorCredentialsFile);
+    expect(creds.credentials.find((row) => row.connectorId === "github")?.secret.startsWith("gh_session_")).toBe(
+      true,
+    );
+    expect(creds.credentials.find((row) => row.connectorId === "private-mcp")?.secret).toBe("av-mcp-secret");
+    expect(statSync(paths.connectorBindFile).mode & 0o777).toBe(0o600);
+    expect(statSync(paths.connectorCredentialsFile).mode & 0o777).toBe(0o600);
+    expect(existsSync(path.join(paths.disk, "connector-bind.json"))).toBe(false);
+    expect(existsSync(path.join(paths.disk, "connector-credentials.json"))).toBe(false);
+
+    const html = architectHabitatPageHtml();
+    expect(html).toContain("Pyrallon habitat");
+    expect(html).not.toMatch(/VEYRA|Architect Desktop|NemoClaw|AV Dev|Alpha Vector LLC/);
+    expect(ALPHAVECTOR_RE_PIN_SHA).toBe(RE_PIN);
   });
 });

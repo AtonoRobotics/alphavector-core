@@ -15,6 +15,7 @@ import { requireArchitect } from "./require-architect.js";
 export function architectWriteAdapterCredentials(input: {
   tenantId: string;
   apiKey: string;
+  refreshToken?: string;
   computerBaseDir: string;
   architectToken?: string;
 }): AdapterCredentialsRecord {
@@ -23,9 +24,11 @@ export function architectWriteAdapterCredentials(input: {
     throw new AvError("ADAPTER_CREDENTIALS_REQUIRED", "Architect credentials write requires an api key");
   }
   requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
+  const refreshToken = input.refreshToken?.trim();
   const record: AdapterCredentialsRecord = {
     tenantId: input.tenantId,
     apiKey,
+    ...(refreshToken ? { refreshToken } : {}),
     writtenBy: "architect",
     writtenAt: nowIso(),
   };

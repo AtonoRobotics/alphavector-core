@@ -1,10 +1,9 @@
 import { AvError } from "../errors.js";
 import { newId } from "../ids.js";
-import { findStoredAdapterBind, readTenantAdapterBinds } from "../habitat/adapter-bind.js";
 import {
-  pollDeviceLogin,
-  resolveSubscriptionStartUrl,
-  startDeviceLogin,
+  pollSubscriptionLogin,
+  startSubscriptionLogin,
+  type OfficialLoginPollHandle,
 } from "../habitat/subscription-auth.js";
 import { findProvider, modelIdForBind } from "../http/architect-habitat-wizard.js";
 import { architectBindAdapter } from "./architect-adapter-bind.js";
@@ -12,19 +11,18 @@ import { architectWriteAdapterCredentials } from "./architect-adapter-credential
 import { requireArchitect } from "./require-architect.js";
 
 /**
- * In-flight device/login held by the habitat wizard. Not a second secrets plane.
- * After complete, the session is written through architectWriteAdapterCredentials.
+ * In-flight official login held by the habitat wizard. Not a second secrets plane.
+ * After complete, session tokens are written through architectWriteAdapterCredentials.
+ * HTTP never returns them. Does not copy a host CLI session file.
  */
 export interface SubscriptionAuthSession {
   authId: string;
   tenantId: string;
   providerId: string;
   modelId: string;
-  startUrl: string;
-  deviceCode: string;
-  tokenUri: string;
-  userCode: string;
+  userCode?: string;
   verificationUri: string;
+  poll: OfficialLoginPollHandle;
 }
 
 export interface SubscriptionAuthHold {
@@ -53,7 +51,7 @@ export interface SubscriptionAuthStarted {
   authId: string;
   providerId: string;
   modelId: string;
-  userCode: string;
+  userCode?: string;
   verificationUri: string;
   status: "pending";
 }
@@ -79,44 +77,35 @@ export function isSubscriptionProviderId(providerId: string): boolean {
 export async function architectStartSubscriptionAuth(input: {
   tenantId: string;
   providerId: string;
-  startUrl?: string;
   computerBaseDir: string;
   architectToken?: string;
   hold: SubscriptionAuthHold;
 }): Promise<SubscriptionAuthStarted> {
   requireArchitect(input.tenantId, input.computerBaseDir, input.architectToken);
   const provider = findProvider(input.providerId);
-  if (!provider || provider.mode !== "subscription") {
+  if (!provider || provider.mode !== "subscription" || provider.fields.subscriptionAuth !== "guided") {
     throw new AvError(
       "SUBSCRIPTION_PROVIDER_REQUIRED",
-      "Guided subscription auth is only for Codex Subscription, Grok Subscription, and GLM subscription",
+      "Guided subscription auth is Codex Subscription, Grok Subscription, or GLM Subscription",
     );
   }
   const modelId = modelIdForBind(provider, "");
-  const store = readTenantAdapterBinds(input.computerBaseDir, input.tenantId);
-  const existing = findStoredAdapterBind(store, input.tenantId, modelId);
-  const startUrl = resolveSubscriptionStartUrl({
-    startUrl: input.startUrl,
-    boundStartUrl: existing?.vendorBaseUrl,
-  });
-  const started = await startDeviceLogin(startUrl);
+  const started = await startSubscriptionLogin(provider.id);
   const session: SubscriptionAuthSession = {
     authId: newId("subauth"),
     tenantId: input.tenantId,
     providerId: provider.id,
     modelId,
-    startUrl,
-    deviceCode: started.deviceCode,
-    tokenUri: started.tokenUri,
     userCode: started.userCode,
     verificationUri: started.verificationUri,
+    poll: started.poll,
   };
   input.hold.put(session);
   return {
     authId: session.authId,
     providerId: session.providerId,
     modelId: session.modelId,
-    userCode: session.userCode,
+    ...(session.userCode ? { userCode: session.userCode } : {}),
     verificationUri: session.verificationUri,
     status: "pending",
   };
@@ -138,9 +127,9 @@ export async function architectCompleteSubscriptionAuth(input: {
   if (!session || session.tenantId !== input.tenantId) {
     throw new AvError("SUBSCRIPTION_AUTH_REQUIRED", "Guided subscription auth must be started first");
   }
-  let polled: Awaited<ReturnType<typeof pollDeviceLogin>>;
+  let polled: Awaited<ReturnType<typeof pollSubscriptionLogin>>;
   try {
-    polled = await pollDeviceLogin(session.tokenUri, session.deviceCode);
+    polled = await pollSubscriptionLogin(session.poll);
   } catch (err) {
     input.hold.drop(authId);
     throw err;
@@ -157,6 +146,7 @@ export async function architectCompleteSubscriptionAuth(input: {
   architectWriteAdapterCredentials({
     tenantId: input.tenantId,
     apiKey: polled.accessToken,
+    refreshToken: polled.refreshToken,
     computerBaseDir: input.computerBaseDir,
     architectToken: input.architectToken,
   });
