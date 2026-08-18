@@ -1,0 +1,15 @@
+{
+  "name": "alphavector-core",
+  "user": "ubuntu",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "ports": [
+    {
+      "name": "field surface",
+      "port": 8787
+    }
+  ]
+}
