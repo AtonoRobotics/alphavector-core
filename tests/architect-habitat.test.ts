@@ -34,7 +34,6 @@ import {
   CODEX_VERIFICATION_PATH,
   GLM_AUTHORIZE_URL,
   GLM_CLIENT_ID,
-  GLM_DEAD_CLI_INIT,
   GLM_REDIRECT_URI,
   GLM_TOKEN_URL,
   GROK_CLIENT_ID,
@@ -1151,8 +1150,8 @@ function installOfficialVendorMocks() {
       if (!row || !row.approved) return jsonResponse(400, { error: "authorization_pending" });
       return jsonResponse(200, { access_token: row.token, zcodejwttoken: row.token });
     }
-    if (url === GLM_DEAD_CLI_INIT || url.includes("/oauth/cli/init")) {
-      throw new Error("dead api.z.ai/oauth/cli/init must not be the product path");
+    if (url.includes("api.z.ai") && url.includes("oauth") && url.includes("cli") && url.includes("init")) {
+      throw new Error("retired Z.ai CLI init URL must not be the product path");
     }
 
     if (url === GITHUB_DEVICE_URL) {

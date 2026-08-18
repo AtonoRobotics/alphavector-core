@@ -6,7 +6,7 @@ import { vendorFetch } from "./vendor-fetch.js";
  * Official first-party login for named subscriptions.
  * Codex: openai/codex device-auth (auth.openai.com + public Codex CLI client).
  * Grok: xai-org/grok-build `grok login --device-auth` (auth.x.ai + public Grok CLI client).
- * GLM: current ZCode / z.ai “Continue with Z.ai” Coding Plan authorize (not dead oauth/cli/init).
+ * GLM: current ZCode / z.ai “Continue with Z.ai” Coding Plan authorize.
  *
  * Architect never types an issuer. Generic OpenAI / vLLM / Ollama hosts are not baked here.
  */
@@ -76,7 +76,6 @@ export const GLM_TOKEN_URL = "https://zcode.z.ai/api/v1/oauth/token";
 /** Official ZCode “Continue with Z.ai” public client. */
 export const GLM_CLIENT_ID = "client_P8X5CMWmlaRO9gyO-KSqtg";
 export const GLM_REDIRECT_URI = "zcode://zai-auth/callback";
-export const GLM_DEAD_CLI_INIT = "https://api.z.ai/oauth/cli/init";
 
 export function isNamedSubscriptionId(value: string): value is NamedSubscriptionId {
   return value === "sub-codex" || value === "sub-grok" || value === "sub-glm";
